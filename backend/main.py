@@ -86,10 +86,12 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
     @app.get("/api/projects")
     async def projects(
         q: str = Query(""), gate: str = Query(""), ai_status: str = Query(""), decision: str = Query(""),
+        ai_decision: str = Query(""), deadline_soon: bool = Query(False),
         kind: str = Query(""), source_id: str = Query(""), page: int = Query(1, ge=1),
         page_size: int = Query(30, ge=1, le=200), sort: str = Query("updated"),
     ) -> dict[str, Any]:
         return app.state.service.list_projects(q=q, gate=gate, ai_status=ai_status, decision=decision,
+                                               ai_decision=ai_decision, deadline_soon=deadline_soon,
                                                kind=kind, source_id=source_id, page=page, page_size=page_size, sort=sort)
 
     @app.get("/api/projects/{project_id}")

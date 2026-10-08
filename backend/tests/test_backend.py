@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -254,6 +257,24 @@ def test_empty_capability_card_cannot_store_positive_fit_or_options(tmp_path: Pa
     service.close()
 
 
+def test_configuring_ai_after_business_card_queues_pending_and_model_change_stales(tmp_path: Path):
+    service = make_service(tmp_path, [row()])
+    service.update_settings({"business": {"capabilities": "测试能力"}})
+    assert service.summary(1)["ai_status"] == "not_configured"
+    service.update_settings({"ai": {"base_url": "https://mock.local/v1", "model": "mock",
+                                     "enabled": True, "api_key": "secret-value"}})
+    assert service.db.execute("SELECT count(*) FROM jobs WHERE status='queued'").fetchone()[0] == 1
+    job_id = service.db.execute("SELECT id FROM jobs ORDER BY id DESC LIMIT 1").fetchone()[0]
+    asyncio.run(service.run_job(int(job_id)))
+    assert service.summary(1)["ai_status"] == "succeeded"
+    service.update_settings({"ai": {"api_key": "rotated-secret"}})
+    assert service.project_detail(1)["judgment"]["stale"] is False
+    service.update_settings({"ai": {"model": "mock-v2"}})
+    assert service.project_detail(1)["judgment"]["stale"] is True
+    assert service.db.execute("SELECT count(*) FROM jobs WHERE status='queued'").fetchone()[0] == 1
+    service.close()
+
+
 def test_api_key_is_write_only_and_archive_path_is_constrained(tmp_path: Path):
     archive = tmp_path / "archive" / "1"
     archive.mkdir(parents=True)
@@ -279,4 +300,70 @@ def test_deadline_date_uses_shanghai_timezone(tmp_path: Path):
     assert gate == "candidate"
     gate, _ = evaluate_record(record, service.get_settings(), now=datetime(2026, 10, 9, 0, tzinfo=SHANGHAI))
     assert gate == "expired"
+    service.close()
+
+
+def test_source_age_and_import_pending_are_distinct_and_notes_show_coverage(tmp_path: Path):
+    source = tmp_path / "records.jsonl"
+    source.write_text(json.dumps(row(), ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "trial-status.md").write_text(
+        "# 试运行\n当前连续周期：1/14 天。\n历史缺失：2026-10-07。\n", encoding="utf-8"
+    )
+    service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
+                               archive_root=tmp_path, provider=Provider())
+    asyncio.run(service.import_file())
+    fresh = service.status()
+    assert fresh["file_stale"] is False
+    assert fresh["import_pending"] is False
+    assert "1 个来源" in fresh["source_notes"]
+    assert "字段缺失提示" in fresh["source_notes"]
+    assert "试运行" in fresh["source_notes"] and "历史缺失" in fresh["source_notes"]
+    assert "不能据此推断已覆盖全网" in fresh["source_notes"]
+
+    changed = row(body="采购破碎机，截止时间：2099-12-31 09:00。新正文。")
+    changed["current_version"] = 2
+    source.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+    old = time.time() - 49 * 60 * 60
+    os.utime(source, (old, old))
+    pending = service.status()
+    assert pending["file_stale"] is True
+    assert pending["import_pending"] is True
+    asyncio.run(service.import_file())
+    imported = service.status()
+    assert imported["file_stale"] is True  # old source, even after successful import
+    assert imported["import_pending"] is False
+    assert imported["last_import_at"]
+    assert imported["data_updated_at"] != imported["last_import_at"]
+    service.close()
+
+
+def test_ai_decision_filter_and_dashboard_distribution_require_valid_judgment(tmp_path: Path):
+    service = make_service(tmp_path, [row()])
+    assert service.list_projects(ai_decision="recommend")["total"] == 0
+    assert service.dashboard()["ai_decision_counts"] == {}
+    configure_ai(service)
+    queued = service.queue_project(1)
+    asyncio.run(service.run_job(queued["job_id"]))
+    assert service.list_projects(ai_decision="consider")["total"] == 1
+    assert service.list_projects(ai_decision="recommend")["total"] == 0
+    assert service.dashboard()["ai_decision_counts"] == {"consider": 1}
+    # A stale judgment must no longer be counted or returned by this filter.
+    service.db.execute("UPDATE judgments SET stale=1 WHERE project_id=1")
+    assert service.list_projects(ai_decision="consider")["total"] == 0
+    assert service.dashboard()["ai_decision_counts"] == {}
+    service.close()
+
+
+def test_deadline_soon_filter_uses_seven_day_candidate_review_rule(tmp_path: Path):
+    soon = (datetime.now(SHANGHAI) + timedelta(days=3)).isoformat(timespec="seconds")
+    expired = "2020-01-01 00:00"
+    future_news = row(3, deadline=soon)
+    future_news["kind"] = "news"
+    future_news["title"] = "行业新闻线索"
+    service = make_service(tmp_path, [row(1, deadline=soon), row(2, deadline=expired), future_news])
+    filtered = service.list_projects(deadline_soon=True, page_size=30)
+    assert [item["id"] for item in filtered["items"]] == [1]
+    dashboard = service.dashboard()
+    assert dashboard["deadline_soon_count"] == 1
+    assert [item["id"] for item in dashboard["deadline_soon"]] == [1]
     service.close()
