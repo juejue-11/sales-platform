@@ -1,0 +1,209 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Alert, Button, Card, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Tag, Typography, message } from 'antd'
+import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons'
+import { api } from '../api'
+import type { DecisionStatus, JudgmentOption, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
+import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle } from '../components/Common'
+
+const { Title, Text, Paragraph } = Typography
+
+interface DecisionFormState {
+  status: DecisionStatus
+  owner: string
+  next_action: string
+  note: string
+  selected_option_id: string | null
+}
+
+const emptyDecision: DecisionFormState = { status: 'new', owner: '', next_action: '', note: '', selected_option_id: null }
+
+function decisionFromProject(project: ProjectSummary): DecisionFormState {
+  return {
+    status: project.decision.status,
+    owner: project.decision.owner ?? '',
+    next_action: project.decision.next_action ?? '',
+    note: project.decision.note ?? '',
+    selected_option_id: project.decision.selected_option_id,
+  }
+}
+
+function JsonValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined || value === '') return <Text type="secondary">未提供</Text>
+  if (typeof value === 'object') return <pre className="json-value">{JSON.stringify(value, null, 2)}</pre>
+  return <Text>{String(value)}</Text>
+}
+
+export function ProjectDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const projectId = Number(id)
+  const navigate = useNavigate()
+  const [detail, setDetail] = useState<ProjectDetailData | null>(null)
+  const [decisionForm, setDecisionForm] = useState<DecisionFormState>(emptyDecision)
+  const [decisionDirty, setDecisionDirty] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<unknown>(null)
+  const [actionLoading, setActionLoading] = useState('')
+  const [linkTarget, setLinkTarget] = useState<number | null>(null)
+  const [linkRelation, setLinkRelation] = useState<'same_project' | 'duplicate' | 'dismiss'>('same_project')
+  const [linkNote, setLinkNote] = useState('')
+  const [linkOpen, setLinkOpen] = useState(false)
+
+  const loadDetail = useCallback(async (showLoading = true) => {
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      setError(new Error('项目编号无效'))
+      setLoading(false)
+      return
+    }
+    if (showLoading) setLoading(true)
+    setError(null)
+    try {
+      const result = await api.project(projectId)
+      setDetail(result)
+      if (showLoading || !decisionDirty) setDecisionForm(decisionFromProject(result))
+    } catch (loadError) {
+      setError(loadError)
+    } finally {
+      if (showLoading) setLoading(false)
+    }
+  }, [decisionDirty, projectId])
+
+  useEffect(() => { void loadDetail() }, [loadDetail])
+
+  useEffect(() => {
+    if (!detail || decisionDirty || !['queued', 'running'].includes(detail.ai_status)) return
+    const timer = window.setInterval(() => { void loadDetail(false) }, 8000)
+    return () => window.clearInterval(timer)
+  }, [decisionDirty, detail, loadDetail])
+
+  const setDecision = <K extends keyof DecisionFormState>(key: K, value: DecisionFormState[K]) => {
+    setDecisionDirty(true)
+    setDecisionForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const runAction = async (key: string, action: () => Promise<unknown>, success: string) => {
+    setActionLoading(key)
+    try {
+      await action()
+      message.success(success)
+      await loadDetail()
+      setDecisionDirty(false)
+    } catch (actionError) {
+      message.error(actionError instanceof Error ? actionError.message : '操作失败，请稍后重试')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  const saveDecision = async () => {
+    if (!detail) return
+    const selected = detail.judgment?.options.find((option) => option.id === decisionForm.selected_option_id)
+    if (decisionForm.selected_option_id && (!selected || detail.judgment?.stale || detail.gate_status === 'expired')) {
+      message.warning('当前方案已经过期或待复核，请重新分析后选择方案')
+      return
+    }
+    await runAction('decision', () => api.decision(projectId, decisionForm), '人工决定已保存，历史记录已保留')
+  }
+
+  const submitLink = async () => {
+    if (!linkTarget || linkTarget === projectId) {
+      message.warning('请输入另一个项目编号')
+      return
+    }
+    setActionLoading('link')
+    try {
+      const result = await api.link(projectId, { target_project_id: linkTarget, relation: linkRelation, note: linkNote })
+      message.success(result.message || '关联提示已记录')
+      setLinkOpen(false)
+      setLinkTarget(null)
+      setLinkNote('')
+      await loadDetail()
+    } catch (linkError) {
+      message.error(linkError instanceof Error ? linkError.message : '关联操作失败')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  const options = detail?.judgment?.options ?? []
+  const optionAvailable = Boolean(detail?.judgment && !detail.judgment.stale && detail.gate_status !== 'expired' && options.length > 0)
+  const optionDescription = detail?.judgment?.stale ? '这份判断来自旧输入，方案已锁定。请先重判，系统会保留旧判断与人工决定。' : detail?.gate_status === 'expired' ? '项目已过截止时间，不能选择过期方案。' : '选择一个方案后填写负责人和下一步，保存将追加一条人工决定记录。'
+
+  if (loading) return <div className="page-stack"><LoadingBlock text="正在读取项目详情" /></div>
+  if (error || !detail) return <div className="page-stack"><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回机会池</Button><ErrorBlock error={error} onRetry={() => void loadDetail()} /></div>
+
+  return (
+    <div className="page-stack detail-page">
+      <div className="detail-back"><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回机会池</Button><Text type="secondary">项目 #{detail.id} · {formatFreshness(detail.updated_at)}</Text></div>
+      <div className="detail-title-row">
+        <div><Title level={2}>{detail.title || '未命名项目'}</Title><Space wrap><Text type="secondary">{detail.buyer || '采购方未标明'}</Text><Tag>{detail.kind || '未分类'}</Tag><Tag>{detail.source_id || '来源未标明'}</Tag><GateTag status={detail.gate_status} /><DecisionTag status={detail.decision.status} /></Space></div>
+        <Space wrap>
+          {(detail.ai_status === 'failed' || detail.ai_status === 'stale' || detail.ai_status === 'succeeded') && <Button icon={<ReloadOutlined />} loading={actionLoading === 'analyze'} onClick={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')}>重新分析</Button>}
+          {detail.ai_status === 'not_configured' && <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/settings')}>去配置模型</Button>}
+          {(detail.ai_status === 'queued' || detail.ai_status === 'running') && <Button type="primary" icon={<RobotOutlined />} disabled>分析中</Button>}
+          {detail.gate_status === 'excluded' && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'restore', '人工恢复机会'), '项目已恢复到机会池')}>恢复机会</Button>}
+        </Space>
+      </div>
+
+      {detail.needs_review && <Alert type="warning" showIcon message="该项目需要人工复核" description="规则、公告版本或业务配置发生变化后，旧判断仍可查看，但不能直接作为当前方案依据。" />}
+      {detail.ai_status === 'not_configured' && <Alert type="info" showIcon message="模型未配置" description="当前不会生成 AI 结论或方案。请先在业务配置中完成模型设置；规则结果、公告原文和人工决定仍可使用。" />}
+      {detail.ai_status === 'failed' && <Alert type="error" showIcon message="AI 分析失败" description="请查看处理状态中的失败原因，并在修复配置后重试。" action={<Button type="link" onClick={() => navigate('/operations')}>查看任务</Button>} />}
+
+      <Card className="conclusion-card">
+        <div className="conclusion-eyebrow"><FileSearchOutlined /> 当前判断</div>
+        <div className="conclusion-main"><div><AiStatusTag status={detail.ai_status} /><AiDecisionTag decision={detail.ai_decision} /></div><Title level={3}>{detail.judgment?.summary || detail.ai_summary || (detail.ai_status === 'not_configured' ? '等待业务配置和分析' : '暂未形成一句话结论')}</Title></div>
+        <div className="conclusion-grid"><div><Text type="secondary">规则说明</Text>{detail.gate_reasons.length ? <ul className="compact-list">{detail.gate_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : <Text>没有额外规则说明</Text>}</div><div><Text type="secondary">需求摘要</Text><Paragraph>{detail.judgment?.demand_summary || '暂无已验证的需求摘要'}</Paragraph></div><div><Text type="secondary">最后更新</Text><Paragraph>{formatDate(detail.updated_at, true)}</Paragraph></div></div>
+      </Card>
+
+      <div className="detail-columns">
+        <div className="detail-main-column">
+          <Card title={<span><FileSearchOutlined /> 公告与事实</span>} extra={<Text type="secondary">{detail.records.length} 条源记录</Text>}>
+            {detail.records.length === 0 ? <EmptyBlock description="暂无公告正文" /> : <Collapse items={detail.records.map((record) => ({ key: String(record.id), label: <div className="record-collapse-label"><span>{record.title || `记录 #${record.id}`}</span><Text type="secondary">记录 #{record.id} · {record.parse_status || '已接入'}</Text></div>, children: <RecordPanel record={record} /> }))} />}
+          </Card>
+          <Card title="公告版本与关联" className="history-card">
+            <Descriptions size="small" column={{ xs: 1, sm: 2 }} items={[{ key: 'published', label: '发布时间', children: formatDate(detail.published_at, true) }, { key: 'deadline', label: '截止时间', children: formatDate(detail.deadline_at, true) }, { key: 'records', label: '源记录 ID', children: detail.record_ids.join('、') || '—' }, { key: 'versions', label: '版本数', children: detail.versions.length || '—' }]} />
+            {detail.versions.length > 0 && <Collapse ghost items={[{ key: 'versions', label: '展开版本变更', children: <List size="small" dataSource={detail.versions} renderItem={(version, index) => <List.Item><Text>版本 {index + 1}</Text><JsonValue value={version} /></List.Item>} /> }]} />}
+          </Card>
+          <Card title={<span><LinkOutlined /> 关联提示与人工确认</span>} extra={<Button size="small" icon={<LinkOutlined />} onClick={() => setLinkOpen(true)}>记录关联</Button>}>
+            <Alert type="info" showIcon message="疑似同项目、重复或排除提示不会自动合并" description="输入对方项目编号并保存关系后，双方的源记录和历史决定仍会保留。" />
+            {detail.related_projects.length === 0 ? <EmptyBlock description="暂无关联项目" /> : <List className="related-list" dataSource={detail.related_projects} renderItem={(related) => <List.Item actions={[<Button key="open" type="link" onClick={() => navigate(`/projects/${related.id}`)}>查看</Button>]}><List.Item.Meta title={<ProjectTitle project={related} onOpen={(relatedId) => navigate(`/projects/${relatedId}`)} />} description={<Space><GateTag status={related.gate_status} /><Text type="secondary">项目 #{related.id}</Text></Space>} /></List.Item>} />}
+          </Card>
+        </div>
+
+        <div className="detail-side-column">
+          <Card title={<span><RobotOutlined /> AI 理由与证据</span>}>
+            {detail.judgment ? <div className="judgment-body"><div className="judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="evidence-list">{reason.evidence.map((evidence) => <div className="evidence-item" key={`${evidence.record_id}-${evidence.quote}`}><Text type="secondary">记录 #{evidence.record_id}</Text><q>{evidence.quote}</q></div>)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+            {detail.judgment?.unknowns && detail.judgment.unknowns.length > 0 && <div className="unknown-panel"><Text strong><WarningOutlined /> 待确认信息</Text><ul className="compact-list">{detail.judgment.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul></div>}
+          </Card>
+          <Card title="历史判断与人工决定">
+            <Collapse ghost items={[{ key: 'judgments', label: `历史判断（${detail.judgment_history.length}）`, children: detail.judgment_history.length === 0 ? <Text type="secondary">暂无历史判断</Text> : <List size="small" dataSource={detail.judgment_history} renderItem={(history) => <List.Item><div><Space><AiDecisionTag decision={history.decision} /><Text type="secondary">{formatDate(history.created_at, true)}</Text></Space><div>{history.summary}</div></div></List.Item>} /> }, { key: 'decisions', label: `人工决定（${detail.decision_history.length}）`, children: detail.decision_history.length === 0 ? <Text type="secondary">暂无人工决定</Text> : <List size="small" dataSource={detail.decision_history} renderItem={(history, index) => <List.Item><JsonValue value={{ 序号: index + 1, ...history }} /></List.Item>} /> }]} />
+          </Card>
+        </div>
+      </div>
+
+      <Card className="options-card" title={<span><CheckCircleOutlined /> 方案比较与人工决定</span>} extra={<DecisionTag status={decisionForm.status} />}>
+        <Paragraph type="secondary">{optionDescription}</Paragraph>
+        {detail.judgment?.next_actions && detail.judgment.next_actions.length > 0 && <Alert className="next-actions-alert" type="info" message="AI 建议下一步" description={<ul className="compact-list">{detail.judgment.next_actions.map((next) => <li key={next}>{next}</li>)}</ul>} />}
+        {!optionAvailable ? <div className="option-unavailable"><WarningOutlined /><Text>{options.length ? '当前判断不可作为方案选择依据' : '资料不足，当前判断没有可选方案；请先补充资料或记录待核实动作。'}</Text></div> : <Radio.Group className="option-grid" value={decisionForm.selected_option_id} onChange={(event) => setDecision('selected_option_id', event.target.value)}>{options.map((option) => <OptionCard key={option.id} option={option} />)}</Radio.Group>}
+        <Divider />
+        <Form layout="vertical" className="decision-form">
+          <div className="decision-form-grid"><Form.Item label="人工状态"><Select value={decisionForm.status} onChange={(value: DecisionStatus) => setDecision('status', value)} options={[{ value: 'new', label: '未处理' }, { value: 'following', label: '跟进中' }, { value: 'verify', label: '待核实' }, { value: 'closed', label: '已关闭' }]} /></Form.Item><Form.Item label="负责人"><Input value={decisionForm.owner} onChange={(event) => setDecision('owner', event.target.value)} placeholder="填写负责同事" /></Form.Item><Form.Item label="下一步"><Input value={decisionForm.next_action} onChange={(event) => setDecision('next_action', event.target.value)} placeholder="例如：取得技术清单并核对件号" /></Form.Item></div>
+          <Form.Item label="备注"><Input.TextArea value={decisionForm.note} onChange={(event) => setDecision('note', event.target.value)} rows={3} placeholder="记录人工判断、客户沟通或待确认信息" /></Form.Item>
+          <div className="decision-actions"><Text type={decisionDirty ? 'warning' : 'secondary'}>{decisionDirty ? '有未保存修改' : `最近保存：${formatDate(detail.decision.updated_at, true)}`}</Text><Button type="primary" icon={<SaveOutlined />} loading={actionLoading === 'decision'} disabled={!decisionDirty} onClick={() => void saveDecision()}>保存人工决定</Button></div>
+        </Form>
+      </Card>
+
+      <Modal title="记录关联提示" open={linkOpen} onCancel={() => setLinkOpen(false)} onOk={() => void submitLink()} okText="保存关系" confirmLoading={actionLoading === 'link'}>
+        <Form layout="vertical"><Form.Item label="对方项目编号" required><InputNumber min={1} value={linkTarget} onChange={(value) => setLinkTarget(value)} placeholder="输入项目 ID" style={{ width: '100%' }} /></Form.Item><Form.Item label="关系" required><Select value={linkRelation} onChange={setLinkRelation} options={[{ value: 'same_project', label: '同项目' }, { value: 'duplicate', label: '重复项目' }, { value: 'dismiss', label: '排除提示' }]} /></Form.Item><Form.Item label="备注"><Input.TextArea rows={3} value={linkNote} onChange={(event) => setLinkNote(event.target.value)} placeholder="说明人工确认依据" /></Form.Item></Form>
+      </Modal>
+    </div>
+  )
+}
+
+function RecordPanel({ record }: { record: ProjectDetailData['records'][number] }) {
+  return <div className="record-panel"><Space wrap><Tag>记录 #{record.id}</Tag>{record.parse_status && <Tag>{record.parse_status}</Tag>}{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开来源</a>}<a href={api.archiveUrl(record.id)} target="_blank" rel="noreferrer">下载原件</a></Space><Paragraph className="record-body">{record.body_text || '这条记录没有正文内容。'}</Paragraph><Collapse ghost items={[{ key: 'facts', label: '结构化事实', children: <JsonValue value={record.facts} /> }, { key: 'inferences', label: '推测与待核实线索', children: <JsonValue value={record.inferences} /> }]} /></div>
+}
+
+function OptionCard({ option }: { option: JudgmentOption }) {
+  return <Radio value={option.id} className="option-radio"><div className="option-card-content"><div className="option-title-row"><Title level={4}>{option.title}</Title><Tag color="blue">方案</Tag></div><Paragraph>{option.description || '暂无说明'}</Paragraph><div className="option-detail-grid"><div><Text type="secondary">适用条件</Text><Paragraph>{option.suitable_for || '未说明'}</Paragraph></div><div><Text type="secondary">建议下一步</Text><Paragraph>{option.next_action || '未说明'}</Paragraph></div></div>{option.tradeoffs.length > 0 && <div><Text type="secondary">主要取舍</Text><ul className="compact-list">{option.tradeoffs.map((item) => <li key={item}>{item}</li>)}</ul></div>}{option.unknowns.length > 0 && <div><Text type="secondary">仍需确认</Text><ul className="compact-list">{option.unknowns.map((item) => <li key={item}>{item}</li>)}</ul></div>}</div></Radio>
+}
