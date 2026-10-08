@@ -83,6 +83,21 @@ def test_source_version_or_template_hash_updates_history_without_ai_stale(tmp_pa
     service.close()
 
 
+def test_whitespace_only_body_change_does_not_requeue_ai(tmp_path: Path):
+    service = make_service(tmp_path, [row()])
+    configure_ai(service)
+    queued = service.queue_project(1)
+    asyncio.run(service.run_job(queued["job_id"]))
+    changed = row(body="采购破碎机，截止时间：2099-12-31 09:00。\n")
+    changed["content_sha256"] = "new-template-hash"
+    service.source_path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+    result = asyncio.run(service.import_file())
+    assert result["updated"] == 1
+    assert service.summary(1)["ai_status"] == "succeeded"
+    assert service.db.execute("SELECT count(*) FROM judgments WHERE project_id=1").fetchone()[0] == 1
+    service.close()
+
+
 def test_auto_import_toggle_and_signature_detection(tmp_path: Path):
     service = make_service(tmp_path, [row()])
     service.update_settings({"import": {"auto_import": False, "poll_seconds": 1}})
