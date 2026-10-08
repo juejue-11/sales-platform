@@ -858,6 +858,10 @@
   font-size: 12px;
 }
 
+.dashboard-deadline-mobile-more {
+  display: none;
+}
+
 .dashboard-deadline-cta.ant-btn {
   width: calc(100% - 34px);
   margin: 13px 17px 16px;
@@ -923,12 +927,133 @@
     order: -1;
   }
 
+  .dashboard-deadline-header {
+    padding: 12px 14px 10px;
+  }
+
   .dashboard-deadline-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .dashboard-deadline-row {
+    padding: 10px 14px;
     border-right: 1px solid #edf1f1;
+  }
+
+  .dashboard-deadline-row:nth-child(n + 3) {
+    display: none;
+  }
+
+  .dashboard-deadline-more {
+    display: none;
+  }
+
+  .dashboard-deadline-mobile-more {
+    display: block;
+    margin: 9px 14px 0;
+    color: var(--dashboard-muted);
+    font-size: 11px;
+  }
+
+  .dashboard-deadline-cta.ant-btn {
+    width: calc(100% - 28px);
+    margin: 10px 14px 12px;
+  }
+
+  .dashboard-list-panel {
+    overflow: visible;
+  }
+
+  .dashboard-list-scroll {
+    overflow: visible;
+  }
+
+  .dashboard-list-table {
+    min-width: 0;
+  }
+
+  .dashboard-project-row-header {
+    display: none;
+  }
+
+  .dashboard-project-row {
+    grid-template-areas:
+      "identity identity identity"
+      "rule ai decision"
+      "dates dates action";
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 8px;
+    min-width: 0;
+    padding: 14px;
+  }
+
+  .dashboard-project-identity {
+    grid-area: identity;
+  }
+
+  .dashboard-rule-cell {
+    grid-area: rule;
+  }
+
+  .dashboard-ai-cell {
+    grid-area: ai;
+  }
+
+  .dashboard-decision-cell {
+    grid-area: decision;
+  }
+
+  .dashboard-project-dates {
+    grid-area: dates;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .dashboard-project-action {
+    grid-area: action;
+    align-self: end;
+  }
+
+  .dashboard-project-meta {
+    overflow: visible;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .dashboard-project-meta > span:first-child,
+  .dashboard-source-name {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .dashboard-source-name {
+    flex-basis: 100%;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .dashboard-status-pair {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  .dashboard-pill {
+    overflow: visible;
+    padding-inline: 5px;
+    font-size: 10px;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .dashboard-date-label {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 4px;
   }
 
   .dashboard-deadline-row:nth-child(2n) {
