@@ -4,7 +4,7 @@ import { Alert, Button, Card, Collapse, Descriptions, Divider, Empty, Form, Inpu
 import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { DecisionStatus, JudgmentOption, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
-import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, kindLabel, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
+import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
 import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
 import './ProjectDetail.css'
 
@@ -179,13 +179,9 @@ export function ProjectDetailPage() {
 
       <header className="detail-hero">
         <div className="detail-hero-copy">
-          <Text className="detail-eyebrow">采购机会 / 项目研判</Text>
           <Title level={2}>{detail.title || '未命名项目'}</Title>
           <div className="detail-subline">
             <Text className="detail-buyer">{detail.buyer || '采购方未标明'}</Text>
-            <span className="detail-subline-separator">·</span>
-            <Text type="secondary">{kindLabel(detail.kind)}</Text>
-            <Text type="secondary">{sourceLabel(detail.source_id)}</Text>
           </div>
           <Space className="detail-status-tags" wrap>
             <GateTag status={detail.gate_status} />
@@ -204,7 +200,6 @@ export function ProjectDetailPage() {
       </header>
 
       <div className="detail-info-rail" aria-label="项目关键信息">
-        <div className="detail-meta-item"><Text>采购方</Text><strong>{detail.buyer || '未标明'}</strong></div>
         <div className="detail-meta-item"><Text>截止日期</Text><strong>{formatDate(detail.deadline_at, true)}</strong></div>
         <div className="detail-meta-item"><Text>涉及设备</Text><strong>{detail.equipment.length ? detail.equipment.join('、') : '待从原文确认'}</strong></div>
         <div className="detail-meta-item"><Text>来源</Text><strong>{sourceLabel(detail.source_id)}</strong></div>
@@ -218,8 +213,7 @@ export function ProjectDetailPage() {
           </div>
           {detail.judgment?.stale && <Tag color="warning">输入已变化，待重新分析</Tag>}
         </div>
-        <Title level={3} className="detail-summary-conclusion">{detail.judgment?.summary || detail.ai_summary || (detail.ai_status === 'not_configured' ? '模型未配置，先完成配置后生成 AI 结论' : '暂未形成一句话结论')}</Title>
-        {detail.ai_status === 'not_configured' && <div className="detail-inline-note detail-inline-note-info"><Text>当前只显示规则筛选与公告原文，AI 不会替公司补写产品、价格或交期。</Text><Button type="link" onClick={() => navigate('/settings')}>去业务配置</Button></div>}
+        <Title level={3} className="detail-summary-conclusion">{detail.judgment?.summary || detail.ai_summary || (detail.ai_status === 'not_configured' ? '配置模型后生成判断' : '暂未形成一句话结论')}</Title>
         <div className="detail-summary-grid">
           <div className="detail-summary-block detail-summary-rule"><Text className="detail-label">规则先筛</Text>{detail.gate_reasons.length ? <ul className="detail-compact-list">{detail.gate_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : <Text>没有额外排除或复核说明</Text>}</div>
           <div className="detail-summary-block"><Text className="detail-label">需求摘要</Text><Paragraph>{detail.judgment?.demand_summary || '暂无已验证的需求摘要，先以公告正文为准。'}</Paragraph></div>
@@ -236,12 +230,6 @@ export function ProjectDetailPage() {
             <div className="detail-panel-intro">原文是判断依据。展开记录查看正文、来源链接以及已抽取的事实。</div>
             <div className="detail-demand-strip"><Text className="detail-label">需求范围</Text><div>{detail.equipment.length ? detail.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>) : <Text type="secondary">设备信息待从正文确认</Text>}</div></div>
             {detail.records.length === 0 ? <EmptyBlock description="暂无公告正文" /> : <Collapse className="detail-record-list" items={detail.records.map((record) => ({ key: String(record.id), label: <div className="detail-record-label"><span>{record.title || `记录 #${record.id}`}</span><Text type="secondary">记录 #{record.id} · {record.parse_status || '已接入'}</Text></div>, children: <RecordPanel record={record} /> }))} />}
-          </Card>
-          <Card className="detail-panel detail-needs-card" title="资料核对提醒">
-            <div className="detail-needs-grid">
-              <div><Text className="detail-label">规则结果</Text><Paragraph>{detail.gate_reasons.length ? detail.gate_reasons.join('；') : '当前规则没有额外提示。'}</Paragraph></div>
-              <div><Text className="detail-label">下一步核对</Text><Paragraph>{detail.judgment?.next_actions?.length ? detail.judgment.next_actions.join('；') : '没有 AI 下一步建议，请以公告要求和人工沟通为准。'}</Paragraph></div>
-            </div>
           </Card>
         </div>
 

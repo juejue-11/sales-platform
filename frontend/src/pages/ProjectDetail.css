@@ -77,18 +77,11 @@
   min-width: 0;
 }
 
-.detail-eyebrow,
 .detail-section-kicker,
 .detail-option-kicker {
   color: var(--detail-accent);
   font-size: 12px;
   font-weight: 600;
-}
-
-.detail-eyebrow {
-  display: block;
-  margin-bottom: 8px;
-  letter-spacing: .06em;
 }
 
 .detail-hero h2 {
@@ -114,10 +107,6 @@
 .detail-buyer {
   color: var(--detail-ink);
   font-weight: 600;
-}
-
-.detail-subline-separator {
-  color: #9aacad;
 }
 
 .detail-status-tags {
@@ -151,7 +140,7 @@
 
 .detail-info-rail {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.25fr 1.5fr;
+  grid-template-columns: 1fr 1.25fr 1.5fr;
   gap: 0;
   padding: 0;
   background: var(--detail-surface);
@@ -238,13 +227,6 @@
   line-height: 1.6;
 }
 
-.detail-inline-note-info {
-  justify-content: space-between;
-  align-items: center;
-  background: #f2f8f7;
-  border-color: #c9dfdc;
-}
-
 .detail-inline-note-warning {
   color: #6f511f;
   background: #fff9ef;
@@ -263,12 +245,6 @@
   color: var(--detail-amber);
 }
 
-.detail-inline-note .ant-btn-link {
-  flex: 0 0 auto;
-  padding: 0;
-  color: var(--detail-accent);
-}
-
 .detail-summary-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.6fr) minmax(155px, .75fr);
@@ -282,7 +258,6 @@
 }
 
 .detail-summary-block .detail-label,
-.detail-needs-grid .detail-label,
 .detail-option-detail-grid .detail-label,
 .detail-option-list-block .detail-label {
   display: block;
@@ -292,8 +267,7 @@
   font-weight: 600;
 }
 
-.detail-summary-block p,
-.detail-needs-grid p {
+.detail-summary-block p {
   margin: 0;
   line-height: 1.7;
 }
@@ -491,20 +465,6 @@
   background: #fffaf1;
   border: 1px solid #eeddbc;
   border-radius: 5px;
-}
-
-.detail-needs-card .ant-card-head {
-  min-height: 51px;
-}
-
-.detail-needs-card .ant-card-body {
-  padding: 17px 20px;
-}
-
-.detail-needs-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
 }
 
 .detail-analysis-card .ant-card-body {
@@ -977,8 +937,7 @@
     padding: 19px 18px 20px;
   }
 
-  .detail-summary-grid,
-  .detail-needs-grid {
+  .detail-summary-grid {
     grid-template-columns: 1fr;
     gap: 14px;
   }
@@ -1069,12 +1028,6 @@
 
   .detail-summary-conclusion {
     font-size: 21px;
-  }
-
-  .detail-inline-note-info {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
   }
 
   .detail-page .detail-panel .ant-card-head,
