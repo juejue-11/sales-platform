@@ -57,7 +57,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ force }),
   }),
-  decision: (id: number, body: { status: string; owner: string; next_action: string; note: string; selected_option_id: string | null }) => request<ProjectSummary>(`/projects/${id}/decision`, {
+  decision: (id: number, body: { status: string; owner: string; next_action: string; note: string; selected_option_id: string | null; judgment_id?: number | null }) => request<ProjectSummary>(`/projects/${id}/decision`, {
     method: 'POST',
     body: JSON.stringify(body),
   }),
