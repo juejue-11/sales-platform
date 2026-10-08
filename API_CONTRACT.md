@@ -26,11 +26,11 @@ deadline_at: string|null
 updated_at: string
 gate_status: candidate|review|excluded|expired|closed|signal|duplicate
 gate_reasons: string[]
-ai_status: not_configured|queued|running|succeeded|failed|stale
+ai_status: not_configured|idle|skipped|queued|running|succeeded|failed|stale
 ai_decision: recommend|consider|verify|not_recommended|null
 ai_summary: string|null
 needs_review: boolean
-decision: {status: new|following|verify|closed, owner: string, next_action: string, note: string, selected_option_id: string|null, updated_at: string|null}
+decision: {status: new|following|verify|closed, owner: string, next_action: string, note: string, selected_option_id: string|null, judgment_id?:number|null, updated_at: string|null}
 ```
 
 Judgment:
@@ -44,6 +44,8 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 ```
 资料不足允许无options。新闻只能输出核实方向，不能把推测当采购事实。模型结果验证证据、项目ID、字段和方案数量后才能入库。
 
+`idle`表示符合条件但尚未排队，`skipped`表示规则排除/截止等无需AI。只有真实任务才可显示queued/running。人工选择绑定当时judgment_id，新判断option_id相同也必须重新确认；旧选择和旧下一步保留可追溯。
+
 ## API
 
 - `GET /api/health` => `{ok:true}`
@@ -51,7 +53,7 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 - `GET /api/projects?q=&gate=&ai_status=&decision=&kind=&source_id=&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；sort支持updated、deadline。
 - `GET /api/projects/{id}` => summary字段加 `{records:Record[],judgment:Judgment|null,judgment_history:Judgment[],decision_history:object[],related_projects:ProjectSummary[],versions:object[]}`。Record保留id/title/body_text/facts/inferences/original_url/canonical_url/archive_path/parse_status/possible_duplicate_of/related_record_id等采集字段。关联提示不自动合并，只有可靠标识才能合并；人工关联另外留痕。
 - `POST /api/projects/{id}/analyze` body `{force?:boolean}` => `{job_id:number|null,status:string,message:string}`。排队异步执行。
-- `POST /api/projects/{id}/decision` body `{status,owner,next_action,note,selected_option_id:string|null}` => 更新后ProjectSummary。只能选择当前非过期判断中的方案；人工决定保存历史，重判不覆盖。
+- `POST /api/projects/{id}/decision` body `{status,owner,next_action,note,selected_option_id:string|null,judgment_id?:number|null}` => 更新后ProjectSummary。选择方案时必须附judgment_id且等于当前非过期判断的id，否则409；纯人工决定无需id。人工决定保存历史，重判不覆盖。
 - `POST /api/projects/{id}/gate` body `{action:restore|clear,reason:string}` => ProjectSummary。规则排除可恢复，恢复不修改源事实。
 - `POST /api/projects/{id}/link` body `{target_project_id:number,relation:same_project|duplicate|dismiss,note:string}` => `{ok:true,message:string}`。人工确认关联或排除提示，保留双方源记录和决定。
 - `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences},ai:{base_url,model,enabled:boolean,has_api_key:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。字符串默认为空；关键词为空时不得凭空认定公司能力。

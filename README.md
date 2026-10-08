@@ -53,6 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\停止平台.ps1
 后端验证：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest backend/tests -q
 ```
 
