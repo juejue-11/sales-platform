@@ -1,5 +1,5 @@
 export type GateStatus = 'candidate' | 'review' | 'excluded' | 'expired' | 'closed' | 'signal' | 'duplicate'
-export type AiStatus = 'not_configured' | 'queued' | 'running' | 'succeeded' | 'failed' | 'stale'
+export type AiStatus = 'not_configured' | 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'stale' | 'skipped'
 export type AiDecision = 'recommend' | 'consider' | 'verify' | 'not_recommended' | null
 export type DecisionStatus = 'new' | 'following' | 'verify' | 'closed'
 
@@ -9,6 +9,7 @@ export interface Decision {
   next_action: string
   note: string
   selected_option_id: string | null
+  judgment_id?: number | null
   updated_at: string | null
 }
 

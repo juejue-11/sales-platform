@@ -101,6 +101,15 @@ button, input, textarea, select { font: inherit; }
 .record-panel { padding: 2px 0 6px; }
 .record-body { max-height: 420px; margin: 14px 0 8px; padding: 14px; overflow: auto; white-space: pre-wrap; background: #f7f9fb; border: 1px solid #e7edf1; border-radius: 7px; line-height: 1.8; }
 .json-value { max-width: 100%; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #4d6170; font-size: 12px; }
+.structured-fields { display: flex; flex-direction: column; gap: 8px; }
+.structured-field { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; padding-bottom: 7px; border-bottom: 1px solid #edf1f3; font-size: 13px; line-height: 1.65; }
+.structured-field:last-child { padding-bottom: 0; border-bottom: 0; }
+.structured-field > .ant-typography-secondary { font-size: 12px; }
+.structured-fields-warning { padding: 10px 12px; background: #fffaf1; border: 1px solid #f3e3c6; border-radius: 7px; }
+.history-item { width: 100%; }
+.history-item > .ant-typography { display: block; margin: 8px 0 0; }
+.history-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 9px; color: #465c6b; font-size: 12px; line-height: 1.6; }
+.historical-option-alert { margin: 12px 0 16px; }
 .history-card .ant-card-head-title, .options-card .ant-card-head-title { color: var(--navy); }
 .judgment-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 7px; font-size: 12px; }
 .judgment-meta .ant-tag { margin: 0; }
@@ -138,12 +147,16 @@ button, input, textarea, select { font: inherit; }
 .clear-key-label { color: #5d6d79; font-size: 13px; cursor: pointer; }
 .clear-key-label input { margin-right: 7px; accent-color: var(--blue); }
 .operation-stats .ant-card { border: 1px solid var(--line); border-radius: 10px; }
-.operation-stats .ant-statistic-title { color: var(--muted); font-size: 12px; }
-.operation-stats .ant-statistic-content { color: var(--navy); font-size: 16px; }
-.operation-stats .ant-statistic-content .anticon { color: #4a88a8; font-size: 17px; }
+.operation-stat-card { height: 100%; }
+.operation-stat-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.operation-stat-label .anticon { color: #4a88a8; font-size: 17px; }
+.operation-stat-value { margin-top: 10px; overflow: hidden; color: var(--navy); font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .operation-actions-card .ant-btn { margin: 0; }
 .import-history { margin-top: 18px; }
-.import-history pre { max-height: 130px; margin: 8px 0; padding: 10px; overflow: auto; color: #526876; background: #f6f8fa; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.import-history-row { width: 100%; }
+.import-history-row .ant-space { margin-bottom: 4px; }
+.import-counts { color: #526876; font-size: 12px; }
+.import-error-text { color: #b6473c; }
 .mobile-drawer .ant-drawer-body { padding: 0; }
 .mobile-brand { margin-bottom: 0; }
 
@@ -182,6 +195,8 @@ button, input, textarea, select { font: inherit; }
   .decision-form-grid { grid-template-columns: 1fr; }
   .decision-form-grid > div:last-child { grid-column: auto; }
   .decision-actions { align-items: flex-start; flex-direction: column; }
+  .structured-field { grid-template-columns: 1fr; gap: 2px; }
+  .history-facts { grid-template-columns: 1fr; }
   .detail-back { align-items: flex-start; flex-direction: column; gap: 2px; }
   .app-header h3 { font-size: 17px; }
   .scope-alert .ant-alert-message { font-size: 12px; }

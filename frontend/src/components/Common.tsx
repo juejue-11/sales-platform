@@ -17,11 +17,13 @@ export const gateLabels: Record<GateStatus, string> = {
 
 export const aiStatusLabels: Record<AiStatus, string> = {
   not_configured: '未配置模型',
+  idle: '待分析',
   queued: '等待分析',
   running: '分析中',
   succeeded: '已分析',
   failed: '分析失败',
   stale: '结果待复核',
+  skipped: '无需分析',
 }
 
 export const aiDecisionLabels: Record<Exclude<AiDecision, null>, string> = {
@@ -36,6 +38,31 @@ export const decisionLabels: Record<DecisionStatus, string> = {
   following: '跟进中',
   verify: '待核实',
   closed: '已关闭',
+}
+
+const kindLabels: Record<string, string> = {
+  procurement: '采购公告', tender: '招标公告', bid: '招标公告', award: '成交 / 中标', result: '成交 / 中标', news: '行业新闻', signal: '线索', mining_rights: '矿业权动态',
+}
+
+const sourceLabels: Record<string, string> = {
+  mnr_mining_rights: '自然资源部采矿权出让公告',
+  mnr_exploration_rights: '自然资源部探矿权出让公告',
+  ccteg_materials: '中国煤科电子采购平台物资采购',
+  ccteg_engineering: '中国煤科电子采购平台工程采购',
+  ccgp_local_tender: '中国政府采购网地方招标',
+  huang_ansteel: '鞍钢智慧招投标',
+  huang_jiugang: '酒钢公共交易平台',
+  jiugang_company_news: '酒钢集团新闻',
+}
+
+export function kindLabel(kind: string | null | undefined): string {
+  if (!kind) return '未分类'
+  return kindLabels[kind] ?? kind
+}
+
+export function sourceLabel(sourceId: string | null | undefined): string {
+  if (!sourceId) return '来源未标明'
+  return sourceLabels[sourceId] ?? sourceId
 }
 
 export function formatDate(value: string | null | undefined, withTime = false): string {
@@ -61,7 +88,7 @@ export function GateTag({ status }: { status: GateStatus }) {
 
 export function AiStatusTag({ status }: { status: AiStatus }) {
   const color: Record<AiStatus, string> = {
-    not_configured: 'default', queued: 'processing', running: 'processing', succeeded: 'success', failed: 'error', stale: 'warning',
+    not_configured: 'default', idle: 'default', queued: 'processing', running: 'processing', succeeded: 'success', failed: 'error', stale: 'warning', skipped: 'default',
   }
   return <Tag color={color[status]}>{aiStatusLabels[status] ?? status}</Tag>
 }
@@ -114,9 +141,8 @@ export function ProjectTitle({ project, onOpen }: { project: ProjectSummary; onO
       <div className="project-meta">
         <Text type="secondary">{project.buyer || '采购方未标明'}</Text>
         <span className="meta-dot">·</span>
-        <Text type="secondary">{project.kind || '未分类'}</Text>
+        <Text type="secondary">{kindLabel(project.kind)}</Text>
       </div>
     </div>
   )
 }
-

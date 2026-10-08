@@ -29,6 +29,7 @@ function fromLines(value: string): string[] {
 export function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>(emptySettings)
   const [draft, setDraft] = useState<SettingsData>(emptySettings)
+  const [keywordText, setKeywordText] = useState({ target: '', exclude: '' })
   const [apiKey, setApiKey] = useState('')
   const [clearApiKey, setClearApiKey] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -44,6 +45,7 @@ export function SettingsPage() {
       const normalized = normalizeSettings(result)
       setSettings(normalized)
       setDraft(copySettings(normalized))
+      setKeywordText({ target: toLines(normalized.business.target_keywords), exclude: toLines(normalized.business.exclude_keywords) })
       setApiKey('')
       setClearApiKey(false)
       setDirty(false)
@@ -74,11 +76,13 @@ export function SettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const body: SettingsData = copySettings({ ...draft, ai: { ...draft.ai, ...(apiKey ? { api_key: apiKey } : {}), ...(clearApiKey ? { clear_api_key: true } : {}) } })
+      const body: SettingsData = copySettings({ ...draft, business: { ...draft.business, target_keywords: fromLines(keywordText.target), exclude_keywords: fromLines(keywordText.exclude) }, ai: { ...draft.ai, ...(apiKey ? { api_key: apiKey } : {}), ...(clearApiKey ? { clear_api_key: true } : {}) } })
       const saved = normalizeSettings(await api.saveSettings(body))
       const fresh = normalizeSettings(await api.settings())
       setSettings(fresh.version >= saved.version ? fresh : saved)
       setDraft(copySettings(fresh.version >= saved.version ? fresh : saved))
+      const latest = fresh.version >= saved.version ? fresh : saved
+      setKeywordText({ target: toLines(latest.business.target_keywords), exclude: toLines(latest.business.exclude_keywords) })
       setApiKey('')
       setClearApiKey(false)
       setDirty(false)
@@ -103,24 +107,24 @@ export function SettingsPage() {
         <Col xs={24} xl={15}>
           <Card title="公司能力卡" extra={<Tag color={capabilityEmpty ? 'warning' : 'success'}>{capabilityEmpty ? '待补充资料' : '已填写'}</Tag>}>
             <Form layout="vertical">
-              <Form.Item label="公司名称"><Input value={draft.business.company_name} onChange={(event) => updateBusiness('company_name', event.target.value)} placeholder="例如：某某智能装备有限公司" /></Form.Item>
-              <Form.Item label="业务范围"><Input.TextArea value={draft.business.scope_description} onChange={(event) => updateBusiness('scope_description', event.target.value)} rows={3} placeholder="我们做什么、服务哪些客户和场景" /></Form.Item>
-              <Row gutter={12}><Col xs={24} md={12}><Form.Item label="支持的产品 / 设备"><Input.TextArea value={draft.business.supported_products} onChange={(event) => updateBusiness('supported_products', event.target.value)} rows={5} placeholder="填写已确认可提供的产品、设备或服务" /></Form.Item></Col><Col xs={24} md={12}><Form.Item label="明确能力"><Input.TextArea value={draft.business.capabilities} onChange={(event) => updateBusiness('capabilities', event.target.value)} rows={5} placeholder="供货、改造、实施、交付范围和限制" /></Form.Item></Col></Row>
-              <Form.Item label="方案例子"><Input.TextArea value={draft.business.solution_examples} onChange={(event) => updateBusiness('solution_examples', event.target.value)} rows={5} placeholder="填写已确认的方案做法、适用条件和取舍" /></Form.Item>
-              <Form.Item label="区域偏好"><Input.TextArea value={draft.business.region_preferences} onChange={(event) => updateBusiness('region_preferences', event.target.value)} rows={2} placeholder="例如：优先华东；需现场服务的地区请先确认" /></Form.Item>
+              <Form.Item label={<label htmlFor="business-company-name">公司名称</label>}><Input id="business-company-name" value={draft.business.company_name} onChange={(event) => updateBusiness('company_name', event.target.value)} placeholder="例如：某某智能装备有限公司" /></Form.Item>
+              <Form.Item label={<label htmlFor="business-scope">业务范围</label>}><Input.TextArea id="business-scope" value={draft.business.scope_description} onChange={(event) => updateBusiness('scope_description', event.target.value)} rows={3} placeholder="我们做什么、服务哪些客户和场景" /></Form.Item>
+              <Row gutter={12}><Col xs={24} md={12}><Form.Item label={<label htmlFor="business-products">支持的产品 / 设备</label>}><Input.TextArea id="business-products" value={draft.business.supported_products} onChange={(event) => updateBusiness('supported_products', event.target.value)} rows={5} placeholder="填写已确认可提供的产品、设备或服务" /></Form.Item></Col><Col xs={24} md={12}><Form.Item label={<label htmlFor="business-capabilities">明确能力</label>}><Input.TextArea id="business-capabilities" value={draft.business.capabilities} onChange={(event) => updateBusiness('capabilities', event.target.value)} rows={5} placeholder="供货、改造、实施、交付范围和限制" /></Form.Item></Col></Row>
+              <Form.Item label={<label htmlFor="business-solutions">方案例子</label>}><Input.TextArea id="business-solutions" value={draft.business.solution_examples} onChange={(event) => updateBusiness('solution_examples', event.target.value)} rows={5} placeholder="填写已确认的方案做法、适用条件和取舍" /></Form.Item>
+              <Form.Item label={<label htmlFor="business-regions">区域偏好</label>}><Input.TextArea id="business-regions" value={draft.business.region_preferences} onChange={(event) => updateBusiness('region_preferences', event.target.value)} rows={2} placeholder="例如：优先华东；需现场服务的地区请先确认" /></Form.Item>
             </Form>
           </Card>
         </Col>
         <Col xs={24} xl={9}>
           <Card title="筛选规则">
-            <Form layout="vertical"><Form.Item label="目标关键词" extra="每行一个，也可以用逗号分隔"><Input.TextArea value={toLines(draft.business.target_keywords)} onChange={(event) => updateBusiness('target_keywords', fromLines(event.target.value))} rows={6} placeholder="破碎机\n智能矿山\n备件" /></Form.Item><Form.Item label="明确排除关键词" extra="只有明确不符合时才作为排除规则"><Input.TextArea value={toLines(draft.business.exclude_keywords)} onChange={(event) => updateBusiness('exclude_keywords', fromLines(event.target.value))} rows={6} placeholder="完全不承接的品类或服务" /></Form.Item></Form>
+            <Form layout="vertical"><Form.Item label={<label htmlFor="rule-target-keywords">目标关键词</label>} extra="每行一个，也可以用逗号分隔"><Input.TextArea id="rule-target-keywords" value={keywordText.target} onChange={(event) => { setKeywordText((current) => ({ ...current, target: event.target.value })); setDirty(true) }} rows={6} placeholder="破碎机\n智能矿山\n备件" /></Form.Item><Form.Item label={<label htmlFor="rule-exclude-keywords">明确排除关键词</label>} extra="只有明确不符合时才作为排除规则"><Input.TextArea id="rule-exclude-keywords" value={keywordText.exclude} onChange={(event) => { setKeywordText((current) => ({ ...current, exclude: event.target.value })); setDirty(true) }} rows={6} placeholder="完全不承接的品类或服务" /></Form.Item></Form>
             <Alert type="warning" showIcon message="信息不足不会自动淘汰" description="空的设备字段、解析异常和疑似重复会进入待核实或线索区。" />
           </Card>
           <Card title="模型配置" className="settings-card">
-            <Form layout="vertical"><Form.Item label="启用模型"><Switch checked={draft.ai.enabled} onChange={(checked) => updateAi('enabled', checked)} /></Form.Item><Form.Item label="兼容 OpenAI 的 Base URL"><Input value={draft.ai.base_url} onChange={(event) => updateAi('base_url', event.target.value)} placeholder="https://api.example.com/v1" /></Form.Item><Form.Item label="模型名称"><Input value={draft.ai.model} onChange={(event) => updateAi('model', event.target.value)} placeholder="填写实际模型名" /></Form.Item><Form.Item label="API Key" extra="密钥只写入后端设置，读取时不会返回；留空表示保留已有密钥"><Input.Password prefix={<LockOutlined />} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setDirty(true) }} placeholder={settings.ai.has_api_key ? '已配置，输入新密钥可替换' : '尚未配置'} /></Form.Item><Space direction="vertical"><Text type="secondary"><SafetyCertificateOutlined /> 当前状态：{settings.ai.has_api_key ? '已配置密钥' : '未配置密钥'}</Text><label className="clear-key-label"><input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setDirty(true) }} /> 清除后端已有密钥</label></Space></Form>
+            <Form layout="vertical"><Form.Item label={<label htmlFor="ai-enabled">启用模型</label>}><Switch id="ai-enabled" checked={draft.ai.enabled} onChange={(checked) => updateAi('enabled', checked)} /></Form.Item><Form.Item label={<label htmlFor="ai-base-url">兼容 OpenAI 的 Base URL</label>}><Input id="ai-base-url" value={draft.ai.base_url} onChange={(event) => updateAi('base_url', event.target.value)} placeholder="https://api.example.com/v1" /></Form.Item><Form.Item label={<label htmlFor="ai-model">模型名称</label>}><Input id="ai-model" value={draft.ai.model} onChange={(event) => updateAi('model', event.target.value)} placeholder="填写实际模型名" /></Form.Item><Form.Item label={<label htmlFor="ai-api-key">API Key</label>} extra="密钥只写入后端设置，读取时不会返回；留空表示保留已有密钥"><Input.Password id="ai-api-key" prefix={<LockOutlined />} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setDirty(true) }} placeholder={settings.ai.has_api_key ? '已配置，输入新密钥可替换' : '尚未配置'} /></Form.Item><Space direction="vertical"><Text type="secondary"><SafetyCertificateOutlined /> 当前状态：{settings.ai.has_api_key ? '已配置密钥' : '未配置密钥'}</Text><label className="clear-key-label"><input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setDirty(true) }} /> 清除后端已有密钥</label></Space></Form>
             {!draft.ai.enabled || !draft.ai.base_url || !draft.ai.model || (!settings.ai.has_api_key && !apiKey) ? <Alert className="settings-alert" type="info" showIcon message="模型配置不完整" description="保存后项目会显示未配置模型，系统不会伪造 AI 判断。" /> : <Alert className="settings-alert" type="success" showIcon message="模型配置已填写" description="保存后可在项目详情提交分析任务。" />}
           </Card>
-          <Card title="导入设置" className="settings-card"><Form layout="vertical"><Form.Item label="records.jsonl 路径"><Input value={draft.import.path} onChange={(event) => updateImport('path', event.target.value)} placeholder="留空使用后端默认路径" /></Form.Item><Form.Item label="自动检查"><Switch checked={draft.import.auto_import} onChange={(checked) => updateImport('auto_import', checked)} /></Form.Item><Form.Item label="检查间隔（秒）"><InputNumber min={30} step={30} value={draft.import.poll_seconds} onChange={(value) => updateImport('poll_seconds', value ?? 300)} style={{ width: '100%' }} /></Form.Item></Form><Paragraph type="secondary">采集密钥、后台日志和原始密钥不会出现在这里。</Paragraph></Card>
+          <Card title="导入设置" className="settings-card"><Form layout="vertical"><Form.Item label={<label htmlFor="import-path">records.jsonl 路径</label>}><Input id="import-path" value={draft.import.path} onChange={(event) => updateImport('path', event.target.value)} placeholder="留空使用后端默认路径" /></Form.Item><Form.Item label={<label htmlFor="import-auto">自动检查</label>}><Switch id="import-auto" checked={draft.import.auto_import} onChange={(checked) => updateImport('auto_import', checked)} /></Form.Item><Form.Item label={<label htmlFor="import-poll-seconds">检查间隔（秒）</label>}><InputNumber id="import-poll-seconds" min={30} step={30} value={draft.import.poll_seconds} onChange={(value) => updateImport('poll_seconds', value ?? 300)} style={{ width: '100%' }} /></Form.Item></Form><Paragraph type="secondary">采集密钥、后台日志和原始密钥不会出现在这里。</Paragraph></Card>
         </Col>
       </Row>
     </div>
@@ -138,4 +142,3 @@ function normalizeSettings(value: SettingsData): SettingsData {
     import: { path: value.import?.path ?? '', auto_import: Boolean(value.import?.auto_import), poll_seconds: Number(value.import?.poll_seconds ?? 300) },
   }
 }
-
