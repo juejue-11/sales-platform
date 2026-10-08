@@ -537,15 +537,15 @@
 }
 
 .dashboard-list-table {
-  min-width: 930px;
+  min-width: 680px;
 }
 
 .dashboard-project-row {
   display: grid;
-  grid-template-columns: minmax(270px, 1fr) 92px 162px 92px 128px 54px;
+  grid-template-columns: minmax(220px, 1fr) 64px 104px 64px 100px 36px;
   align-items: center;
-  gap: 13px;
-  min-width: 930px;
+  gap: 12px;
+  min-width: 680px;
   padding: 14px 18px;
   border-bottom: 1px solid #e9eff0;
 }
@@ -734,6 +734,7 @@
   color: var(--dashboard-ink);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .dashboard-date-label time.dashboard-date-expired {
@@ -897,7 +898,7 @@
   }
 
   .dashboard-project-row {
-    grid-template-columns: minmax(250px, 1fr) 86px 148px 86px 120px 48px;
+    grid-template-columns: minmax(220px, 1fr) 64px 104px 64px 100px 36px;
     gap: 10px;
     padding-inline: 14px;
   }

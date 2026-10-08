@@ -126,14 +126,14 @@
   max-width: 420px;
 }
 
-.detail-page .ant-btn-primary {
+.detail-page .ant-btn-primary:not(:disabled) {
   border-color: var(--detail-accent);
   background: var(--detail-accent);
   box-shadow: none;
 }
 
-.detail-page .ant-btn-primary:hover,
-.detail-page .ant-btn-primary:focus {
+.detail-page .ant-btn-primary:not(:disabled):hover,
+.detail-page .ant-btn-primary:not(:disabled):focus {
   border-color: #185853;
   background: #185853;
 }
