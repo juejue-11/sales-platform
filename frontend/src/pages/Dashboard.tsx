@@ -16,12 +16,14 @@ interface ProjectQuery {
   decision: string
   kind: string
   source_id: string
+  ai_decision: string
   page: number
   page_size: number
   sort: 'updated' | 'deadline'
+  deadline_soon: boolean
 }
 
-const initialQuery: ProjectQuery = { q: '', gate: '', ai_status: '', decision: '', kind: '', source_id: '', page: 1, page_size: 30, sort: 'updated' }
+const initialQuery: ProjectQuery = { q: '', gate: '', ai_status: '', decision: '', kind: '', source_id: '', ai_decision: '', page: 1, page_size: 30, sort: 'updated', deadline_soon: false }
 
 function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'decision_counts', key: string): number {
   return data?.[field]?.[key] ?? 0
@@ -55,7 +57,7 @@ export function DashboardPage() {
     setLoadingProjects(true)
     setProjectsError(null)
     try {
-      const result = await api.projects({ ...currentQuery } as Record<string, string | number | undefined>)
+      const result = await api.projects({ ...currentQuery })
       setProjects(result.items)
       setTotal(result.total)
     } catch (error) {
@@ -73,7 +75,7 @@ export function DashboardPage() {
   }, [loadDashboard, loadProjects])
 
   const submitQuery = (next: Partial<ProjectQuery>) => {
-    const nextQuery = { ...query, ...next, page: 1 }
+    const nextQuery = { ...query, ...next, page: 1, deadline_soon: next.deadline_soon ?? false }
     setQuery(nextQuery)
     void loadProjects(nextQuery)
   }
@@ -150,19 +152,23 @@ export function DashboardPage() {
 
       {dashboardError ? <Alert type="warning" showIcon message="统计暂时无法读取" description={dashboardError instanceof Error ? dashboardError.message : '请检查后端服务是否运行在 127.0.0.1:8766'} action={<Button size="small" onClick={() => void loadDashboard()}>重试</Button>} /> : null}
       {dashboard?.import_error && <Alert type="warning" showIcon message="采集文件存在异常" description={dashboard.import_error} />}
+      {dashboard?.file_stale && <Alert type="warning" showIcon message="采集文件可能已过期" description="平台暂未看到近期的 records.jsonl 更新，请检查采集系统和导入路径。" />}
+      {dashboard?.import_pending && <Alert type="info" showIcon message="采集数据正在导入" description="新文件已发现，项目列表会在本次导入完成后更新。" />}
+      {dashboard?.source_notes && <Alert type="info" showIcon message="来源覆盖说明" description={dashboard.source_notes} />}
       {dashboard && !dashboard.ai_configured && <Alert type="info" showIcon message="模型尚未配置" description="当前项目只展示规则结果和已有数据，不会生成虚构的 AI 建议。请在业务配置中填写模型信息后再分析。" action={<Button type="link" onClick={() => navigate('/settings')}>去配置</Button>} />}
 
       <Row gutter={[12, 12]} className="count-grid">
         <Col xs={12} sm={8} lg={4}><CountCard label="全部项目" value={dashboard?.total_projects ?? 0} onClick={() => submitQuery({ gate: '' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="推荐跟进" value={count(dashboard, 'gate_counts', 'candidate')} tone="blue" onClick={() => submitQuery({ gate: 'candidate' })} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="建议跟进" value={count(dashboard, 'ai_counts', 'recommend') + count(dashboard, 'ai_counts', 'consider')} tone="blue" onClick={() => submitQuery({ ai_decision: 'recommend' })} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="初筛候选" value={count(dashboard, 'gate_counts', 'candidate')} onClick={() => submitQuery({ gate: 'candidate' })} /></Col>
         <Col xs={12} sm={8} lg={4}><CountCard label="待核实" value={count(dashboard, 'gate_counts', 'review')} tone="orange" onClick={() => submitQuery({ gate: 'review' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="临近截止" value={deadlineProjects.length} tone="orange" onClick={() => setQueryAndLoadDeadline()} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="临近截止" value={dashboard?.deadline_soon_count ?? deadlineProjects.length} tone="orange" onClick={() => setQueryAndLoadDeadline()} /></Col>
         <Col xs={12} sm={8} lg={4}><CountCard label="等待分析" value={count(dashboard, 'ai_counts', 'queued')} /></Col>
         <Col xs={12} sm={8} lg={4}><CountCard label="跟进中" value={count(dashboard, 'decision_counts', 'following')} tone="green" onClick={() => submitQuery({ decision: 'following' })} /></Col>
       </Row>
 
       <Card className="deadline-card" title={<span><ClockCircleOutlined /> 临近截止项目</span>} extra={<Button type="link" onClick={() => setQueryAndLoadDeadline()}>查看全部</Button>}>
-        {loadingDashboard ? <LoadingBlock text="正在读取提醒" /> : deadlineProjects.length === 0 ? <EmptyBlock description="当前没有临近截止项目" /> : <div className="deadline-list">{deadlineProjects.slice(0, 4).map((project) => <button type="button" key={project.id} className="deadline-row" onClick={() => navigate(`/projects/${project.id}`)}><span className="deadline-name">{project.title}</span><Text type="danger">{formatDate(project.deadline_at)}</Text><AiDecisionTag decision={project.ai_decision} /></button>)}</div>}
+        {loadingDashboard ? <LoadingBlock text="正在读取提醒" /> : deadlineProjects.length === 0 ? <EmptyBlock description="当前没有临近截止项目" /> : <><div className="deadline-list">{deadlineProjects.slice(0, 4).map((project) => <button type="button" key={project.id} className="deadline-row" onClick={() => navigate(`/projects/${project.id}`)}><span className="deadline-name">{project.title}</span><Text type="danger">{formatDate(project.deadline_at)}</Text><AiDecisionTag decision={project.ai_decision} /></button>)}</div>{(dashboard?.deadline_soon_count ?? deadlineProjects.length) > deadlineProjects.length && <Text type="secondary">还有 {(dashboard?.deadline_soon_count ?? deadlineProjects.length) - deadlineProjects.length} 条提醒，请点击“查看全部”。</Text>}</>}
       </Card>
 
       <Card className="opportunity-card" title={<div><Title level={4}>项目列表</Title><Text type="secondary">共 {total.toLocaleString('zh-CN')} 个项目，已排除项目默认隐藏，可通过规则状态筛选查看。</Text></div>}>
@@ -171,17 +177,18 @@ export function DashboardPage() {
           <Select value={query.gate} onChange={(value) => submitQuery({ gate: value })} options={[{ value: '', label: '全部规则状态' }, { value: 'candidate', label: '候选' }, { value: 'review', label: '待核实' }, { value: 'excluded', label: '已排除' }, { value: 'expired', label: '已截止' }, { value: 'signal', label: '线索' }, { value: 'duplicate', label: '疑似重复' }]} />
           <Select value={query.ai_status} onChange={(value) => submitQuery({ ai_status: value })} options={[{ value: '', label: '全部 AI 状态' }, { value: 'not_configured', label: '未配置模型' }, { value: 'idle', label: '待分析' }, { value: 'queued', label: '等待分析' }, { value: 'running', label: '分析中' }, { value: 'succeeded', label: '已分析' }, { value: 'failed', label: '分析失败' }, { value: 'stale', label: '结果待复核' }, { value: 'skipped', label: '无需分析' }]} />
           <Select value={query.decision} onChange={(value) => submitQuery({ decision: value })} options={[{ value: '', label: '全部人工状态' }, { value: 'new', label: '未处理' }, { value: 'following', label: '跟进中' }, { value: 'verify', label: '待核实' }, { value: 'closed', label: '已关闭' }]} />
+          <Select value={query.ai_decision} onChange={(value) => submitQuery({ ai_decision: value })} options={[{ value: '', label: '全部 AI 建议' }, { value: 'recommend', label: '建议跟进' }, { value: 'consider', label: '有条件跟进' }, { value: 'verify', label: '待核实' }, { value: 'not_recommended', label: '不建议' }]} />
           <Input value={query.kind} onChange={(event) => setQuery((current) => ({ ...current, kind: event.target.value }))} onPressEnter={(event) => submitQuery({ kind: event.currentTarget.value })} placeholder="公告类别" allowClear />
           <Input value={query.source_id} onChange={(event) => setQuery((current) => ({ ...current, source_id: event.target.value }))} onPressEnter={(event) => submitQuery({ source_id: event.currentTarget.value })} placeholder="来源 ID" allowClear />
           <Select value={query.sort} onChange={(value: ProjectQuery['sort']) => submitQuery({ sort: value })} options={[{ value: 'updated', label: '按更新时间' }, { value: 'deadline', label: '按截止时间' }]} />
         </div>
-        {projectsError ? <ErrorBlock error={projectsError} onRetry={() => void loadProjects(query)} /> : loadingProjects ? <LoadingBlock text="正在读取项目" /> : projects.length === 0 ? <EmptyBlock description={Object.values(query).some((value) => value !== '' && value !== 1 && value !== 30 && value !== 'updated') ? '没有符合筛选条件的项目' : '暂无项目数据'} /> : <Table<ProjectSummary> rowKey="id" size="middle" columns={columns} dataSource={projects} scroll={{ x: 980 }} pagination={{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showTotal: (value) => `共 ${value} 个`, pageSizeOptions: [15, 30, 60] }} onChange={onPageChange} />}
+        {projectsError ? <ErrorBlock error={projectsError} onRetry={() => void loadProjects(query)} /> : loadingProjects ? <LoadingBlock text="正在读取项目" /> : projects.length === 0 ? <EmptyBlock description={query.q || query.gate || query.ai_status || query.ai_decision || query.decision || query.kind || query.source_id || query.deadline_soon ? '没有符合筛选条件的项目' : '暂无项目数据'} /> : <Table<ProjectSummary> rowKey="id" size="middle" columns={columns} dataSource={projects} scroll={{ x: 980 }} pagination={{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showTotal: (value) => `共 ${value} 个`, pageSizeOptions: [15, 30, 60] }} onChange={onPageChange} />}
       </Card>
     </div>
   )
 
   function setQueryAndLoadDeadline() {
-    const nextQuery = { ...query, gate: '', page: 1, sort: 'deadline' as const }
+    const nextQuery = { ...query, gate: '', ai_decision: '', page: 1, sort: 'deadline' as const, deadline_soon: true }
     setQuery(nextQuery)
     void loadProjects(nextQuery)
   }
