@@ -115,7 +115,7 @@ export function ProjectDetailPage() {
     if (!detail) return
     const selected = detail.judgment?.options.find((option) => option.id === decisionForm.selected_option_id)
     const blockedGate = ['expired', 'closed', 'duplicate', 'excluded'].includes(detail.gate_status)
-    if (decisionForm.selected_option_id && (!selected || detail.judgment?.stale || detail.needs_review || blockedGate)) {
+    if (decisionForm.selected_option_id && (!selected || detail.judgment?.stale || blockedGate)) {
       message.warning('当前方案已经过期或待复核，请重新分析后选择方案')
       return
     }
@@ -154,12 +154,13 @@ export function ProjectDetailPage() {
 
   const options = detail?.judgment?.options ?? []
   const optionBlockedByGate = Boolean(detail && ['expired', 'closed', 'duplicate', 'excluded'].includes(detail.gate_status))
-  const optionAvailable = Boolean(detail?.judgment && !detail.judgment.stale && !detail.needs_review && !optionBlockedByGate && options.length > 0)
-  const optionDescription = detail?.judgment?.stale || detail?.needs_review ? '这份判断来自旧输入或待复核版本，方案已锁定。请先重判，系统会保留旧判断与人工决定。' : optionBlockedByGate ? '项目当前处于不可选状态，不能选择现有方案。' : '选择一个方案后填写负责人和下一步，保存将追加一条人工决定记录。'
+  const optionAvailable = Boolean(detail?.judgment && !detail.judgment.stale && !optionBlockedByGate && options.length > 0)
+  const optionDescription = detail?.judgment?.stale ? '这份判断来自旧输入，方案已锁定。请先重判，系统会保留旧判断与人工决定。' : detail?.needs_review ? '已有新的 AI 判断，当前人工决定需要复核。请重新选择当前方案后保存，旧决定会继续保留在历史中。' : optionBlockedByGate ? '项目当前处于不可选状态，不能选择现有方案。' : '选择一个方案后填写负责人和下一步，保存将追加一条人工决定记录。'
   const historicalSelectionId = detail?.decision.selected_option_id ?? null
   const hasHistoricalSelection = Boolean(detail && historicalSelectionId && (detail.needs_review || detail.judgment?.stale || (detail.decision.judgment_id != null && (detail.judgment == null || detail.decision.judgment_id !== detail.judgment.id))))
+  const historicalJudgment = detail && detail.decision.judgment_id != null ? detail.judgment_history.find((history) => history.id === detail.decision.judgment_id) : undefined
   const historicalOption = hasHistoricalSelection && detail && historicalSelectionId
-    ? detail.judgment_history.flatMap((history) => history.options).find((option) => option.id === historicalSelectionId)
+    ? historicalJudgment?.options.find((option) => option.id === historicalSelectionId) ?? detail.judgment_history.flatMap((history) => history.options).find((option) => option.id === historicalSelectionId)
     : undefined
 
   if (loading) return <div className="page-stack"><LoadingBlock text="正在读取项目详情" /></div>
@@ -179,7 +180,7 @@ export function ProjectDetailPage() {
         </Space>
       </div>
 
-      {detail.needs_review && <Alert type="warning" showIcon message="该项目需要人工复核" description="规则、公告版本或业务配置发生变化后，旧判断仍可查看，但不能直接作为当前方案依据。" />}
+      {detail.needs_review && <Alert type="warning" showIcon message="人工决定需要复核" description="项目已有新的 AI 判断。旧人工决定和历史方案仍会保留，请在下方重新确认当前方案或修改下一步。" />}
       {detail.ai_status === 'not_configured' && <Alert type="info" showIcon message="模型未配置" description="当前不会生成 AI 结论或方案。请先在业务配置中完成模型设置；规则结果、公告原文和人工决定仍可使用。" />}
       {detail.ai_status === 'failed' && <Alert type="error" showIcon message="AI 分析失败" description="请查看处理状态中的失败原因，并在修复配置后重试。" action={<Button type="link" onClick={() => navigate('/operations')}>查看任务</Button>} />}
 
