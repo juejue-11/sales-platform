@@ -15,7 +15,9 @@ const { chromium } = require(path.join(process.env.USERPROFILE, '.cache/codex-ru
     if(await field('负责人').inputValue()!=='浏览器验收负责人')throw new Error('First edit was overwritten');
     await field('下一步').fill('通过浏览器确认技术清单');
     await field('备注','textarea').fill('仅用于隔离验收');
+    await page.getByRole('radio').nth(1).check();
     await page.getByRole('radio').first().check();
+    if (!await page.getByRole('radio').first().isChecked() || await page.getByRole('radio').nth(1).isChecked()) throw new Error('Option inputs overlap or do not switch correctly');
     await page.getByRole('button',{name:'保存人工决定'}).click();
     await page.getByText('人工决定已保存，历史记录已保留',{exact:true}).waitFor();
     const decision=await page.request.get(url+'/api/projects/9001');

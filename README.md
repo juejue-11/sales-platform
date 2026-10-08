@@ -6,7 +6,7 @@
 
 ## 打开平台
 
-在本目录运行：
+双击本目录的 `启动平台.cmd` 即可启动并打开网页。也可以运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\启动平台.ps1 -OpenBrowser
@@ -14,7 +14,7 @@ powershell -ExecutionPolicy Bypass -File .\启动平台.ps1 -OpenBrowser
 
 地址：<http://127.0.0.1:8766>。再次运行启动脚本会复用已启动的平台。
 
-停止服务：
+双击 `停止平台.cmd` 或运行以下命令停止服务：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\停止平台.ps1
