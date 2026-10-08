@@ -12,7 +12,7 @@ export const gateLabels: Record<GateStatus, string> = {
   expired: '已截止',
   closed: '已关闭',
   signal: '线索',
-  duplicate: '疑似重复',
+  duplicate: '确认重复',
 }
 
 export const aiStatusLabels: Record<AiStatus, string> = {

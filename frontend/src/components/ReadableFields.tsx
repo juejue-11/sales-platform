@@ -12,7 +12,7 @@ const fieldLabels: Record<string, string> = {
 }
 
 const valueLabels: Record<string, string> = {
-  new: '未处理', following: '跟进中', verify: '待核实', closed: '已关闭', candidate: '候选', review: '待核实', excluded: '已排除', expired: '已截止', duplicate: '疑似重复', signal: '线索',
+  new: '未处理', following: '跟进中', verify: '待核实', closed: '已关闭', candidate: '候选', review: '待核实', excluded: '已排除', expired: '已截止', duplicate: '确认重复', signal: '线索',
   content: '正文变化', template: '页面模板变化', correction: '内容更正', deadline: '截止时间变化', award: '成交 / 中标', created: '首次接入', same_project: '同项目', dismiss: '排除提示',
 }
 

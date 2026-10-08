@@ -67,7 +67,7 @@ def main():
     common = dict(source_id='qa', source_name='独立验收数据', buyer='验收采购方', published_at=now.isoformat(),
                   deadline_at=(now + timedelta(days=30)).isoformat(), fetched_at=now.isoformat(), current_version=1,
                   parse_status='ok', equipment=['破碎机'], facts=[], inferences=[], canonical_url='https://example.com/qa')
-    records = [dict(common, id=9001, kind='tender', title='验收项目：破碎机备件采购', body_text='验收公告：本项目采购破碎机备件，需要核对具体件号及技术清单。', content_sha256='qa-v1'),
+    records = [dict(common, id=9001, kind='tender', equipment=[], title='验收项目：破碎机备件采购', body_text='验收公告：本项目采购破碎机备件，需要核对具体件号及技术清单。', content_sha256='qa-v1'),
                dict(common, id=9002, kind='news', title='验收行业线索', body_text='验收新闻：矿区项目有新的行业动态，尚未发布具体设备采购计划。', deadline_at=None, content_sha256='qa-news')]
 
     def write_records():
