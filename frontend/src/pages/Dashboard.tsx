@@ -25,7 +25,7 @@ interface ProjectQuery {
 
 const initialQuery: ProjectQuery = { q: '', gate: '', ai_status: '', decision: '', kind: '', source_id: '', ai_decision: '', page: 1, page_size: 30, sort: 'updated', deadline_soon: false }
 
-function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'decision_counts', key: string): number {
+function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'ai_decision_counts' | 'decision_counts', key: string): number {
   return data?.[field]?.[key] ?? 0
 }
 
@@ -87,6 +87,15 @@ export function DashboardPage() {
   }
 
   const deadlineProjects = dashboard?.deadline_soon ?? []
+  const deadlineCount = dashboard?.deadline_soon_count ?? deadlineProjects.length
+  const deadlinePreviewCount = Math.min(4, deadlineProjects.length)
+
+  const startFromInitial = (overrides: Partial<ProjectQuery> = {}) => {
+    const nextQuery = { ...initialQuery, ...overrides }
+    setQuery(nextQuery)
+    setDraftQ(nextQuery.q)
+    void loadProjects(nextQuery)
+  }
 
   const columns: TableProps<ProjectSummary>['columns'] = useMemo(() => [
     {
@@ -153,22 +162,22 @@ export function DashboardPage() {
       {dashboardError ? <Alert type="warning" showIcon message="统计暂时无法读取" description={dashboardError instanceof Error ? dashboardError.message : '请检查后端服务是否运行在 127.0.0.1:8766'} action={<Button size="small" onClick={() => void loadDashboard()}>重试</Button>} /> : null}
       {dashboard?.import_error && <Alert type="warning" showIcon message="采集文件存在异常" description={dashboard.import_error} />}
       {dashboard?.file_stale && <Alert type="warning" showIcon message="采集文件可能已过期" description="平台暂未看到近期的 records.jsonl 更新，请检查采集系统和导入路径。" />}
-      {dashboard?.import_pending && <Alert type="info" showIcon message="采集数据正在导入" description="新文件已发现，项目列表会在本次导入完成后更新。" />}
+      {dashboard?.import_pending && <Alert type="info" showIcon message="新采集数据尚未导入" description="自动导入可能未开启或仍待处理，请前往处理状态手动导入。" />}
       {dashboard?.source_notes && <Alert type="info" showIcon message="来源覆盖说明" description={dashboard.source_notes} />}
       {dashboard && !dashboard.ai_configured && <Alert type="info" showIcon message="模型尚未配置" description="当前项目只展示规则结果和已有数据，不会生成虚构的 AI 建议。请在业务配置中填写模型信息后再分析。" action={<Button type="link" onClick={() => navigate('/settings')}>去配置</Button>} />}
 
       <Row gutter={[12, 12]} className="count-grid">
-        <Col xs={12} sm={8} lg={4}><CountCard label="全部项目" value={dashboard?.total_projects ?? 0} onClick={() => submitQuery({ gate: '' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="建议跟进" value={count(dashboard, 'ai_counts', 'recommend') + count(dashboard, 'ai_counts', 'consider')} tone="blue" onClick={() => submitQuery({ ai_decision: 'recommend' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="初筛候选" value={count(dashboard, 'gate_counts', 'candidate')} onClick={() => submitQuery({ gate: 'candidate' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="待核实" value={count(dashboard, 'gate_counts', 'review')} tone="orange" onClick={() => submitQuery({ gate: 'review' })} /></Col>
-        <Col xs={12} sm={8} lg={4}><CountCard label="临近截止" value={dashboard?.deadline_soon_count ?? deadlineProjects.length} tone="orange" onClick={() => setQueryAndLoadDeadline()} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="全部项目" value={dashboard?.total_projects ?? 0} onClick={() => startFromInitial()} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="建议跟进" value={count(dashboard, 'ai_decision_counts', 'recommend')} tone="blue" onClick={() => startFromInitial({ ai_decision: 'recommend' })} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="初筛候选" value={count(dashboard, 'gate_counts', 'candidate')} onClick={() => startFromInitial({ gate: 'candidate' })} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="待核实" value={count(dashboard, 'gate_counts', 'review')} tone="orange" onClick={() => startFromInitial({ gate: 'review' })} /></Col>
+        <Col xs={12} sm={8} lg={4}><CountCard label="未来 7 天截止" value={deadlineCount} tone="orange" onClick={() => setQueryAndLoadDeadline()} /></Col>
         <Col xs={12} sm={8} lg={4}><CountCard label="等待分析" value={count(dashboard, 'ai_counts', 'queued')} /></Col>
         <Col xs={12} sm={8} lg={4}><CountCard label="跟进中" value={count(dashboard, 'decision_counts', 'following')} tone="green" onClick={() => submitQuery({ decision: 'following' })} /></Col>
       </Row>
 
-      <Card className="deadline-card" title={<span><ClockCircleOutlined /> 临近截止项目</span>} extra={<Button type="link" onClick={() => setQueryAndLoadDeadline()}>查看全部</Button>}>
-        {loadingDashboard ? <LoadingBlock text="正在读取提醒" /> : deadlineProjects.length === 0 ? <EmptyBlock description="当前没有临近截止项目" /> : <><div className="deadline-list">{deadlineProjects.slice(0, 4).map((project) => <button type="button" key={project.id} className="deadline-row" onClick={() => navigate(`/projects/${project.id}`)}><span className="deadline-name">{project.title}</span><Text type="danger">{formatDate(project.deadline_at)}</Text><AiDecisionTag decision={project.ai_decision} /></button>)}</div>{(dashboard?.deadline_soon_count ?? deadlineProjects.length) > deadlineProjects.length && <Text type="secondary">还有 {(dashboard?.deadline_soon_count ?? deadlineProjects.length) - deadlineProjects.length} 条提醒，请点击“查看全部”。</Text>}</>}
+      <Card className="deadline-card" title={<span><ClockCircleOutlined /> 未来 7 天临近截止项目</span>} extra={<Button type="link" onClick={() => setQueryAndLoadDeadline()}>查看全部</Button>}>
+        {loadingDashboard ? <LoadingBlock text="正在读取提醒" /> : deadlineCount === 0 ? <EmptyBlock description="未来 7 天没有临近截止项目" /> : <>{deadlineProjects.length > 0 && <div className="deadline-list">{deadlineProjects.slice(0, 4).map((project) => <button type="button" key={project.id} className="deadline-row" onClick={() => navigate(`/projects/${project.id}`)}><span className="deadline-name">{project.title}</span><Text type="danger">{formatDate(project.deadline_at)}</Text><AiDecisionTag decision={project.ai_decision} /></button>)}</div>}{deadlineCount > deadlinePreviewCount && <Text type="secondary">还有 {deadlineCount - deadlinePreviewCount} 条提醒，请点击“查看全部”。</Text>}</>}
       </Card>
 
       <Card className="opportunity-card" title={<div><Title level={4}>项目列表</Title><Text type="secondary">共 {total.toLocaleString('zh-CN')} 个项目，已排除项目默认隐藏，可通过规则状态筛选查看。</Text></div>}>
@@ -188,8 +197,6 @@ export function DashboardPage() {
   )
 
   function setQueryAndLoadDeadline() {
-    const nextQuery = { ...query, gate: '', ai_decision: '', page: 1, sort: 'deadline' as const, deadline_soon: true }
-    setQuery(nextQuery)
-    void loadProjects(nextQuery)
+    startFromInitial({ sort: 'deadline', deadline_soon: true })
   }
 }

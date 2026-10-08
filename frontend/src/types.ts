@@ -101,6 +101,7 @@ export interface DashboardData {
   total_projects: number
   gate_counts: Record<string, number>
   ai_counts: Record<string, number>
+  ai_decision_counts?: Record<string, number>
   decision_counts: Record<string, number>
   deadline_soon: ProjectSummary[]
   data_updated_at: string | null
@@ -171,6 +172,7 @@ export interface StatusData {
   last_import_at: string | null
   import_error: string | null
   file_stale: boolean
+  import_pending?: boolean
   source_notes: string
   imports: StatusImport[]
   jobs: StatusJob[]
