@@ -7,7 +7,13 @@ $screeningProcess = Get-Process -Id $screeningServiceInfo.pid -ErrorAction Silen
 if (-not $screeningProcess) { Write-Host '平台已停止。'; exit 0 }
 $screeningExpectedPython = Join-Path $screeningRoot '.venv\Scripts\python.exe'
 $screeningCommand = Get-CimInstance Win32_Process -Filter "ProcessId = $($screeningServiceInfo.pid)"
-$screeningTimeMatches = [Math]::Abs(($screeningProcess.StartTime.ToUniversalTime() - [datetime]$screeningServiceInfo.started_at).TotalSeconds) -lt 3
+$screeningTimeMatches = [Math]::Abs(($screeningProcess.StartTime.ToUniversalTime() - ([datetime]$screeningServiceInfo.started_at).ToUniversalTime()).TotalSeconds) -lt 3
 if ($screeningProcess.Path -ne $screeningExpectedPython -or -not $screeningTimeMatches -or $screeningCommand.CommandLine -notmatch 'uvicorn.*backend\.main:app') { throw '进程身份与本平台启动记录不匹配，已取消停止操作。' }
-Stop-Process -Id $screeningProcess.Id
+$screeningChildren = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($screeningProcess.Id)"
+foreach ($screeningChild in $screeningChildren) {
+    if ($screeningChild.Name -eq 'python.exe' -and $screeningChild.CommandLine -match 'uvicorn.*backend\.main:app' -and $screeningChild.CommandLine -match "--port\s+$($screeningServiceInfo.port)(?:\s|$)") {
+        Stop-Process -Id $screeningChild.ProcessId -ErrorAction SilentlyContinue
+    }
+}
+Stop-Process -Id $screeningProcess.Id -ErrorAction SilentlyContinue
 Write-Host '平台已停止，数据和决定均已保留。'

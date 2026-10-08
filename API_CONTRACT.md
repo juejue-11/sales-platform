@@ -48,9 +48,9 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 
 ## API
 
-- `GET /api/health` => `{ok:true}`
-- `GET /api/dashboard` => `{total_records,total_projects,gate_counts,ai_counts,decision_counts,deadline_soon:ProjectSummary[],data_updated_at:string|null,import_error:string|null,ai_configured:boolean}`
-- `GET /api/projects?q=&gate=&ai_status=&decision=&kind=&source_id=&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；sort支持updated、deadline。
+- `GET /api/health` => `{ok:true,app:"sales-screening"}`
+- `GET /api/dashboard` => `{total_records,total_projects,gate_counts,ai_counts,ai_decision_counts,decision_counts,deadline_soon:ProjectSummary[],deadline_soon_count,data_updated_at:string|null,last_import_at,import_error:string|null,file_stale,import_pending,source_notes,ai_configured:boolean}`。统计覆盖全部项目，截止预览最多30条；推荐仅使用有效AI结论。
+- `GET /api/projects?q=&gate=&ai_status=&ai_decision=&decision=&kind=&source_id=&deadline_soon=false&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；sort支持updated、deadline；deadline_soon筛选未来7天截止且可继续处理的项目。
 - `GET /api/projects/{id}` => summary字段加 `{records:Record[],judgment:Judgment|null,judgment_history:Judgment[],decision_history:object[],related_projects:ProjectSummary[],versions:object[]}`。Record保留id/title/body_text/facts/inferences/original_url/canonical_url/archive_path/parse_status/possible_duplicate_of/related_record_id等采集字段。关联提示不自动合并，只有可靠标识才能合并；人工关联另外留痕。
 - `POST /api/projects/{id}/analyze` body `{force?:boolean}` => `{job_id:number|null,status:string,message:string}`。排队异步执行。
 - `POST /api/projects/{id}/decision` body `{status,owner,next_action,note,selected_option_id:string|null,judgment_id?:number|null}` => 更新后ProjectSummary。选择方案时必须附judgment_id且等于当前非过期判断的id，否则409；纯人工决定无需id。人工决定保存历史，重判不覆盖。
@@ -58,7 +58,7 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 - `POST /api/projects/{id}/link` body `{target_project_id:number,relation:same_project|duplicate|dismiss,note:string}` => `{ok:true,message:string}`。人工确认关联或排除提示，保留双方源记录和决定。
 - `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences},ai:{base_url,model,enabled:boolean,has_api_key:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。字符串默认为空；关键词为空时不得凭空认定公司能力。
 - `PUT /api/settings` body与GET相同（version无需传），ai可多传`api_key`；空字符串表示保留现有密钥，`clear_api_key:true`可移除。返回脱敏settings。改变业务配置后重算规则、标记旧AI结果待复核；合格且AI已配置的项目自动排队。
-- `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。
+- `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,import_pending:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。data_updated_at为源导出文件更新时间，last_import_at为平台导入时间；file_stale表示源文件缺失或超过48小时未更新，import_pending表示新文件尚未导入。
 - `POST /api/import` => `{inserted:number,updated:number,unchanged:number,total:number,message:string}`。完整校验文件后事务导入，无变化不重判，导入失败不得删除已有项目。
 - `POST /api/analyze-pending` => `{queued:number,message:string}`
 - `POST /api/jobs/retry-failed` => `{queued:number,message:string}`
