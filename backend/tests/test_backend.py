@@ -275,6 +275,24 @@ def test_configuring_ai_after_business_card_queues_pending_and_model_change_stal
     service.close()
 
 
+def test_expired_project_hides_current_ai_recommendation_but_keeps_history(tmp_path: Path):
+    provider = Provider({"decision": "recommend", "summary": "推荐跟进", "demand_summary": "有明确采购需求",
+                         "reasons": [{"text": "正文有采购需求", "evidence": [{"record_id": 1, "quote": "采购破碎机"}]}],
+                         "unknowns": [], "next_actions": ["联系采购"], "options": []})
+    service = make_service(tmp_path, [row()], provider=provider)
+    configure_ai(service)
+    queued = service.queue_project(1)
+    asyncio.run(service.run_job(queued["job_id"]))
+    assert service.summary(1)["ai_decision"] == "recommend"
+    service.db.execute("UPDATE records SET deadline_at=? WHERE id=1", ("2020-01-01T00:00:00+08:00",))
+    summary = service.summary(1)
+    assert summary["gate_status"] == "expired"
+    assert summary["ai_decision"] is None
+    assert summary["ai_summary"] is None
+    assert service.project_detail(1)["judgment"]["decision"] == "recommend"
+    service.close()
+
+
 def test_api_key_is_write_only_and_archive_path_is_constrained(tmp_path: Path):
     archive = tmp_path / "archive" / "1"
     archive.mkdir(parents=True)
@@ -305,20 +323,26 @@ def test_deadline_date_uses_shanghai_timezone(tmp_path: Path):
 
 def test_source_age_and_import_pending_are_distinct_and_notes_show_coverage(tmp_path: Path):
     source = tmp_path / "records.jsonl"
-    source.write_text(json.dumps(row(), ensure_ascii=False), encoding="utf-8")
+    coverage_row = row()
+    coverage_row["equipment"] = []
+    coverage_row["deadline_at"] = None
+    source.write_text(json.dumps(coverage_row, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "trial-status.md").write_text(
         "# 试运行\n当前连续周期：1/14 天。\n历史缺失：2026-10-07。\n", encoding="utf-8"
     )
     service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
                                archive_root=tmp_path, provider=Provider())
     asyncio.run(service.import_file())
-    fresh = service.status()
+    fresh = service.dashboard()
     assert fresh["file_stale"] is False
     assert fresh["import_pending"] is False
     assert "1 个来源" in fresh["source_notes"]
-    assert "字段缺失提示" in fresh["source_notes"]
+    assert "设备信息缺失" in fresh["source_notes"]
     assert "试运行" in fresh["source_notes"] and "历史缺失" in fresh["source_notes"]
     assert "不能据此推断已覆盖全网" in fresh["source_notes"]
+    assert "源文件：" not in fresh["source_notes"]
+    assert "# 试运行" not in fresh["source_notes"]
+    assert "源文件：" in service.status()["source_notes"]
 
     changed = row(body="采购破碎机，截止时间：2099-12-31 09:00。新正文。")
     changed["current_version"] = 2
