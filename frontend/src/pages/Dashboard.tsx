@@ -359,9 +359,9 @@ export function DashboardPage() {
                     <div className="dashboard-project-meta"><span>{project.buyer || '采购方未标明'}</span><span className="dashboard-meta-separator">·</span><span>{kindLabel(project.kind)}</span><span className="dashboard-source-name">{sourceLabel(project.source_id)}</span></div>
                     {project.ai_summary && <p className="dashboard-ai-summary" title={project.ai_summary}><RobotOutlined aria-hidden="true" />{project.ai_summary}</p>}
                   </div>
-                  <div className="dashboard-status-cell" role="cell"><span className="dashboard-status-label">规则</span><GatePill status={project.gate_status} /></div>
+                  <div className="dashboard-status-cell dashboard-rule-cell" role="cell"><span className="dashboard-status-label">规则</span><GatePill status={project.gate_status} /></div>
                   <div className="dashboard-status-cell dashboard-ai-cell" role="cell"><span className="dashboard-status-label">AI</span><div className="dashboard-status-pair"><AiStatusPill status={project.ai_status} /><AiDecisionPill decision={project.ai_decision} /></div></div>
-                  <div className="dashboard-status-cell" role="cell"><span className="dashboard-status-label">人工</span><DecisionPill status={project.decision.status} /></div>
+                  <div className="dashboard-status-cell dashboard-decision-cell" role="cell"><span className="dashboard-status-label">人工</span><DecisionPill status={project.decision.status} /></div>
                   <div className="dashboard-project-dates" role="cell"><span className="dashboard-date-label">截止 <time className={isExpired(project.deadline_at) ? 'dashboard-date-expired' : ''} dateTime={project.deadline_at ?? undefined}>{formatDate(project.deadline_at)}</time></span><span className="dashboard-date-label">更新 <time dateTime={project.updated_at}>{formatDate(project.updated_at)}</time></span></div>
                   <div className="dashboard-project-action" role="cell"><Button type="link" onClick={() => navigate(`/projects/${project.id}`)}>查看</Button></div>
                 </article>
@@ -379,6 +379,7 @@ export function DashboardPage() {
               {deadlineProjects.slice(0, 4).map((project) => <button type="button" key={project.id} className="dashboard-deadline-row" onClick={() => navigate(`/projects/${project.id}`)}><span className="dashboard-deadline-name">{project.title || '未命名项目'}</span><time dateTime={project.deadline_at ?? undefined}>{formatDate(project.deadline_at)}</time><AiDecisionPill decision={project.ai_decision} /></button>)}
             </div>
             {deadlineCount > deadlinePreviewCount && <p className="dashboard-deadline-more">还有 {deadlineCount - deadlinePreviewCount} 条提醒</p>}
+            {deadlineCount > 2 && <p className="dashboard-deadline-mobile-more">还有 {deadlineCount - 2} 条提醒</p>}
             <Button className="dashboard-deadline-cta" type="link" onClick={() => startFromInitial({ sort: 'deadline', deadline_soon: true })}>查看全部截止项目</Button>
           </>}
         </aside>
