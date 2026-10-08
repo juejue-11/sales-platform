@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import os
+import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -319,7 +320,7 @@ class ScreeningService:
             return parent
         return parent
 
-    def _source_notes(self) -> str:
+    def _source_notes(self, *, include_path: bool = False) -> str:
         rows = self.db.execute("SELECT source_id,source_name,equipment_json,deadline_at,buyer,title,body_text FROM records ORDER BY id").fetchall()
         source_names: dict[str, str] = {}
         missing = {"equipment": 0, "deadline_at": 0, "buyer": 0, "body_text": 0}
@@ -337,12 +338,15 @@ class ScreeningService:
             if not str(row["body_text"] or "").strip():
                 missing["body_text"] += 1
 
-        notes = [f"源文件：{self.source_path}"]
+        notes: list[str] = []
+        if include_path:
+            notes.append(f"源文件：{self.source_path}")
         if rows:
             names = "、".join(sorted(source_names.values()))
             notes.append(f"当前导出已导入 {len(rows)} 条记录，覆盖 {len(source_names)} 个来源：{names}。")
-            missing_parts = [f"{key} {count} 条" for key, count in missing.items() if count]
-            notes.append("字段缺失提示：" + ("；".join(missing_parts) if missing_parts else "未发现主要字段缺失") + "。")
+            labels = {"equipment": "设备信息", "deadline_at": "截止时间", "buyer": "采购方", "body_text": "正文"}
+            missing_parts = [f"{labels[key]}缺失{count}条" for key, count in missing.items() if count]
+            notes.append("字段缺失提示：" + ("、".join(missing_parts) if missing_parts else "未发现主要字段缺失") + "。")
         else:
             notes.append("当前暂无已导入记录，来源与字段覆盖未知。")
         notes.append("覆盖范围：仅当前导出文件，不能据此推断已覆盖全网公告或全部来源。")
@@ -353,11 +357,21 @@ class ScreeningService:
         except (OSError, UnicodeError):
             content = ""
         if content:
-            # This is a small operator-maintained status file.  Bound its
-            # size so a malformed local file cannot make every dashboard huge.
-            notes.append(f"试运行状态（{trial_status}）：\n{content[:4000]}")
+            # Keep only the operator-facing coverage facts.  The dashboard
+            # should not reproduce Markdown or the collector's local path.
+            key_tokens = ("首次启动", "当前连续周期", "历史缺失", "连续运行验收")
+            trial_lines: list[str] = []
+            for raw_line in content.splitlines():
+                line = re.sub(r"^[\s#>*`-]+", "", raw_line).strip()
+                line = re.sub(r"[`*_]", "", line)
+                if line and any(token in line for token in key_tokens):
+                    trial_lines.append(line[:300])
+            if trial_lines:
+                notes.append("试运行状态：\n" + "\n".join(dict.fromkeys(trial_lines)))
+            else:
+                notes.append("试运行状态：未知（未找到关键覆盖摘要；仅当前导出文件）。")
         else:
-            notes.append(f"试运行状态：未知（未找到 {trial_status}；仅当前导出文件）。")
+            notes.append("试运行状态：未知（未找到关键覆盖摘要；仅当前导出文件）。")
         return "\n".join(notes)
 
     def _all_project_summaries(self) -> list[dict[str, Any]]:
@@ -432,8 +446,10 @@ class ScreeningService:
             "record_ids": [int(r["id"]) for r in records], "published_at": published,
             "deadline_at": deadline, "updated_at": project_row["updated_at"], "gate_status": gate,
             "gate_reasons": reasons, "ai_status": ai_status,
-            "ai_decision": judgment["decision"] if judgment and not judgment["stale"] else None,
-            "ai_summary": judgment["summary"] if judgment and not judgment["stale"] else None,
+            "ai_decision": judgment["decision"] if judgment and not judgment["stale"] and
+                           gate not in {"excluded", "expired", "closed", "duplicate"} else None,
+            "ai_summary": judgment["summary"] if judgment and not judgment["stale"] and
+                          gate not in {"excluded", "expired", "closed", "duplicate"} else None,
             "needs_review": gate == "review" or ai_status in {"stale", "failed", "not_configured", "idle"} or
                             (judgment is not None and judgment["decision"] == "verify") or selection_needs_review,
             "decision": decision_value,
@@ -804,7 +820,7 @@ class ScreeningService:
         counts = {str(row["status"]): int(row["count"]) for row in self.db.execute("SELECT status,count(*) AS count FROM jobs GROUP BY status").fetchall()}
         return {"data_updated_at": self._source_data_updated_at(), "last_import_at": self._get_meta("last_import_at"),
                 "import_error": self._get_meta("import_error"), "file_stale": self._source_age_stale(),
-                "import_pending": self._import_pending(), "source_notes": self._source_notes(),
+                "import_pending": self._import_pending(), "source_notes": self._source_notes(include_path=True),
                 "imports": imports, "jobs": jobs, "job_counts": counts, "ai_configured": self._ai_config()["configured"]}
 
     def archive_path(self, record_id: int) -> Path:
