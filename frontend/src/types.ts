@@ -106,6 +106,10 @@ export interface DashboardData {
   data_updated_at: string | null
   import_error: string | null
   ai_configured: boolean
+  source_notes?: string | null
+  file_stale?: boolean
+  import_pending?: boolean
+  deadline_soon_count?: number
 }
 
 export interface ProjectsResponse {

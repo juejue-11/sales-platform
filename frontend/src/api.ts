@@ -45,10 +45,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ ok: true }>('/health'),
   dashboard: () => request<DashboardData>('/dashboard'),
-  projects: (params: Record<string, string | number | undefined>) => {
+  projects: (params: Record<string, string | number | boolean | undefined>) => {
     const search = new URLSearchParams()
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== '') search.set(key, String(value))
+      if (value !== undefined && value !== '' && value !== false) search.set(key, String(value))
     })
     return request<ProjectsResponse>(`/projects?${search.toString()}`)
   },

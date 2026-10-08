@@ -123,9 +123,11 @@ button, input, textarea, select { font: inherit; }
 .option-unavailable { display: flex; align-items: center; gap: 9px; min-height: 88px; padding: 18px; color: #6b7883; background: #f7f9fa; border: 1px dashed #ccd7de; border-radius: 8px; }
 .option-unavailable .anticon { color: #c58b39; font-size: 18px; }
 .option-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
-.option-radio { width: 100%; height: auto; margin-inline-end: 0; padding: 0; white-space: normal; }
-.option-radio > span:first-child { position: absolute; top: 16px; left: 16px; z-index: 1; }
-.option-radio > span:last-child { display: block; width: 100%; padding: 0; }
+.option-radio { position: relative; display: block; width: 100%; height: auto; margin-inline-end: 0; padding: 0; white-space: normal; }
+.option-radio > span:first-child { position: absolute; inset: 0; z-index: 2; display: block; width: 100%; height: 100%; margin: 0; }
+.option-radio > span:first-child .ant-radio-input { width: 100%; height: 100%; cursor: pointer; }
+.option-radio > span:first-child .ant-radio-inner { position: absolute; top: 16px; left: 16px; pointer-events: none; }
+.option-radio > span:last-child { position: relative; z-index: 1; display: block; width: 100%; padding: 0; pointer-events: none; }
 .option-radio.ant-radio-wrapper-checked .option-card-content { border-color: #4c93bb; box-shadow: 0 0 0 2px rgba(76,147,187,.12); }
 .option-card-content { min-height: 250px; padding: 18px 16px 16px 43px; background: #fff; border: 1px solid var(--line); border-radius: 9px; transition: border .16s, box-shadow .16s; }
 .option-card-content:hover { border-color: #9ec0d2; }
