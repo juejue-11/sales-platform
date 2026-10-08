@@ -60,6 +60,8 @@ const initialQuery: ProjectQuery = {
   deadline_soon: false,
 }
 
+const quickFilterKeys = ['q', 'gate', 'ai_status', 'decision', 'kind', 'source_id', 'ai_decision', 'sort', 'deadline_soon'] as const
+
 type StatusTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger'
 
 const gateTone: Record<GateStatus, StatusTone> = {
@@ -205,15 +207,22 @@ export function DashboardPage() {
   const deadlineProjects = dashboard?.deadline_soon ?? []
   const deadlineCount = dashboard?.deadline_soon_count ?? deadlineProjects.length
   const deadlinePreviewCount = Math.min(4, deadlineProjects.length)
+  const sourceNotes = dashboard?.source_notes ?? ''
+  const sourceNotesHaveGap = sourceNotes.includes('历史缺失')
+
+  const hasFilters = Boolean(query.q || query.gate || query.ai_status || query.decision || query.kind || query.source_id || query.ai_decision || query.deadline_soon || query.sort !== initialQuery.sort)
+  const emptyDescription = hasFilters ? '没有符合筛选条件的项目' : '暂无项目数据'
 
   const activeFilter = useMemo(() => {
-    if (query.deadline_soon) return 'deadline'
-    if (query.ai_decision === 'recommend') return 'recommend'
-    if (query.gate === 'candidate') return 'candidate'
-    if (query.gate === 'review') return 'review'
-    if (query.decision === 'following') return 'following'
-    if (query.ai_status === 'queued') return 'queued'
-    return 'all'
+    const matches = (overrides: Partial<ProjectQuery>) => quickFilterKeys.every((key) => query[key] === (overrides[key] ?? initialQuery[key]))
+    if (matches({ sort: 'deadline', deadline_soon: true })) return 'deadline'
+    if (matches({ ai_decision: 'recommend' })) return 'recommend'
+    if (matches({ gate: 'candidate' })) return 'candidate'
+    if (matches({ gate: 'review' })) return 'review'
+    if (matches({ decision: 'following' })) return 'following'
+    if (matches({ ai_status: 'queued' })) return 'queued'
+    if (matches({})) return 'all'
+    return null
   }, [query])
 
   const filterTabs = [
@@ -223,11 +232,8 @@ export function DashboardPage() {
     { key: 'review', label: '待核实', count: count(dashboard, 'gate_counts', 'review'), query: { gate: 'review' } },
     { key: 'deadline', label: '7天截止', count: deadlineCount, query: { sort: 'deadline' as const, deadline_soon: true } },
     { key: 'following', label: '跟进', count: count(dashboard, 'decision_counts', 'following'), query: { decision: 'following' } },
-    { key: 'queued', label: '待分析', count: count(dashboard, 'ai_counts', 'queued'), query: { ai_status: 'queued' } },
+    { key: 'queued', label: '等待分析', count: count(dashboard, 'ai_counts', 'queued'), query: { ai_status: 'queued' } },
   ]
-
-  const hasFilters = Boolean(query.q || query.gate || query.ai_status || query.decision || query.kind || query.source_id || query.ai_decision || query.deadline_soon)
-  const emptyDescription = hasFilters ? '没有符合筛选条件的项目' : '暂无项目数据'
 
   const refreshAll = () => {
     void loadDashboard()
@@ -238,7 +244,6 @@ export function DashboardPage() {
     <div className="dashboard-page">
       <header className="dashboard-heading">
         <div className="dashboard-heading-copy">
-          <span className="dashboard-kicker">工业采购研判工作台</span>
           <Title level={2} className="dashboard-heading-title">机会池</Title>
           <p>把采集公告按规则、AI判断和销售动作排在同一条工作线上。</p>
         </div>
@@ -265,6 +270,14 @@ export function DashboardPage() {
         ))}
       </nav>
 
+      {activeFilter === null && hasFilters && (
+        <div className="dashboard-custom-filter-note" aria-live="polite">
+          <span>当前为自定义筛选</span>
+          <span>显示 {total.toLocaleString('zh-CN')} 条结果</span>
+          <Button type="link" onClick={() => startFromInitial()}>重置筛选</Button>
+        </div>
+      )}
+
       {(dashboardError || dashboard?.import_error || dashboard?.file_stale || dashboard?.import_pending) && (
         <section className="dashboard-anomaly-panel" aria-label="数据异常提示">
           <div className="dashboard-anomaly-heading"><WarningOutlined aria-hidden="true" /><span>数据提醒</span></div>
@@ -275,13 +288,6 @@ export function DashboardPage() {
             {dashboard?.import_pending && <div className="dashboard-anomaly-item dashboard-anomaly-info"><strong>新采集数据尚未导入</strong><span>自动导入可能未开启或仍待处理，请前往处理状态手动导入。</span></div>}
           </div>
         </section>
-      )}
-
-      {dashboard?.source_notes && (
-        <details className="dashboard-source-note">
-          <summary><span><InfoCircleOutlined aria-hidden="true" /> 来源覆盖说明</span><CaretDownOutlined aria-hidden="true" /></summary>
-          <p>{dashboard.source_notes}</p>
-        </details>
       )}
 
       {dashboard && !dashboard.ai_configured && (
@@ -295,9 +301,8 @@ export function DashboardPage() {
         <section className="dashboard-list-panel" aria-labelledby="dashboard-list-heading">
           <div className="dashboard-list-header">
             <div>
-              <span className="dashboard-section-label">工作清单</span>
               <h3 id="dashboard-list-heading">项目清单</h3>
-              <p>规则决定先后，AI提供判断线索，最后由销售记录下一步。</p>
+              <p>看需求与理由，确认下一步。</p>
             </div>
             <div className="dashboard-list-total"><strong>{total.toLocaleString('zh-CN')}</strong><span>条结果</span></div>
           </div>
@@ -378,6 +383,13 @@ export function DashboardPage() {
           </>}
         </aside>
       </div>
+
+      {dashboard?.source_notes && (
+        <details className="dashboard-source-note">
+          <summary><span><InfoCircleOutlined aria-hidden="true" /> 来源覆盖说明{sourceNotesHaveGap && <em className="dashboard-source-gap">存在采集缺口</em>}</span><CaretDownOutlined aria-hidden="true" /></summary>
+          <p>{dashboard.source_notes}</p>
+        </details>
+      )}
     </div>
   )
 }
