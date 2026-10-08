@@ -120,6 +120,7 @@ def _content_signature(record: dict[str, Any]) -> str:
     values["equipment_json"] = record.get("equipment", [])
     values["facts_json"] = record.get("facts", [])
     values["inferences_json"] = record.get("inferences", [])
+    values["body_text"] = re.sub(r"\s+", " ", str(values.get("body_text") or "")).strip()
     return sha256_text(json_text(values))
 
 
@@ -135,6 +136,7 @@ def _db_signature(row: sqlite3.Row) -> str:
             values[key] = json.loads(values[key] or "[]")
         except (TypeError, json.JSONDecodeError):
             pass
+    values["body_text"] = re.sub(r"\s+", " ", str(values.get("body_text") or "")).strip()
     return sha256_text(json_text(values))
 
 
