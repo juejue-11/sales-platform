@@ -196,8 +196,10 @@ class ScreeningService:
         if not isinstance(payload, dict):
             raise ServiceError("settings body must be an object")
         before = self.get_settings()
+        before_ai_config = self._ai_config()
         changed_business = False
         changed_import_path: str | None = None
+        changed_ai_runtime = False
         with self._db_lock, self.db:
             for section in ("business", "ai", "import"):
                 incoming = payload.get(section)
@@ -218,6 +220,8 @@ class ScreeningService:
                                 (section, json_text(current), now_iso()))
                 if section == "business" and current != previous:
                     changed_business = True
+                if section == "ai" and any(current.get(key) != previous.get(key) for key in ("base_url", "model", "enabled")):
+                    changed_ai_runtime = True
                 if section == "import" and isinstance(current.get("path"), str) and current.get("path") != previous.get("path"):
                     changed_import_path = current["path"]
             version = int(self._get_meta("settings_version") or 1) + 1
@@ -226,11 +230,18 @@ class ScreeningService:
             if changed_business:
                 self.db.execute("UPDATE judgments SET stale=1")
                 self.db.execute("UPDATE projects SET updated_at=?", (now_iso(),))
+            if changed_ai_runtime:
+                # Endpoint/model/enabled changes alter the interpretation of
+                # an AI result.  API key rotation alone does not.
+                self.db.execute("UPDATE judgments SET stale=1")
+                self.db.execute("UPDATE projects SET updated_at=?", (now_iso(),))
         if changed_import_path:
             self.source_path = Path(changed_import_path)
             self.archive_root = env_archive_root(self.source_path)
         after = self.get_settings()
-        if changed_business and self._ai_config()["configured"]:
+        after_ai_config = self._ai_config()
+        became_configured = not before_ai_config["configured"] and after_ai_config["configured"]
+        if after_ai_config["configured"] and (changed_business or changed_ai_runtime or became_configured):
             self.queue_pending(schedule=False)
         return after
 
@@ -269,6 +280,95 @@ class ScreeningService:
 
     def _latest_decision(self, project_id: int) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM decisions WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()
+
+    def _source_data_updated_at(self) -> str | None:
+        """Return the collector's update time, rather than this app's import time.
+
+        The export file is the source of truth for freshness.  Keeping this
+        separate from ``last_import_at`` avoids presenting a recent import as
+        if the collector had run recently.
+        """
+        try:
+            stat = self.source_path.stat()
+        except OSError:
+            return self._get_meta("data_updated_at")
+        return datetime.fromtimestamp(stat.st_mtime, SHANGHAI).isoformat(timespec="seconds")
+
+    def _source_age_stale(self) -> bool:
+        try:
+            mtime = self.source_path.stat().st_mtime
+        except OSError:
+            return True
+        return datetime.now(SHANGHAI).timestamp() - float(mtime) > timedelta(hours=48).total_seconds()
+
+    def _import_pending(self) -> bool:
+        return self._file_signature(self.source_path) != self._last_import_signature
+
+    def _collector_data_root(self) -> Path:
+        """Resolve the read-only collector data root for trial-status.md.
+
+        The default export lives in ``<collector>/data/export``.  A configured
+        export follows the same shape; a bare test/export file is paired with
+        its containing directory.  No path derived from record data is used.
+        """
+        source = self.source_path.resolve()
+        parent = source.parent
+        if parent.name.lower() == "export":
+            return parent.parent
+        if parent.name.lower() == "data":
+            return parent
+        return parent
+
+    def _source_notes(self) -> str:
+        rows = self.db.execute("SELECT source_id,source_name,equipment_json,deadline_at,buyer,title,body_text FROM records ORDER BY id").fetchall()
+        source_names: dict[str, str] = {}
+        missing = {"equipment": 0, "deadline_at": 0, "buyer": 0, "body_text": 0}
+        for row in rows:
+            source_id = str(row["source_id"] or "unknown")
+            source_name = str(row["source_name"] or "").strip()
+            source_names[source_id] = source_name or source_id
+            equipment = json_value(row["equipment_json"], [])
+            if not isinstance(equipment, list) or not any(str(value).strip() for value in equipment):
+                missing["equipment"] += 1
+            if not str(row["deadline_at"] or "").strip():
+                missing["deadline_at"] += 1
+            if not str(row["buyer"] or "").strip():
+                missing["buyer"] += 1
+            if not str(row["body_text"] or "").strip():
+                missing["body_text"] += 1
+
+        notes = [f"源文件：{self.source_path}"]
+        if rows:
+            names = "、".join(sorted(source_names.values()))
+            notes.append(f"当前导出已导入 {len(rows)} 条记录，覆盖 {len(source_names)} 个来源：{names}。")
+            missing_parts = [f"{key} {count} 条" for key, count in missing.items() if count]
+            notes.append("字段缺失提示：" + ("；".join(missing_parts) if missing_parts else "未发现主要字段缺失") + "。")
+        else:
+            notes.append("当前暂无已导入记录，来源与字段覆盖未知。")
+        notes.append("覆盖范围：仅当前导出文件，不能据此推断已覆盖全网公告或全部来源。")
+
+        trial_status = self._collector_data_root() / "trial-status.md"
+        try:
+            content = trial_status.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            content = ""
+        if content:
+            # This is a small operator-maintained status file.  Bound its
+            # size so a malformed local file cannot make every dashboard huge.
+            notes.append(f"试运行状态（{trial_status}）：\n{content[:4000]}")
+        else:
+            notes.append(f"试运行状态：未知（未找到 {trial_status}；仅当前导出文件）。")
+        return "\n".join(notes)
+
+    def _all_project_summaries(self) -> list[dict[str, Any]]:
+        return [self.summary(int(row["id"])) for row in self.db.execute("SELECT id FROM projects ORDER BY id").fetchall()]
+
+    @staticmethod
+    def _is_deadline_soon(item: dict[str, Any], *, now: datetime | None = None) -> bool:
+        now = now or datetime.now(SHANGHAI)
+        deadline = parse_timestamp(item.get("deadline_at"), deadline=True)
+        return bool(deadline and now <= deadline <= now + timedelta(days=7) and
+                    item.get("gate_status") in {"candidate", "review"})
 
     def _gate(self, records: list[dict[str, Any]], project_id: int) -> tuple[str, list[str]]:
         override_row = self.db.execute("SELECT * FROM project_gate WHERE project_id=?", (project_id,)).fetchone()
@@ -379,15 +479,13 @@ class ScreeningService:
         return int(row[0]) if row else None
 
     def list_projects(self, *, q: str = "", gate: str = "", ai_status: str = "", decision: str = "",
-                      kind: str = "", source_id: str = "", page: int = 1, page_size: int = 30,
-                      sort: str = "updated") -> dict[str, Any]:
+                      ai_decision: str = "", deadline_soon: bool = False, kind: str = "", source_id: str = "",
+                      page: int = 1, page_size: int = 30, sort: str = "updated") -> dict[str, Any]:
         page = max(1, int(page))
         page_size = max(1, min(200, int(page_size)))
-        values = []
         projects = []
-        rows = self.db.execute("SELECT id FROM projects ORDER BY id").fetchall()
-        for row in rows:
-            item = self.summary(int(row["id"]))
+        now = datetime.now(SHANGHAI)
+        for item in self._all_project_summaries():
             haystack = " ".join([str(item.get("title") or ""), str(item.get("buyer") or ""), str(item.get("ai_summary") or "")]).lower()
             if q and q.lower() not in haystack:
                 continue
@@ -396,6 +494,13 @@ class ScreeningService:
             if ai_status and item["ai_status"] != ai_status:
                 continue
             if decision and item["decision"]["status"] != decision:
+                continue
+            # ai_decision is deliberately taken from the summary's current,
+            # non-stale judgment field.  Gate status/candidate status cannot
+            # stand in for an AI recommendation.
+            if ai_decision and item.get("ai_decision") != ai_decision:
+                continue
+            if deadline_soon and not self._is_deadline_soon(item, now=now):
                 continue
             if kind and item["kind"] != kind:
                 continue
@@ -411,26 +516,35 @@ class ScreeningService:
         return {"items": projects[start:start + page_size], "total": total, "page": page, "page_size": page_size}
 
     def dashboard(self) -> dict[str, Any]:
-        projects = self.list_projects(page=1, page_size=200)["items"]
+        # Dashboard aggregates are full-dataset counts.  The visible deadline
+        # list is intentionally capped separately for the home page.
+        projects = self._all_project_summaries()
         gate_counts: dict[str, int] = {}
         ai_counts: dict[str, int] = {}
+        ai_decision_counts: dict[str, int] = {}
         decision_counts: dict[str, int] = {}
         now = datetime.now(SHANGHAI)
-        soon = now + timedelta(days=7)
         deadline_soon = []
         for item in projects:
             gate_counts[item["gate_status"]] = gate_counts.get(item["gate_status"], 0) + 1
             ai_counts[item["ai_status"]] = ai_counts.get(item["ai_status"], 0) + 1
             decision_counts[item["decision"]["status"]] = decision_counts.get(item["decision"]["status"], 0) + 1
-            deadline = parse_timestamp(item.get("deadline_at"), deadline=True)
-            if deadline and now <= deadline <= soon and item["gate_status"] in {"candidate", "review"}:
+            ai_decision = item.get("ai_decision")
+            if ai_decision:
+                ai_decision_counts[str(ai_decision)] = ai_decision_counts.get(str(ai_decision), 0) + 1
+            if self._is_deadline_soon(item, now=now):
                 deadline_soon.append(item)
         rows = self.db.execute("SELECT count(*) AS c FROM records").fetchone()
-        updated = self._get_meta("data_updated_at")
+        updated = self._source_data_updated_at()
+        file_stale = self._source_age_stale()
+        import_pending = self._import_pending()
         return {"total_records": int(rows["c"] if rows else 0), "total_projects": len(projects),
-                "gate_counts": gate_counts, "ai_counts": ai_counts, "decision_counts": decision_counts,
-                "deadline_soon": deadline_soon[:30], "data_updated_at": updated,
-                "import_error": self._get_meta("import_error"), "ai_configured": self._ai_config()["configured"]}
+                "gate_counts": gate_counts, "ai_counts": ai_counts, "ai_decision_counts": ai_decision_counts,
+                "decision_counts": decision_counts, "deadline_soon": deadline_soon[:30],
+                "deadline_soon_count": len(deadline_soon), "data_updated_at": updated,
+                "last_import_at": self._get_meta("last_import_at"), "import_error": self._get_meta("import_error"),
+                "file_stale": file_stale, "import_pending": import_pending,
+                "source_notes": self._source_notes(), "ai_configured": self._ai_config()["configured"]}
 
     def _new_import_row(self) -> int:
         with self._db_lock, self.db:
@@ -447,8 +561,10 @@ class ScreeningService:
             with self._db_lock, self.db:
                 self.db.execute("UPDATE imports SET status='success',inserted=?,updated=?,unchanged=?,total=?,finished_at=? WHERE id=?",
                                 (result.inserted, result.updated, result.unchanged, result.total, now_iso(), import_id))
+                # This timestamp describes the collector's source update.  It
+                # must not be replaced with this application's import time.
                 self.db.execute("INSERT INTO meta(key,value) VALUES ('data_updated_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                (now_iso(),))
+                                (self._source_data_updated_at() or now_iso(),))
                 self.db.execute("INSERT INTO meta(key,value) VALUES ('last_import_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                 (now_iso(),))
                 self.db.execute("DELETE FROM meta WHERE key='import_error'")
@@ -522,7 +638,7 @@ class ScreeningService:
             "input": input_fingerprint(project, capability),
             "gate_status": project.get("gate_status"), "gate_reasons": project.get("gate_reasons", []),
             "model": config.get("model"), "base_url": config.get("base_url"),
-            "settings_version": self._get_meta("settings_version"),
+            "enabled": config.get("enabled"),
         }))
 
     async def run_job(self, job_id: int) -> None:
@@ -622,7 +738,7 @@ class ScreeningService:
         judgment = self._latest_judgment(project_id)
         options = json_value(judgment["options_json"], []) if judgment and not bool(judgment["stale"]) else []
         if selected is not None:
-            if gate in {"expired", "closed", "duplicate"}:
+            if gate in {"expired", "closed", "duplicate", "excluded"}:
                 raise ConflictError("不能选择已过期或不可推进项目的方案")
             if not judgment or bool(judgment["stale"]):
                 raise ConflictError("当前判断已过期，请先重新分析")
@@ -686,10 +802,9 @@ class ScreeningService:
         for row in self.db.execute("SELECT id,project_id,status,attempts,error,created_at,updated_at FROM jobs ORDER BY id DESC LIMIT 100").fetchall():
             jobs.append(dict(row))
         counts = {str(row["status"]): int(row["count"]) for row in self.db.execute("SELECT status,count(*) AS count FROM jobs GROUP BY status").fetchall()}
-        file_stale = self._file_signature(self.source_path) != self._last_import_signature
-        return {"data_updated_at": self._get_meta("data_updated_at"), "last_import_at": self._get_meta("last_import_at"),
-                "import_error": self._get_meta("import_error"), "file_stale": file_stale,
-                "source_notes": f"读取采集全量文件：{self.source_path}；归档只读根目录：{self.archive_root}",
+        return {"data_updated_at": self._source_data_updated_at(), "last_import_at": self._get_meta("last_import_at"),
+                "import_error": self._get_meta("import_error"), "file_stale": self._source_age_stale(),
+                "import_pending": self._import_pending(), "source_notes": self._source_notes(),
                 "imports": imports, "jobs": jobs, "job_counts": counts, "ai_configured": self._ai_config()["configured"]}
 
     def archive_path(self, record_id: int) -> Path:
