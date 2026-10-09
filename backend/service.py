@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
-                  build_messages, correction_messages, extract_content, input_fingerprint,
+                  bounded_context_body, build_messages, correction_messages, extract_content, input_fingerprint,
                   sanitize_ai_error, validate_judgment)
 from .briefing import build_briefing
 from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
@@ -357,6 +357,7 @@ class ScreeningService:
         # Keep the context self-contained while avoiding collector payloads and
         # local archive paths.  ``record_id`` is explicit because it is the
         # citation identity used by the Pi agent.
+        full_body = str(record.get("body_text") or "")
         value = {
             "id": record.get("id"),
             "record_id": record.get("id"),
@@ -374,7 +375,10 @@ class ScreeningService:
             "equipment": record.get("equipment", []),
             "facts": record.get("facts", []),
             "inferences": record.get("inferences", []),
-            "body_text": str(record.get("body_text") or ""),
+            "body_text": bounded_context_body(full_body),
+            # Keep the complete source identity even when the protocol body is
+            # truncated, so changes in an unseen tail invalidate the input.
+            "body_text_sha256": sha256_text(full_body),
             "related_record_id": record.get("related_record_id"),
         }
         return value

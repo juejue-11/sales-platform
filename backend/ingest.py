@@ -213,14 +213,15 @@ def _merge_projects(db: sqlite3.Connection, source_id: int, target_id: int) -> i
     # canonical project when a reliable source relation is discovered later.
     for table in ("judgments", "decisions", "jobs", "agent_runs"):
         db.execute(f"UPDATE {table} SET project_id=? WHERE project_id=?", (target_id, source_id))
-    db.execute("UPDATE project_gate SET project_id=? WHERE project_id=?", (target_id, source_id))
-    source_gate = db.execute("SELECT reason FROM project_gate WHERE project_id=?", (source_id,)).fetchone()
-    target_gate = db.execute("SELECT reason FROM project_gate WHERE project_id=?", (target_id,)).fetchone()
+    source_gate = db.execute("SELECT override_action,reason FROM project_gate WHERE project_id=?", (source_id,)).fetchone()
+    target_gate = db.execute("SELECT override_action,reason FROM project_gate WHERE project_id=?", (target_id,)).fetchone()
     if source_gate and target_gate:
         # Keep one override row while retaining the other explanation in its
         # audit reason. The source records and decisions remain intact.
         merged_reason = f"{target_gate['reason'] or ''}；合并项目原备注：{source_gate['reason'] or ''}".strip("；")
-        db.execute("UPDATE project_gate SET reason=?,updated_at=? WHERE project_id=?", (merged_reason, now_iso(), target_id))
+        merged_action = target_gate["override_action"] or source_gate["override_action"]
+        db.execute("UPDATE project_gate SET override_action=?,reason=?,updated_at=? WHERE project_id=?",
+                   (merged_action, merged_reason, now_iso(), target_id))
         db.execute("DELETE FROM project_gate WHERE project_id=?", (source_id,))
     elif source_gate:
         db.execute("UPDATE project_gate SET project_id=? WHERE project_id=?", (target_id, source_id))

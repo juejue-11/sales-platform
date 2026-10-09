@@ -64,7 +64,7 @@ steps:{stage:started|model|tool_start|tool_end|completed,label:string,tool?:stri
 usage:{model_calls:number,tool_calls:number,input_tokens:number,output_tokens:number}
 limits:{max_turns:number,max_tool_calls:number,timeout_ms:number,max_output_tokens:number}
 ```
-`steps`只保存受信任的阶段和工具标签（读取项目资料、读取公司能力、读取关联资料及其开始/完成/失败状态），不保存模型思维、正文输出或密钥；运行时的`completed`事件会被忽略，只有判定结果通过验证并落库后才追加`方案已通过校验`，运行状态不会提前显示为`succeeded`。
+`steps`只保存受信任的阶段和工具标签（读取项目资料、读取公司能力、读取关联资料及其开始/完成/失败状态），不保存模型思维、正文输出或密钥；运行时的`completed`事件会被忽略，只有判定结果通过验证并落库后才追加`方案已通过校验`，运行状态不会提前显示为`succeeded`。发送给模型的每条正文最多30000字符，截断正文保留`body_text_sha256`用于完整输入指纹。
 
 `idle`表示符合条件但尚未排队，`skipped`表示规则排除/截止等无需AI。只有真实任务才可显示queued/running。人工选择绑定当时judgment_id，新判断option_id相同也必须重新确认；旧选择和旧下一步保留可追溯。
 
