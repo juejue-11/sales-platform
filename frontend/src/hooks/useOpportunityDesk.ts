@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import type { DashboardData, ProjectDetail, ProjectSummary } from '../types'
+import type { DashboardData, ProjectSummary } from '../types'
+import { isDeadlineWithinDays } from '../components/opportunities/text'
 
 export type OpportunityTabKey = 'current' | 'all' | 'ai' | 'review' | 'deadline' | 'following' | 'queued'
 export type OpportunitySort = 'updated' | 'deadline'
@@ -26,13 +27,6 @@ export interface OpportunityTab {
   count: number
 }
 
-export interface LoadedProjectDetail {
-  status: 'loading' | 'success' | 'error'
-  updatedAt: string
-  detail?: ProjectDetail
-  error?: unknown
-}
-
 const initialQuery: OpportunityQuery = {
   q: '',
   gate: '',
@@ -46,6 +40,82 @@ const initialQuery: OpportunityQuery = {
   page: 1,
   page_size: 12,
   sort: 'updated',
+}
+
+export interface OpportunityDeskNavigationState {
+  query: OpportunityQuery
+  draftSearch: string
+  advancedOpen: boolean
+  scrollY: number
+  savedAt: number
+}
+
+const navigationStorageKey = 'opportunity-desk-navigation-v1'
+
+function isOpportunityQuery(value: unknown): value is OpportunityQuery {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<OpportunityQuery>
+  return typeof candidate.q === 'string'
+    && typeof candidate.gate === 'string'
+    && typeof candidate.ai_status === 'string'
+    && typeof candidate.decision === 'string'
+    && typeof candidate.kind === 'string'
+    && typeof candidate.source_id === 'string'
+    && typeof candidate.ai_decision === 'string'
+    && typeof candidate.deadline_soon === 'boolean'
+    && typeof candidate.active_only === 'boolean'
+    && typeof candidate.page === 'number'
+    && Number.isInteger(candidate.page)
+    && candidate.page > 0
+    && typeof candidate.page_size === 'number'
+    && Number.isInteger(candidate.page_size)
+    && [12, 24, 48].includes(candidate.page_size)
+    && (candidate.sort === 'updated' || candidate.sort === 'deadline')
+}
+
+function readNavigationState(): OpportunityDeskNavigationState | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(navigationStorageKey)
+    if (!raw) return null
+    const value: unknown = JSON.parse(raw)
+    if (!value || typeof value !== 'object') return null
+    const candidate = value as Partial<OpportunityDeskNavigationState>
+    if (!isOpportunityQuery(candidate.query)
+      || typeof candidate.draftSearch !== 'string'
+      || typeof candidate.advancedOpen !== 'boolean'
+      || typeof candidate.scrollY !== 'number'
+      || !Number.isFinite(candidate.scrollY)
+      || typeof candidate.savedAt !== 'number'
+      || !Number.isFinite(candidate.savedAt)
+      || Date.now() - candidate.savedAt > 30 * 60 * 1000) return null
+    return {
+      query: candidate.query,
+      draftSearch: candidate.draftSearch,
+      advancedOpen: candidate.advancedOpen,
+      scrollY: Math.max(0, candidate.scrollY),
+      savedAt: candidate.savedAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function saveOpportunityDeskNavigation(state: Omit<OpportunityDeskNavigationState, 'savedAt'>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(navigationStorageKey, JSON.stringify({ ...state, savedAt: Date.now() }))
+  } catch {
+    // Storage can be unavailable in privacy modes; navigation still works.
+  }
+}
+
+function consumeNavigationState(): OpportunityDeskNavigationState | null {
+  const state = readNavigationState()
+  if (state && typeof window !== 'undefined') {
+    try { window.sessionStorage.removeItem(navigationStorageKey) } catch { /* ignore storage errors */ }
+  }
+  return state
 }
 
 function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'ai_decision_counts' | 'decision_counts', key: string): number {
@@ -70,22 +140,20 @@ function asError(value: unknown): Error {
 }
 
 export function useOpportunityDesk() {
+  const [restoredNavigation] = useState<OpportunityDeskNavigationState | null>(consumeNavigationState)
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [total, setTotal] = useState(0)
-  const [query, setQuery] = useState<OpportunityQuery>(initialQuery)
-  const [draftSearch, setDraftSearch] = useState('')
-  const [expandedSourceId, setExpandedSourceId] = useState<number | null>(null)
-  const [details, setDetails] = useState<Record<number, LoadedProjectDetail>>({})
+  const [query, setQuery] = useState<OpportunityQuery>(() => restoredNavigation?.query ?? initialQuery)
+  const [draftSearch, setDraftSearch] = useState(() => restoredNavigation?.draftSearch ?? '')
   const [loadingDashboard, setLoadingDashboard] = useState(true)
   const [loadingProjects, setLoadingProjects] = useState(true)
   const [dashboardError, setDashboardError] = useState<unknown>(null)
   const [projectsError, setProjectsError] = useState<unknown>(null)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(() => restoredNavigation?.advancedOpen ?? false)
   const disposed = useRef(false)
   const dashboardSequence = useRef(0)
   const projectsSequence = useRef(0)
-  const detailSequences = useRef<Record<number, number>>({})
 
   const loadDashboard = useCallback(async () => {
     const sequence = ++dashboardSequence.current
@@ -110,7 +178,6 @@ export function useOpportunityDesk() {
       if (!disposed.current && sequence === projectsSequence.current) {
         setProjects(result.items)
         setTotal(result.total)
-        setExpandedSourceId(null)
       }
     } catch (error) {
       if (!disposed.current && sequence === projectsSequence.current) setProjectsError(error)
@@ -119,22 +186,10 @@ export function useOpportunityDesk() {
     }
   }, [])
 
-  const loadProjectDetail = useCallback(async (id: number, updatedAt: string) => {
-    const sequence = (detailSequences.current[id] ?? 0) + 1
-    detailSequences.current[id] = sequence
-    setDetails((current) => ({ ...current, [id]: { status: 'loading', updatedAt } }))
-    try {
-      const detail = await api.project(id)
-      if (!disposed.current && detailSequences.current[id] === sequence) setDetails((current) => ({ ...current, [id]: { status: 'success', updatedAt, detail } }))
-    } catch (error) {
-      if (!disposed.current && detailSequences.current[id] === sequence) setDetails((current) => ({ ...current, [id]: { status: 'error', updatedAt, error } }))
-    }
-  }, [])
-
   useEffect(() => {
     disposed.current = false
     void loadDashboard()
-    void loadProjects(initialQuery)
+    void loadProjects(query)
     const timer = window.setInterval(() => { void loadDashboard() }, 30000)
     return () => {
       disposed.current = true
@@ -178,21 +233,6 @@ export function useOpportunityDesk() {
     void loadProjects(query)
   }, [loadDashboard, loadProjects, query])
 
-  const toggleOriginal = useCallback((id: number, updatedAt: string) => {
-    if (expandedSourceId === id) {
-      setExpandedSourceId(null)
-      return
-    }
-    setExpandedSourceId(id)
-    const detail = details[id]
-    if (!detail || detail.updatedAt !== updatedAt || detail.status === 'error') void loadProjectDetail(id, updatedAt)
-  }, [details, expandedSourceId, loadProjectDetail])
-
-  const retryOriginal = useCallback((id: number, updatedAt: string) => {
-    setExpandedSourceId(id)
-    void loadProjectDetail(id, updatedAt)
-  }, [loadProjectDetail])
-
   const activeTab = useMemo<OpportunityTabKey | null>(() => {
     const keys = (Object.keys(initialQuery) as Array<keyof OpportunityQuery>).filter((field) => field !== 'page' && field !== 'page_size')
     const matchingTab = (Object.keys({ current: true, all: true, ai: true, review: true, deadline: true, following: true, queued: true }) as OpportunityTabKey[]).find((key) => {
@@ -213,8 +253,14 @@ export function useOpportunityDesk() {
   ], [dashboard])
 
   const activeProjects = projects.filter((project) => project.gate_status === 'candidate' || project.gate_status === 'review')
-  const featured = activeProjects[0] ?? null
-  const featuredBasis = featured ? '按资料更新时间展示' : '等待采购数据'
+  const featured = activeProjects
+    .filter((project) => isDeadlineWithinDays(project.deadline_at, 7))
+    .sort((left, right) => {
+      const leftTime = left.deadline_at ? new Date(left.deadline_at).getTime() : Number.POSITIVE_INFINITY
+      const rightTime = right.deadline_at ? new Date(right.deadline_at).getTime() : Number.POSITIVE_INFINITY
+      return leftTime - rightTime
+    })[0] ?? null
+  const featuredBasis = featured ? '按截止时间展示' : '暂无临近截止项目'
 
   return {
     dashboard,
@@ -226,8 +272,7 @@ export function useOpportunityDesk() {
     tabs,
     featured,
     featuredBasis,
-    details,
-    expandedSourceId,
+    restoredScrollY: restoredNavigation?.scrollY ?? null,
     loadingDashboard,
     loadingProjects,
     dashboardError,
@@ -242,8 +287,6 @@ export function useOpportunityDesk() {
     changePage,
     refresh,
     retryProjects: () => void loadProjects(query),
-    toggleOriginal,
-    retryOriginal,
     errorMessage: asError,
   }
 }
