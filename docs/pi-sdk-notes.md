@@ -69,7 +69,9 @@ arguments, tool results, model deltas, or secrets. The result keeps the caller's
 first system message as the SDK system prompt, including the platform's required
 output schema. Tool calls are limited to project records, the company capability
 card, and related-record candidates; related projects are explicitly labelled as
-candidate relations and not proof of the same project.
+candidate relations and not proof of the same project. A failed business-tool
+completion adds `is_error: true` to its `tool_end` progress event; successful
+`tool_end` events omit that field.
 
 The integration test runs a local fake OpenAI-compatible SSE server. It verifies a
 tool request followed by execution and a second model response, bearer-key
