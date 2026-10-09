@@ -211,7 +211,7 @@ def _merge_projects(db: sqlite3.Connection, source_id: int, target_id: int) -> i
         db.execute("UPDATE project_records SET project_id=?, relation=? WHERE record_id=?", (target_id, row["relation"], row["record_id"]))
     # Keep historical AI judgments, decisions, and jobs attached to the
     # canonical project when a reliable source relation is discovered later.
-    for table in ("judgments", "decisions", "jobs"):
+    for table in ("judgments", "decisions", "jobs", "agent_runs"):
         db.execute(f"UPDATE {table} SET project_id=? WHERE project_id=?", (target_id, source_id))
     db.execute("UPDATE project_gate SET project_id=? WHERE project_id=?", (target_id, source_id))
     source_gate = db.execute("SELECT reason FROM project_gate WHERE project_id=?", (source_id,)).fetchone()

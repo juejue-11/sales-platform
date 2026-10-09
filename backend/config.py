@@ -27,6 +27,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "model": os.getenv("OPENAI_MODEL", ""),
         "enabled": bool(os.getenv("OPENAI_API_KEY")) and os.getenv("OPENAI_ENABLED", "1") != "0",
         "has_api_key": bool(os.getenv("OPENAI_API_KEY")),
+        "engine": os.getenv("SCREENING_AI_ENGINE", "pi_sdk"),
     },
     "import": {
         "path": str(DEFAULT_SOURCE_PATH),

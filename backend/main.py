@@ -58,7 +58,7 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
         try:
             yield
         finally:
-            app.state.service.close()
+            await app.state.service.aclose()
 
     app = FastAPI(title="销售平台筛选与 AI 方案平台", version="1.0.0", lifespan=lifespan)
     app.state.service = screening

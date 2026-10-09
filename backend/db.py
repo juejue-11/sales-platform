@@ -129,6 +129,21 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, id);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    engine TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    error TEXT,
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    usage_json TEXT NOT NULL DEFAULT '{}',
+    limits_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id, id DESC);
 CREATE TABLE IF NOT EXISTS imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT NOT NULL,

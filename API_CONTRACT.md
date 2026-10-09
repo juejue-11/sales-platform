@@ -56,6 +56,16 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 ```
 资料不足允许无options。新闻只能输出核实方向，不能把推测当采购事实。模型结果验证证据、项目ID、字段和方案数量后才能入库。
 
+AgentRun:
+```
+id:number, job_id:number, engine:'pi_sdk', status:running|succeeded|failed
+started_at:string, finished_at:string|null, error:string|null
+steps:{stage:started|model|tool_start|tool_end|completed,label:string,tool?:string,turn?:number,at:string}[]
+usage:{model_calls:number,tool_calls:number,input_tokens:number,output_tokens:number}
+limits:{max_turns:number,max_tool_calls:number,timeout_ms:number,max_output_tokens:number}
+```
+`steps`只保存受信任的阶段和工具标签，不保存模型思维、正文输出或密钥；判定结果通过验证前，运行状态不会显示为`succeeded`。
+
 `idle`表示符合条件但尚未排队，`skipped`表示规则排除/截止等无需AI。只有真实任务才可显示queued/running。人工选择绑定当时judgment_id，新判断option_id相同也必须重新确认；旧选择和旧下一步保留可追溯。
 
 ## API
@@ -63,12 +73,12 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 - `GET /api/health` => `{ok:true,app:"sales-screening"}`
 - `GET /api/dashboard` => `{total_records,total_projects,gate_counts,ai_counts,ai_decision_counts,decision_counts,deadline_soon:ProjectSummary[],deadline_soon_count,data_updated_at:string|null,last_import_at,import_error:string|null,file_stale,import_pending,source_notes,ai_configured:boolean}`。统计覆盖全部项目，截止预览最多30条；推荐仅使用有效AI结论。
 - `GET /api/projects?q=&gate=&ai_status=&ai_decision=&decision=&kind=&source_id=&deadline_soon=false&active_only=false&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；`active_only=true`仅返回`candidate`/`review`项目；sort支持updated、deadline；deadline_soon筛选未来7天截止且可继续处理的项目。`q`同时搜索标题、采购方、设备和`briefing.scope_excerpt`。
-- `GET /api/projects/{id}` => summary字段加 `{records:Record[],judgment:Judgment|null,judgment_history:Judgment[],decision_history:object[],related_projects:ProjectSummary[],versions:object[]}`。Record保留id/title/body_text/facts/inferences/original_url/canonical_url/archive_path/parse_status/possible_duplicate_of/related_record_id等采集字段。关联提示不自动合并，只有可靠标识才能合并；人工关联另外留痕。
+- `GET /api/projects/{id}` => summary字段加 `{records:Record[],judgment:Judgment|null,judgment_history:Judgment[],decision_history:object[],related_projects:ProjectSummary[],versions:object[],agent_run:AgentRun|null}`。Record保留id/title/body_text/facts/inferences/original_url/canonical_url/archive_path/parse_status/possible_duplicate_of/related_record_id等采集字段。关联提示不自动合并，只有可靠标识才能合并；人工关联另外留痕。
 - `POST /api/projects/{id}/analyze` body `{force?:boolean}` => `{job_id:number|null,status:string,message:string}`。排队异步执行。
 - `POST /api/projects/{id}/decision` body `{status,owner,next_action,note,selected_option_id:string|null,judgment_id?:number|null}` => 更新后ProjectSummary。选择方案时必须附judgment_id且等于当前非过期判断的id，否则409；纯人工决定无需id。人工决定保存历史，重判不覆盖。
 - `POST /api/projects/{id}/gate` body `{action:restore|clear,reason:string}` => ProjectSummary。规则排除可恢复，恢复不修改源事实。
 - `POST /api/projects/{id}/link` body `{target_project_id:number,relation:same_project|duplicate|dismiss,note:string}` => `{ok:true,message:string}`。人工确认关联或排除提示，保留双方源记录和决定。
-- `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences},ai:{base_url,model,enabled:boolean,has_api_key:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。字符串默认为空；关键词为空时不得凭空认定公司能力。
+- `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences},ai:{base_url,model,enabled:boolean,has_api_key:boolean,engine:'pi_sdk'|'single_call',sdk_ready:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。默认 `engine` 为 `pi_sdk`；只有明确设置 `SCREENING_AI_ENGINE=single_call` 时才运行旧的单次 HTTP provider。`sdk_ready` 只检查 Node.js 与 `agent-runtime/dist/runner.js` 是否存在，不调用模型；缺少运行时会返回可操作错误，不会静默降级。字符串默认为空；关键词为空时不得凭空认定公司能力。
 - `PUT /api/settings` body与GET相同（version无需传），ai可多传`api_key`；空字符串表示保留现有密钥，`clear_api_key:true`可移除。返回脱敏settings。改变业务配置后重算规则、标记旧AI结果待复核；合格且AI已配置的项目自动排队。
 - `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,import_pending:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。data_updated_at为源导出文件更新时间，last_import_at为平台导入时间；file_stale表示源文件缺失或超过48小时未更新，import_pending表示新文件尚未导入。
 - `POST /api/import` => `{inserted:number,updated:number,unchanged:number,total:number,message:string}`。完整校验文件后事务导入，无变化不重判，导入失败不得删除已有项目。
