@@ -29,6 +29,12 @@
   background: #fff;
 }
 
+/* The application shell gives .page-stack a wider cap; keep this record's
+   document and rail close enough to read as one workspace. */
+.detail-page.page-stack {
+  max-width: 1320px;
+}
+
 .detail-page,
 .detail-page * {
   min-width: 0;
@@ -131,17 +137,16 @@
 
 .detail-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 960px) 250px;
+  grid-template-columns: minmax(0, 1fr) 250px;
   align-items: start;
-  justify-content: space-between;
-  gap: 48px;
-  padding-top: 28px;
+  gap: 36px;
+  padding-top: 18px;
 }
 
 .detail-workspace > .detail-main-column {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 24px;
 }
 
 .detail-info-rail {
@@ -1262,7 +1267,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
     gap: 24px;
-    order: 0;
+    order: -1;
   }
 
   .detail-rail-section {
@@ -1283,27 +1288,100 @@
   }
 
   .detail-workspace {
-    padding-top: 22px;
+    padding-top: 12px;
   }
 
   .detail-info-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    display: grid;
+    grid-template-columns: minmax(95px, .8fr) auto minmax(0, 1.35fr);
+    grid-template-areas: 'properties actions contents';
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 11px;
+    border-bottom: 1px solid var(--detail-line);
   }
 
   .detail-rail-section {
-    padding-bottom: 14px;
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .detail-info-rail > .detail-rail-section:first-child {
+    grid-area: properties;
+  }
+
+  .detail-info-rail > .detail-rail-section:nth-child(2) {
+    grid-area: actions;
+  }
+
+  .detail-info-rail > .detail-rail-section:nth-child(3) {
+    grid-area: contents;
+  }
+
+  .detail-rail-heading {
+    margin-bottom: 3px;
+    font-size: 11px;
+  }
+
+  .detail-info-rail .detail-meta-item {
+    padding: 0;
+    border-top: 0;
+  }
+
+  .detail-info-rail .detail-meta-item:not(:first-of-type) {
+    display: none;
+  }
+
+  .detail-info-rail .detail-meta-item .ant-typography {
+    font-size: 11px;
+  }
+
+  .detail-info-rail .detail-meta-item strong {
+    font-size: 12px;
+  }
+
+  .detail-rail-actions .detail-rail-heading {
+    display: none;
+  }
+
+  .detail-rail-actions .detail-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .detail-rail-actions .detail-actions .ant-btn {
+    width: auto;
+    height: 30px;
+    padding-inline: 9px;
+    font-size: 11px;
   }
 
   .detail-contents-nav {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 5px 16px;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 12px;
+    align-items: center;
+    overflow-x: auto;
+    padding-left: 12px;
+    border-left: 1px solid var(--detail-line);
+    scrollbar-width: none;
+  }
+
+  .detail-contents-nav::-webkit-scrollbar {
+    display: none;
   }
 
   .detail-contents-nav .detail-rail-heading {
-    grid-column: 1 / -1;
+    display: none;
+  }
+
+  .detail-contents-nav a {
+    flex: 0 0 auto;
+    padding: 0;
+    font-size: 11px;
+    white-space: nowrap;
   }
 
   .detail-hero h2 {
