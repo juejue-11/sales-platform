@@ -173,6 +173,180 @@
   overflow-wrap: anywhere;
 }
 
+.detail-briefing {
+  padding: 20px 22px 17px;
+  background: var(--detail-panel);
+  border: 1px solid var(--detail-line);
+  border-top: 3px solid #c48b3b;
+  border-radius: 6px;
+}
+
+.detail-briefing-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.detail-briefing h2 {
+  margin: 5px 0 0;
+  color: var(--detail-ink);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.detail-briefing-source {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+  font-size: 12px;
+}
+
+.detail-briefing-source a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.detail-briefing-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 15px;
+  padding: 9px 11px;
+  color: #6f511f;
+  background: #fff9ef;
+  border: 1px solid #ecd7b4;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail-briefing-note > .anticon {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.detail-briefing-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(250px, .8fr);
+  gap: 14px;
+  margin-top: 15px;
+}
+
+.detail-briefing-field {
+  min-width: 0;
+  padding: 14px 15px 13px;
+  background: #f6faf9;
+  border: 1px solid #d8e5e3;
+  border-radius: 4px;
+}
+
+.detail-briefing-scope {
+  border-left: 3px solid var(--detail-accent);
+}
+
+.detail-briefing-delivery {
+  background: #fffaf1;
+  border-color: #ecdcbf;
+}
+
+.detail-briefing-field-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.detail-briefing-label {
+  color: var(--detail-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.detail-briefing-field-heading > .ant-typography-secondary {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.detail-briefing-field p,
+.detail-briefing-contact p {
+  margin: 0;
+  color: #385459;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.detail-briefing-qualifications {
+  margin-top: 8px;
+  border-bottom: 1px solid var(--detail-line);
+}
+
+.detail-briefing-qualifications summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 2px;
+  color: var(--detail-ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.detail-briefing-qualifications summary::marker {
+  color: var(--detail-accent);
+}
+
+.detail-briefing-summary-meta {
+  flex: 0 0 auto;
+  color: var(--detail-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.detail-briefing-qualification-body {
+  max-height: 360px;
+  margin: 0 0 12px;
+  padding: 13px 14px;
+  overflow: auto;
+  color: #385459;
+  background: #f8fbfb;
+  border: 1px solid var(--detail-line);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.detail-briefing-contact {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--detail-line);
+}
+
+.detail-briefing-contact .detail-briefing-field-heading {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.detail-briefing-contact p {
+  color: var(--detail-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 .detail-summary {
   padding: 23px 26px 24px;
   background: var(--detail-panel);
@@ -933,6 +1107,10 @@
     gap: 16px;
   }
 
+  .detail-briefing-primary {
+    grid-template-columns: 1fr;
+  }
+
   .detail-summary {
     padding: 19px 18px 20px;
   }
@@ -994,6 +1172,24 @@
 
   .detail-hero {
     padding-bottom: 17px;
+  }
+
+  .detail-briefing {
+    padding: 17px 15px 14px;
+  }
+
+  .detail-briefing-heading-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .detail-briefing-source {
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .detail-briefing-note {
+    margin-top: 12px;
   }
 
   .detail-actions {
