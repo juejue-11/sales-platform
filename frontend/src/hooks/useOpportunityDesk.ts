@@ -110,12 +110,9 @@ export function saveOpportunityDeskNavigation(state: Omit<OpportunityDeskNavigat
   }
 }
 
-function consumeNavigationState(): OpportunityDeskNavigationState | null {
-  const state = readNavigationState()
-  if (state && typeof window !== 'undefined') {
-    try { window.sessionStorage.removeItem(navigationStorageKey) } catch { /* ignore storage errors */ }
-  }
-  return state
+function clearNavigationState(): void {
+  if (typeof window === 'undefined') return
+  try { window.sessionStorage.removeItem(navigationStorageKey) } catch { /* ignore storage errors */ }
 }
 
 function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'ai_decision_counts' | 'decision_counts', key: string): number {
@@ -140,7 +137,7 @@ function asError(value: unknown): Error {
 }
 
 export function useOpportunityDesk() {
-  const [restoredNavigation] = useState<OpportunityDeskNavigationState | null>(consumeNavigationState)
+  const [restoredNavigation] = useState<OpportunityDeskNavigationState | null>(readNavigationState)
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -154,6 +151,10 @@ export function useOpportunityDesk() {
   const disposed = useRef(false)
   const dashboardSequence = useRef(0)
   const projectsSequence = useRef(0)
+
+  useEffect(() => {
+    if (restoredNavigation) clearNavigationState()
+  }, [restoredNavigation])
 
   const loadDashboard = useCallback(async () => {
     const sequence = ++dashboardSequence.current
@@ -260,8 +261,6 @@ export function useOpportunityDesk() {
       const rightTime = right.deadline_at ? new Date(right.deadline_at).getTime() : Number.POSITIVE_INFINITY
       return leftTime - rightTime
     })[0] ?? null
-  const featuredBasis = featured ? '按截止时间展示' : '暂无临近截止项目'
-
   return {
     dashboard,
     projects,
@@ -271,7 +270,6 @@ export function useOpportunityDesk() {
     activeTab,
     tabs,
     featured,
-    featuredBasis,
     restoredScrollY: restoredNavigation?.scrollY ?? null,
     loadingDashboard,
     loadingProjects,

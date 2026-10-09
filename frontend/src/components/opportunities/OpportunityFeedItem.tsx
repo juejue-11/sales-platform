@@ -2,7 +2,7 @@ import { ArrowRightOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { ProjectSummary } from '../../types'
 import { formatDate } from '../Common'
-import { cleanOpportunityTitle, procurementFacts, procurementTeaser } from './text'
+import { compactOpportunityTitle, procurementFacts, procurementTeaser } from './text'
 
 interface OpportunityFeedItemProps {
   project: ProjectSummary
@@ -23,7 +23,7 @@ function deadlineValue(value: string | null): string {
  */
 export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProps) {
   const briefing = project.briefing
-  const title = cleanOpportunityTitle(project.title) || '未命名项目'
+  const title = compactOpportunityTitle(project.title) || '未命名项目'
   const teaser = procurementTeaser(briefing?.scope_excerpt, project.title)
     || procurementTeaser(briefing?.delivery_excerpt, project.title)
     || '具体采购范围暂未识别，进入详情核对原文。'
@@ -39,7 +39,7 @@ export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProp
     >
       <article className="opportunity-feed-card">
         <div className="opportunity-feed-heading">
-          <h3 className="opportunity-feed-title">{title}</h3>
+          <h3 className="opportunity-feed-title" title={project.title}>{title}</h3>
           <p className="opportunity-feed-buyer" title={buyerValue(project.buyer)}>{buyerValue(project.buyer)}</p>
         </div>
         <p className="opportunity-feed-teaser" data-testid="opportunity-scope">{teaser}</p>
@@ -52,7 +52,7 @@ export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProp
 
         <footer className="opportunity-feed-footer">
           <span className="opportunity-feed-deadline">
-            <small>投标截止</small>
+            <small>截止时间</small>
             <time dateTime={project.deadline_at ?? undefined}>{deadlineValue(project.deadline_at)}</time>
           </span>
           <span className="opportunity-feed-detail-cue">查看详情 <ArrowRightOutlined aria-hidden="true" /></span>

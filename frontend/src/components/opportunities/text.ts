@@ -17,6 +17,17 @@ export function cleanOpportunityTitle(value: string | null | undefined): string 
   return title || original
 }
 
+/** Keep a product or work subject visible when a source title has a long project prefix. */
+export function compactOpportunityTitle(value: string | null | undefined): string {
+  const title = cleanOpportunityTitle(value)
+  if (!title) return ''
+  const withoutCode = title.replace(/^[A-Z]{2,}(?:-[A-Z0-9]+){2,}\s*/i, '').trim()
+  const afterProcurement = withoutCode.match(/(?:采购|生产设备采购)\s*[-—]\s*([^。]+)$/)?.[1]?.trim()
+  const candidate = afterProcurement || withoutCode.match(/项目\s*([^。]{2,32})$/)?.[1]?.trim()
+  if (!candidate || !/(?:设备|机|泵|车|库|材料|备件|电缆|工程|机器人|生产线|支柱|电机|清洗)/.test(candidate)) return withoutCode
+  return candidate.replace(/(?:GHY|HYCG)[-_A-Z0-9]*$/i, '').trim() || withoutCode
+}
+
 function sectionBreaks(value: string): string {
   // This intentionally matches 3.1 / 3.1.1 style section numbers only.
   // A value such as 200.0 (万元) must remain a monetary amount.

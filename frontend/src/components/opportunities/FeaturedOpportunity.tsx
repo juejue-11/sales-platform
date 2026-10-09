@@ -2,12 +2,10 @@ import { CalendarOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { ProjectSummary } from '../../types'
 import { formatDate } from '../Common'
-import { cleanOpportunityTitle, isDeadlineWithinDays, isTodayShanghai } from './text'
+import { compactOpportunityTitle, isDeadlineWithinDays, isTodayShanghai } from './text'
 
 interface FeaturedOpportunityProps {
   project: ProjectSummary | null
-  basis: string
-  loading: boolean
   onOpen: (id: number) => void
 }
 
@@ -16,12 +14,10 @@ function deadlineCopy(value: string | null): { label: string; date: string } {
   return { label: isTodayShanghai(value) ? '今天截止' : '截止日期', date: formatDate(value, true) }
 }
 
-export function FeaturedOpportunity({ project, basis, loading, onOpen }: FeaturedOpportunityProps) {
-  void basis
-  void loading
+export function FeaturedOpportunity({ project, onOpen }: FeaturedOpportunityProps) {
   if (!project || !isDeadlineWithinDays(project.deadline_at, 7)) return null
   const deadline = deadlineCopy(project.deadline_at)
-  const title = cleanOpportunityTitle(project.title) || '未命名采购项目'
+  const title = compactOpportunityTitle(project.title) || '未命名采购项目'
   return (
     <Link
       className="opportunity-highlight"
