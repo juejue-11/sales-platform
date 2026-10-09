@@ -26,12 +26,22 @@ logger = logging.getLogger(__name__)
 MAX_INPUT_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_OUTPUT_LINE_BYTES = 512 * 1024
+MAX_CONTEXT_BODY_CHARS = 30_000
+CONTEXT_TRUNCATION_NOTICE = "\n[正文已截断，不能引用截断部分以外的内容]"
 DEFAULT_LIMITS = {
     "max_turns": 6,
     "max_tool_calls": 12,
     "timeout_ms": 180_000,
     "max_output_tokens": 4096,
 }
+
+
+def bounded_context_body(value: Any) -> str:
+    """Keep protocol context bounded while making truncation explicit."""
+    body = str(value or "")
+    if len(body) > MAX_CONTEXT_BODY_CHARS:
+        return body[:MAX_CONTEXT_BODY_CHARS] + CONTEXT_TRUNCATION_NOTICE
+    return body
 
 _PROGRESS_STAGES = {"started", "model", "tool_start", "tool_end", "completed"}
 _TRUSTED_TOOLS = {"read_project_records", "read_company_capability", "read_related_records"}
@@ -530,10 +540,14 @@ class PiSDKProvider:
 
 
 def _record_fingerprint(record: dict[str, Any]) -> dict[str, Any]:
+    body = str(record.get("body_text") or "")
     return {
         "id": record.get("id"), "record_id": record.get("record_id"),
         "source_id": record.get("source_id"), "title": record.get("title"),
-        "project_name": record.get("project_name"), "body_text": record.get("body_text"),
+        "project_name": record.get("project_name"),
+        # The protocol body is bounded, so the full source hash is part of the
+        # input identity to catch changes beyond the visible prefix.
+        "body_text_sha256": record.get("body_text_sha256") or sha256_text(body),
         "kind": record.get("kind"), "buyer": record.get("buyer"), "equipment": record.get("equipment"),
         "facts": record.get("facts"), "inferences": record.get("inferences"),
         "published_at": record.get("published_at"), "notice_number": record.get("notice_number"),
@@ -572,9 +586,7 @@ decision（recommend|consider|verify|not_recommended）、summary、demand_summa
     for record in project.get("records", []):
         # Keep source text available for evidence while bounding a pathological
         # collector record to a reasonable request size.
-        body = str(record.get("body_text") or "")
-        if len(body) > 30000:
-            body = body[:30000] + "\n[正文已截断，不能引用截断部分以外的内容]"
+        body = bounded_context_body(record.get("body_text"))
         records.append({
             "record_id": record.get("id"), "kind": record.get("kind"), "title": record.get("title"),
             "buyer": record.get("buyer"), "published_at": record.get("published_at"),
