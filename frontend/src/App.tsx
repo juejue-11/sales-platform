@@ -74,7 +74,7 @@ function Shell() {
       <Brand /><Navigation compact={false} onNavigate={closeMobileMenu} />
       <Button className="drawer-close" onClick={closeMobileMenu}>关闭导航</Button>
     </Drawer>
-    <Layout className={`workspace-layout${location.pathname === '/' ? ' workspace-home' : ''}`}>
+    <Layout className={`workspace-layout${location.pathname === '/' ? ' workspace-home' : ''}${isProject ? ' workspace-record' : ''}`}>
       <Header className="app-header">
         <div className="header-location"><Button className="mobile-menu-button" type="text" icon={<MenuOutlined />} onClick={() => setMobileMenu(true)} aria-label="打开导航" /><span>销售研判</span><span className="header-slash">/</span><strong>{currentTitle}</strong></div>
         <div className="header-context"><time>{today}</time><span className="internal-badge">内部使用</span></div>
