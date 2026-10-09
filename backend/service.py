@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .ai import AIError, AIProvider, OpenAICompatibleProvider, build_messages, extract_content, input_fingerprint, validate_judgment
+from .briefing import build_briefing
 from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
 from .db import connect
 from .ingest import ImportErrorDetail, ImportResult, import_records
@@ -424,6 +425,12 @@ class ScreeningService:
             ai_status = "idle"
         else:
             ai_status = "not_configured"
+        active_judgment = judgment
+        if (active_judgment is None or active_judgment["stale"] or
+                active_judgment.get("decision") == "blocked" or
+                gate in {"excluded", "expired", "closed", "duplicate", "blocked"} or
+                ai_status in {"stale", "failed", "skipped"}):
+            active_judgment = None
         decision = self._latest_decision(project_id)
         decision_value = {
             "status": decision["status"] if decision else "new",
@@ -439,6 +446,10 @@ class ScreeningService:
                                       judgment and int(decision["judgment_id"] or -1) != int(judgment["id"]))
         published = latest.get("published_at")
         deadline = latest.get("deadline_at")
+        briefing = build_briefing(latest)
+        ai_next_actions = active_judgment.get("next_actions") if active_judgment else []
+        if not isinstance(ai_next_actions, list):
+            ai_next_actions = []
         return {
             "id": int(project_id), "title": latest.get("title") or f"项目 {project_id}",
             "buyer": latest.get("buyer"), "equipment": sorted({str(x) for r in records for x in r.get("equipment", []) if x}),
@@ -446,10 +457,11 @@ class ScreeningService:
             "record_ids": [int(r["id"]) for r in records], "published_at": published,
             "deadline_at": deadline, "updated_at": project_row["updated_at"], "gate_status": gate,
             "gate_reasons": reasons, "ai_status": ai_status,
-            "ai_decision": judgment["decision"] if judgment and not judgment["stale"] and
-                           gate not in {"excluded", "expired", "closed", "duplicate"} else None,
-            "ai_summary": judgment["summary"] if judgment and not judgment["stale"] and
-                          gate not in {"excluded", "expired", "closed", "duplicate"} else None,
+            "ai_decision": active_judgment["decision"] if active_judgment else None,
+            "ai_summary": active_judgment["summary"] if active_judgment else None,
+            "demand_summary": active_judgment["demand_summary"] if active_judgment else None,
+            "ai_next_actions": ai_next_actions,
+            "briefing": briefing,
             "needs_review": gate == "review" or ai_status in {"stale", "failed", "not_configured", "idle"} or
                             (judgment is not None and judgment["decision"] == "verify") or selection_needs_review,
             "decision": decision_value,
@@ -496,14 +508,20 @@ class ScreeningService:
 
     def list_projects(self, *, q: str = "", gate: str = "", ai_status: str = "", decision: str = "",
                       ai_decision: str = "", deadline_soon: bool = False, kind: str = "", source_id: str = "",
-                      page: int = 1, page_size: int = 30, sort: str = "updated") -> dict[str, Any]:
+                      page: int = 1, page_size: int = 30, sort: str = "updated", active_only: bool = False) -> dict[str, Any]:
         page = max(1, int(page))
         page_size = max(1, min(200, int(page_size)))
         projects = []
         now = datetime.now(SHANGHAI)
         for item in self._all_project_summaries():
-            haystack = " ".join([str(item.get("title") or ""), str(item.get("buyer") or ""), str(item.get("ai_summary") or "")]).lower()
+            briefing = item.get("briefing") or {}
+            equipment = " ".join(str(value) for value in item.get("equipment") or [])
+            haystack = " ".join([str(item.get("title") or ""), str(item.get("buyer") or ""),
+                                 equipment, str(item.get("ai_summary") or ""),
+                                 str(briefing.get("scope_excerpt") or "")]).lower()
             if q and q.lower() not in haystack:
+                continue
+            if active_only and item["gate_status"] not in {"candidate", "review"}:
                 continue
             if gate and item["gate_status"] != gate:
                 continue
