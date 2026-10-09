@@ -181,11 +181,9 @@ export function ProjectDetailPage() {
       </div>
 
       <header className="detail-hero">
-        <div className="detail-hero-copy">
-          <Title level={2}>{detail.title || '未命名项目'}</Title>
-          <div className="detail-subline">
-            <Text className="detail-buyer">{detail.buyer || '采购方未标明'}</Text>
-          </div>
+        <Title level={2}>{detail.title || '未命名项目'}</Title>
+        <div className="detail-subline">
+          <Text className="detail-buyer">{detail.buyer || '采购方未标明'}</Text>
           <Space className="detail-status-tags" wrap>
             <GateTag status={detail.gate_status} />
             <DecisionTag status={detail.decision.status} />
@@ -200,13 +198,12 @@ export function ProjectDetailPage() {
           {detail.gate_status === 'excluded' && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'restore', '人工恢复机会'), '项目已恢复到机会池')}>恢复机会</Button>}
           {gateRestored && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'clear', '清除人工恢复规则'), '已清除人工恢复规则')}>清除恢复</Button>}
         </div>
+        <div className="detail-info-rail" aria-label="项目关键信息">
+          <div className="detail-meta-item"><Text>截止日期</Text><strong>{formatDate(detail.deadline_at, true)}</strong></div>
+          <div className="detail-meta-item"><Text>涉及设备</Text><span>{detail.equipment.length ? detail.equipment.join('、') : '待从原文确认'}</span></div>
+          <div className="detail-meta-item"><Text>来源</Text><span>{sourceLabel(detail.source_id)}</span></div>
+        </div>
       </header>
-
-      <div className="detail-info-rail" aria-label="项目关键信息">
-        <div className="detail-meta-item"><Text>截止日期</Text><strong>{formatDate(detail.deadline_at, true)}</strong></div>
-        <div className="detail-meta-item"><Text>涉及设备</Text><strong>{detail.equipment.length ? detail.equipment.join('、') : '待从原文确认'}</strong></div>
-        <div className="detail-meta-item"><Text>来源</Text><strong>{sourceLabel(detail.source_id)}</strong></div>
-      </div>
 
       <ProcurementBriefing briefing={detail.briefing} records={detail.records} title={detail.title} />
 
