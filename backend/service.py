@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .ai import AIError, AIProvider, OpenAICompatibleProvider, build_messages, extract_content, input_fingerprint, validate_judgment
+from .ai import AIError, AIProvider, OpenAICompatibleProvider, build_messages, correction_messages, extract_content, input_fingerprint, validate_judgment
 from .briefing import build_briefing
 from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
 from .db import connect
@@ -702,10 +702,23 @@ class ScreeningService:
             fingerprint = self._analysis_fingerprint(project, capability, config)
             with self._db_lock, self.db:
                 self.db.execute("UPDATE jobs SET input_fingerprint=?,updated_at=? WHERE id=?", (fingerprint, now_iso(), job_id))
-            response = await self.provider.complete(base_url=config["base_url"], model=config["model"],
-                                                    api_key=config["api_key"], messages=build_messages(project, capability))
-            payload = json.loads(extract_content(response))
-            judgment = validate_judgment(payload, project, config["model"], fingerprint)
+            messages = build_messages(project, capability)
+            for correction in range(2):
+                if correction:
+                    with self._db_lock, self.db:
+                        self.db.execute("UPDATE jobs SET attempts=attempts+1,updated_at=? WHERE id=?",
+                                        (now_iso(), job_id))
+                # Request failures (including credentials, timeouts and rate limits)
+                # are not output errors and must not trigger a correction request.
+                response = await self.provider.complete(base_url=config["base_url"], model=config["model"],
+                                                        api_key=config["api_key"], messages=messages)
+                try:
+                    judgment = validate_judgment(extract_content(response), project, config["model"], fingerprint)
+                    break
+                except AIError as exc:
+                    if correction:
+                        raise
+                    messages = correction_messages(messages, exc)
             capability_has_content = any(str(capability.get(key) or "").strip()
                                          for key in ("company_name", "scope_description", "supported_products",
                                                      "capabilities", "solution_examples", "region_preferences"))

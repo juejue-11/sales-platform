@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
 
-from .utils import json_text, quote_in_text, sha256_text
+from .utils import json_text, source_quote, sha256_text
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def input_fingerprint(project: dict[str, Any], capability_card: dict[str, Any]) 
 def build_messages(project: dict[str, Any], capability_card: dict[str, Any]) -> list[dict[str, str]]:
     kind = project.get("kind") or "tender"
     system = """你是销售机会判断助手。你只能依据输入的项目正文和公司能力卡回答，不得编造产品、型号、价格、交期、资质或采购事实。必须只返回一个 JSON 对象，不要 Markdown。字段固定为：
-decision（recommend|consider|verify|not_recommended）、summary、demand_summary、reasons（数组，每项含 text 和 evidence 数组；每条 evidence 必须含存在的 record_id 和正文原文 quote）、unknowns（字符串数组）、next_actions（字符串数组）、options（0 到 3 项；每项含 id、title、description、suitable_for、tradeoffs 字符串数组、unknowns 字符串数组、next_action）。理由要用通俗语言，引用必须逐字来自输入正文。若输入是新闻或矿业权动态，只能输出核实方向，不能把推测写成采购事实，decision 应为 verify，options 可以为空。若资料不足，使用 verify/consider 并明确待核实内容。"""
+decision（recommend|consider|verify|not_recommended）、summary、demand_summary、reasons（数组，每项含 text 和 evidence 数组；每条 evidence 必须含存在的 record_id 和正文原文 quote）、unknowns（字符串数组）、next_actions（字符串数组）、options（0 到 3 项；每项含 id、title、description、suitable_for、tradeoffs 字符串数组、unknowns 字符串数组、next_action）。理由要用通俗语言。quote 必须从对应 record_id 的 body_text 连续逐字复制，保留原文用字、标点和空格；不能改写、拼接不相邻句子，不能引用标题、facts、公司能力卡或另一条记录代替正文。优先选简短且完整的原文片段；原文不存在的信息只能列为待核实，不得作为证据。若输入是新闻或矿业权动态，只能输出核实方向，不能把推测写成采购事实，decision 应为 verify，options 可以为空。若资料不足，使用 verify/consider 并明确待核实内容。"""
     records = []
     for record in project.get("records", []):
         # Keep source text available for evidence while bounding a pathological
@@ -90,6 +90,17 @@ decision（recommend|consider|verify|not_recommended）、summary、demand_summa
     user = json_text({"project": {"id": project.get("id"), "title": project.get("title"), "kind": kind,
                                     "records": records}, "company_capability_card": capability_card})
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def correction_messages(messages: list[dict[str, str]], error: AIError) -> list[dict[str, str]]:
+    """Ask once for a fresh, valid response while retaining all source inputs."""
+    return [*messages, {"role": "user", "content": (
+        f"上一次输出未通过程序校验：{error}。请根据前面的同一份资料重新生成完整 JSON，"
+        "不要解释错误，不要使用 Markdown。检查所有字段类型与 JSON 引号、逗号。"
+        "每条 evidence 的 record_id 必须存在；quote 必须连续逐字复制该记录的 body_text，"
+        "不得概括、拼接或替换原文。删去无法找到原文支持的理由；"
+        "依据不足时使用 verify 并写清待核实事项，不得编造证据。"
+    )}]
 
 
 def extract_content(response: dict[str, Any]) -> str:
@@ -156,9 +167,10 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
                 raise AIError("invalid evidence record_id") from exc
             record = record_map.get(record_id)
             quote = item.get("quote")
-            if not record or not isinstance(quote, str) or not quote_in_text(quote, str(record.get("body_text") or "")):
-                raise AIError("evidence quote does not match source record")
-            clean_evidence.append({"record_id": record_id, "quote": quote.strip()})
+            matched_quote = source_quote(quote, str(record.get("body_text") or "")) if record and isinstance(quote, str) else None
+            if matched_quote is None:
+                raise AIError(f"evidence quote does not match source record (record_id={record_id})")
+            clean_evidence.append({"record_id": record_id, "quote": matched_quote})
         normalized_reasons.append({"text": reason["text"].strip(), "evidence": clean_evidence})
     if decision in {"recommend", "consider"}:
         if not normalized_reasons or not any(item["evidence"] for item in normalized_reasons):

@@ -13,6 +13,7 @@ from backend.ai import AIError
 from backend.main import create_app
 from backend.service import ConflictError, ScreeningService, ServiceError
 from backend.utils import SHANGHAI
+from backend.ai import validate_judgment
 
 
 def row(record_id: int = 1, *, body: str = "采购破碎机，截止时间：2099-12-31 09:00。", deadline: str | None = "2099-12-31 09:00"):
@@ -55,6 +56,110 @@ def configure_ai(service: ScreeningService):
     service.update_settings({"ai": {"base_url": "https://mock.local/v1", "model": "mock", "enabled": True,
                                      "api_key": "secret-value"},
                              "business": {"capabilities": "测试能力"}})
+
+
+class SequenceProvider(Provider):
+    def __init__(self, first_content):
+        super().__init__()
+        self.first_content = first_content
+        self.calls = []
+
+    async def complete(self, **kwargs):
+        self.calls.append(kwargs['messages'])
+        if len(self.calls) == 1:
+            return {"choices": [{"message": {"content": self.first_content}}]}
+        return await super().complete(**kwargs)
+
+
+@pytest.mark.parametrize('first_content', [
+    '{"decision":"consider", "summary":"broken"',
+    json.dumps({"decision": "consider", "summary": "x", "demand_summary": "x",
+                "reasons": [{"text": "x", "evidence": [{"record_id": 1, "quote": "采购液压泵"}]}],
+                "unknowns": [], "next_actions": [], "options": []}, ensure_ascii=False),
+])
+def test_invalid_model_output_gets_one_correction_before_failing(tmp_path, first_content):
+    provider = SequenceProvider(first_content)
+    service = make_service(tmp_path, [row()], provider=provider)
+    try:
+        configure_ai(service)
+        job_id = service.queue_project(1)['job_id']
+        asyncio.run(service.run_job(job_id))
+        job = service.db.execute('SELECT status,attempts FROM jobs WHERE id=?', (job_id,)).fetchone()
+        assert job['status'] == 'succeeded', 'A recoverable output error must not leave the job failed'
+        assert job['attempts'] == 2
+        assert len(provider.calls) == 2
+        assert provider.calls[1][0] == provider.calls[0][0]
+        assert 'quote' in provider.calls[1][-1]['content']
+        assert service.project_detail(1)['judgment']['reasons'][0]['evidence'][0]['quote'] == '采购破碎机'
+        assert service.db.execute('SELECT count(*) FROM judgments').fetchone()[0] == 1
+    finally:
+        service.close()
+
+
+def test_persistent_bad_evidence_stops_after_one_correction(tmp_path):
+    bad = {"decision": "consider", "summary": "x", "demand_summary": "x",
+           "reasons": [{"text": "x", "evidence": [{"record_id": 1, "quote": "不存在的原文"}]}],
+           "unknowns": [], "next_actions": [], "options": []}
+    provider = SequenceProvider(json.dumps(bad, ensure_ascii=False))
+    provider.payload = bad
+    service = make_service(tmp_path, [row()], provider=provider)
+    try:
+        configure_ai(service)
+        job_id = service.queue_project(1)['job_id']
+        asyncio.run(service.run_job(job_id))
+        assert service.summary(1)['ai_status'] == 'failed'
+        assert len(provider.calls) == 2
+        assert service.project_detail(1)['judgment'] is None
+    finally:
+        service.close()
+
+
+def test_provider_request_failure_is_not_retried_as_output_correction(tmp_path):
+    class RequestFailureProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def complete(self, **kwargs):
+            self.calls += 1
+            raise AIError('AI request returned HTTP 401')
+
+    provider = RequestFailureProvider()
+    service = make_service(tmp_path, [row()], provider=provider)
+    try:
+        configure_ai(service)
+        job_id = service.queue_project(1)['job_id']
+        asyncio.run(service.run_job(job_id))
+        assert provider.calls == 1
+        assert service.summary(1)['ai_status'] == 'failed'
+        assert service.project_detail(1)['judgment'] is None
+    finally:
+        service.close()
+
+
+def test_collector_line_breaks_match_without_changing_evidence_content():
+    source = '本项目发布招标\n公告，采购\n100 台破碎机。'
+    payload = {"decision": "consider", "summary": "核对需求", "demand_summary": "采购设备",
+               "reasons": [{"text": "已发布公告", "evidence": [{"record_id": 1, "quote": "招标公告，采购100台破碎机。"}]}],
+               "unknowns": [], "next_actions": [], "options": []}
+    result = validate_judgment(payload, {'records': [row(body=source)]}, 'test', 'test')
+    quote = result['reasons'][0]['evidence'][0]['quote']
+    assert quote == '招标\n公告，采购\n100 台破碎机。'
+    assert quote in source
+
+
+@pytest.mark.parametrize(('source', 'quote'), [
+    ('采购10台破碎机。', '采购100台破碎机。'),
+    ('采购1 0台破碎机。', '采购10台破碎机。'),
+    ('型号AB CD。', '型号ABCD。'),
+    ('不接受替代。', '接受国产替代。'),
+])
+def test_layout_tolerance_does_not_accept_changed_facts(source, quote):
+    payload = {"decision": "consider", "summary": "x", "demand_summary": "x",
+               "reasons": [{"text": "x", "evidence": [{"record_id": 1, "quote": quote}]}],
+               "unknowns": [], "next_actions": [], "options": []}
+    with pytest.raises(AIError, match='evidence quote does not match source record'):
+        validate_judgment(payload, {'records': [row(body=source)]}, 'test', 'test')
 
 
 def test_duplicate_import_is_atomic_and_idempotent(tmp_path: Path):

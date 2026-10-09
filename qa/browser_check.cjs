@@ -44,7 +44,7 @@ const { chromium } = require(path.join(process.env.USERPROFILE, '.cache/codex-ru
     await page.goto(url+'/operations');
     await page.getByRole('button',{name:/立即导入 records.jsonl/}).waitFor();
     await page.goto(url+'/');
-    await page.getByTestId('opportunity-item').filter({hasText:'验收项目：破碎机备件采购'}).first().waitFor();
+    await page.locator('[data-testid="opportunity-item"][href="/projects/9001"]').waitFor();
     await page.screenshot({path:path.join(output,'home-desktop.png'),fullPage:true});
     await page.setViewportSize({width:390,height:844});
     await page.screenshot({path:path.join(output,'home-mobile.png'),fullPage:true});

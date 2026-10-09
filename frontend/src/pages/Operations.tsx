@@ -22,6 +22,13 @@ function jobLabel(status: string): string {
   return labels[status] ?? status
 }
 
+function jobError(value: string): string {
+  if (value.includes('evidence quote does not match source record')) return 'AI 引用与项目原文不匹配，判断未保存；可重试。'
+  if (value.includes('not valid JSON') || value.includes('not JSON') || value.includes('Expecting ') || value.includes('Unterminated string')) return '模型返回的数据格式有误，判断未保存；可重试。'
+  if (value.includes('positive AI judgment requires source evidence')) return 'AI 推荐缺少原文依据，判断未保存；请核对资料后重试。'
+  return value
+}
+
 function importValue(item: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) if (item[key] !== undefined && item[key] !== null && item[key] !== '') return item[key]
   return null
@@ -91,7 +98,7 @@ export function OperationsPage() {
     { title: '项目', dataIndex: 'project_id', key: 'project_id', width: 90, render: (value: number | null) => value ? <Button type="link" onClick={() => navigate(`/projects/${value}`)}>项目 #{value}</Button> : '批量任务' },
     { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: (value: string) => <Tag color={jobColor(value)}>{jobLabel(value)}</Tag> },
     { title: '尝试次数', dataIndex: 'attempts', key: 'attempts', width: 90 },
-    { title: '失败说明', dataIndex: 'error', key: 'error', render: (value: string | null) => value || <Text type="secondary">—</Text> },
+    { title: '失败说明', dataIndex: 'error', key: 'error', render: (value: string | null) => value ? <span title={value}>{jobError(value)}</span> : <Text type="secondary">—</Text> },
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150, render: (value: string) => formatDate(value, true) },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: (value: string) => formatDate(value, true) },
   ]

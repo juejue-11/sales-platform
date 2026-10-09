@@ -105,13 +105,51 @@ def collapsed(value: str | None) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
-def quote_in_text(quote: str, text: str) -> bool:
-    """Evidence validation with a small tolerance for collector whitespace."""
+def _evidence_view(text: str) -> tuple[str, list[int]]:
+    """Normalize layout whitespace, retaining an offset to every source character.
+
+    Chinese words and Chinese/number boundaries may be split by HTML extraction.
+    Spaces inside numbers or Latin identifiers remain significant.
+    """
+    chars: list[str] = []
+    offsets: list[int] = []
+
+    def cjk(char: str) -> bool:
+        return bool(char and ('\u3400' <= char <= '\u9fff' or '\uf900' <= char <= '\ufaff'))
+
+    for match in re.finditer(r'\s+|\S', text):
+        value = match.group()
+        if value.isspace():
+            before = text[match.start() - 1] if match.start() else ''
+            after = text[match.end()] if match.end() < len(text) else ''
+            layout_only = (cjk(before) and (cjk(after) or after.isdigit())) or (before.isdigit() and cjk(after))
+            if not before or not after or layout_only:
+                continue
+            value = ' '
+        chars.append(value)
+        offsets.append(match.start())
+    return ''.join(chars), offsets
+
+
+def source_quote(quote: str, text: str) -> str | None:
+    """Resolve a quotation to a contiguous, unchanged substring of its source."""
     if not isinstance(quote, str) or not quote.strip() or not isinstance(text, str):
-        return False
+        return None
+    quote = quote.strip()
     if quote in text:
-        return True
-    return collapsed(quote) in collapsed(text)
+        return quote
+    wanted, _ = _evidence_view(quote)
+    available, offsets = _evidence_view(text)
+    if not wanted:
+        return None
+    start = available.find(wanted)
+    if start < 0:
+        return None
+    return text[offsets[start]:offsets[start + len(wanted) - 1] + 1]
+
+
+def quote_in_text(quote: str, text: str) -> bool:
+    return source_quote(quote, text) is not None
 
 
 def safe_join(root: Path, relative: str) -> Path:
