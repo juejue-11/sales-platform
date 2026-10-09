@@ -88,6 +88,7 @@ _PLATFORM_SPLIT_RE = re.compile(r"(?=(?:平台客服|系统客服|技术支持|�
 _NON_PROCUREMENT_CONTACT = ("异议", "举报", "投诉", "监督")
 _CONTACT_CUES = ("联系人", "联系电话", "电话", "手机", "邮箱", "传真", "地址", "采购人", "招标人", "项目负责人")
 _PROCUREMENT_CUES = ("采购", "招标", "设备", "货物", "物资", "标的", "清单", "压裂泵", "泵")
+_SCOPE_FACT_CUES = ("设备", "货物", "物资", "标的", "清单", "压裂泵", "泵")
 _QUALIFICATION_CUES = ("资格", "资质", "业绩", "证书", "许可", "矿安", "防爆", "安全生产")
 _NEGATIVE_FILE_CUES = ("报名", "文件", "购买", "下载", "登录", "平台", "保证金")
 _STRONG_FILE_CUES = ("文件出售", "文件获取", "文件售价", "购买方式", "标书费", "报名时间", "登录平台", "平台登录")
@@ -234,12 +235,26 @@ def _scope_score(label: str, text: str) -> int:
     return score
 
 
+def _scope_has_content(label: str, section: str, *, is_news: bool) -> bool:
+    content = section[len(label):].strip(" \t:：-—") if section.startswith(label) else section
+    if len(content) < 4:
+        return False
+    if is_news:
+        return True
+    if any(token in content for token in ("待定", "暂无", "不详", "另行通知")):
+        return False
+    if "详见招标文件" in content and not (_has_quantity(content) or any(cue in content for cue in _SCOPE_FACT_CUES)):
+        return False
+    return _has_quantity(content) or any(cue in content for cue in _SCOPE_FACT_CUES)
+
+
 def _select_scope(text: str, *, is_news: bool) -> str:
     sections = _section_candidates(text, "scope")
     if sections:
-        label, section = max(sections, key=lambda item: _scope_score(*item))
-        if _scope_score(label, section) >= (18 if is_news else 35):
-            return _clip(section, 450)
+        ranked = sorted(sections, key=lambda item: _scope_score(*item), reverse=True)
+        for label, section in ranked:
+            if _scope_score(label, section) >= (18 if is_news else 35) and _scope_has_content(label, section, is_news=is_news):
+                return _clip(section, 450)
 
     sentences = _sentence_candidates(text)
     scored: list[tuple[int, str]] = []

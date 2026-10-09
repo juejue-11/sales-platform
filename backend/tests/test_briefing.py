@@ -107,6 +107,14 @@ def test_inline_qualification_evidence_is_not_a_scope_heading():
     assert briefing["scope_excerpt"] == ""
 
 
+def test_unknown_scope_heading_returns_empty_excerpt():
+    body = "三、采购范围：详见招标文件第五章。四、资格要求：详见招标文件。"
+    briefing = build_briefing(source_row(82, body=body))
+
+    assert briefing["scope_excerpt"] == ""
+    assert briefing["qualification_excerpt"] == ""
+
+
 def test_briefing_normalizes_collector_line_breaks_without_losing_units():
     body = "采\n购\n范\n围\n：煤\n矿\n井\n下\n压\n裂\n泵\n2\n套。交\n货\n期\n：30\n日。"
     normalized = normalize_source_text(body)
