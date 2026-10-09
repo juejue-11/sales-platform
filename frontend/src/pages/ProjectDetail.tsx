@@ -6,6 +6,7 @@ import { api } from '../api'
 import type { DecisionStatus, JudgmentOption, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
 import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
 import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
+import { cleanQualificationExcerpt, cleanScopeExcerpt, normalizeOpportunityText } from '../components/opportunities/text'
 import './ProjectDetail.css'
 
 const { Title, Text, Paragraph } = Typography
@@ -206,6 +207,8 @@ export function ProjectDetailPage() {
         <div className="detail-meta-item"><Text>来源</Text><strong>{sourceLabel(detail.source_id)}</strong></div>
       </div>
 
+      <ProcurementBriefing briefing={detail.briefing} records={detail.records} title={detail.title} />
+
       <section className="detail-summary" aria-labelledby="detail-summary-heading">
         <div className="detail-summary-header">
           <div>
@@ -272,6 +275,50 @@ export function ProjectDetailPage() {
 
 function RecordPanel({ record }: { record: ProjectDetailData['records'][number] }) {
   return <div className="detail-record-panel"><Space wrap><Tag>记录 #{record.id}</Tag>{record.parse_status && <Tag>{record.parse_status}</Tag>}{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开原文</a>}<a href={api.archiveUrl(record.id)} target="_blank" rel="noreferrer">下载归档</a></Space><Paragraph className="detail-record-body">{record.body_text || '这条记录没有正文内容。'}</Paragraph><Collapse ghost items={[{ key: 'facts', label: '已抽取事实', children: <StructuredFields value={record.facts} emptyText="暂无已抽取事实" /> }, { key: 'inferences', label: '推测与待核实线索', children: <StructuredFields value={record.inferences} emptyText="暂无推测；请以公告正文为准" tone="warning" /> }]} /></div>
+}
+
+function ProcurementBriefing({ briefing, records, title }: { briefing: ProjectDetailData['briefing']; records: ProjectDetailData['records']; title: string }) {
+  const fallbackRecord = records.find((record) => record.original_url || record.canonical_url)
+  const sourceUrl = briefing?.original_url || fallbackRecord?.original_url || fallbackRecord?.canonical_url || ''
+  const recordId = briefing?.record_id ?? records[0]?.id ?? null
+  const scope = cleanScopeExcerpt(briefing?.scope_excerpt, title)
+  const delivery = normalizeOpportunityText(briefing?.delivery_excerpt)
+  const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
+  const contact = normalizeOpportunityText(briefing?.contact_excerpt)
+
+  return (
+    <section className="detail-briefing" aria-labelledby="procurement-briefing-heading">
+      <div className="detail-briefing-heading-row">
+        <div>
+          <div className="detail-section-kicker"><FileSearchOutlined /> 公告摘录</div>
+          <h2 id="procurement-briefing-heading">采购信息</h2>
+        </div>
+        <div className="detail-briefing-source">
+          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未识别</Text>}
+          {recordId != null && <Text type="secondary">记录 #{recordId}</Text>}
+        </div>
+      </div>
+      <div className="detail-briefing-note" role="note"><FileSearchOutlined /><span>这是公告摘录，请以原文核对；以下内容不代表 AI 判断。</span></div>
+      <div className="detail-briefing-primary">
+        <article className="detail-briefing-field detail-briefing-scope">
+          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text><Text type="secondary">源字段</Text></div>
+          <p>{scope || '未识别'}</p>
+        </article>
+        <article className="detail-briefing-field detail-briefing-delivery">
+          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text><Text type="secondary">源字段</Text></div>
+          <p>{delivery || '未识别'}</p>
+        </article>
+      </div>
+      <details className="detail-briefing-qualifications">
+        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : '未识别'}</span></summary>
+        <p className="detail-briefing-qualification-body">{qualification || '未识别'}</p>
+      </details>
+      <article className="detail-briefing-contact">
+        <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text><Text type="secondary">源字段</Text></div>
+        <p>{contact || '未识别'}</p>
+      </article>
+    </section>
+  )
 }
 
 function OptionCard({ option }: { option: JudgmentOption }) {
