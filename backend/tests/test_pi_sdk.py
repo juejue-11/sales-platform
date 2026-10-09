@@ -8,12 +8,36 @@ from pathlib import Path
 
 import pytest
 
+import backend.ai as ai_module
 from backend.ai import AIError, PiSDKProvider, _safe_error_code, _safe_progress_event
 from backend.service import ScreeningService
 from backend.utils import json_text, sha256_text
 
 
 NODE = shutil.which("node")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required for runtime path resolution")
+def test_configured_node_path_short_circuits_pnpm_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runtime = tmp_path / "runtime"
+    pnpm = runtime / "node_modules" / ".pnpm"
+    pnpm.mkdir(parents=True)
+    runner = tmp_path / "runner.js"
+    runner.write_text("", encoding="utf-8")
+    monkeypatch.setenv("SCREENING_AGENT_RUNTIME", str(runtime))
+    monkeypatch.setenv("SCREENING_AGENT_RUNNER", str(runner))
+    monkeypatch.setenv("SCREENING_NODE_PATH", NODE or "")
+    original_iterdir = Path.iterdir
+
+    def fail_if_pnpm(path: Path):
+        if path == pnpm:
+            raise AssertionError("pnpm fallback must not be scanned when configured node is valid")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_if_pnpm)
+    node, resolved_runner = ai_module.resolve_sdk_runtime()
+    assert node == Path(NODE or "").resolve()
+    assert resolved_runner == runner.resolve()
 
 
 def _runner_source() -> str:
