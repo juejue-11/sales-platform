@@ -14,5 +14,8 @@ const { pathToFileURL } = require('node:url');
   assert.ok(specification.includes('AB-1.2') && specification.includes('1.5MPa') && specification.includes('2套'));
   assert.equal(format.isTodayShanghai('不是日期'), false);
   assert.equal(format.isTodayShanghai(new Date().toISOString()), true);
+  assert.ok(!format.procurementFacts('招标范围2.1项目概况：采购矿用电缆；2.2交期：30天', '').some(fact => fact.includes('数量')), 'Section numbers must not become quantities');
+  assert.ok(!format.procurementFacts('设备或材料名称规格型号单位数量备注1采暖通风设备详见技术规格书台125', '').some(fact => fact.startsWith('规格')), 'A flattened table header is not a specification');
+  assert.ok(format.procurementTeaser('本项目为某研究院有限公司煤矿井下压裂泵采购项目招标采购，煤矿井下压裂泵2套。详见招标文件第五章。').includes('2套'));
   console.log(JSON.stringify({passed: true, quantitiesAndModelsPreserved: true, invalidDateHandled: true}));
 })().catch(error => {console.error(error); process.exitCode = 1;});

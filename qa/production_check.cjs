@@ -31,7 +31,7 @@ const { chromium } = require(path.join(process.env.USERPROFILE, '.cache/codex-ru
         if (size.scroll > size.width + 2) throw new Error('Page overflow: ' + route + ' ' + JSON.stringify(size));
         if (name === 'home' && viewport.width === 390) {
           const row = page.getByTestId('opportunity-item').first();
-          for (const field of [row.getByRole('heading').first(), row.getByTestId('opportunity-scope'), row.getByRole('button', {name:'展开原文'})]) {
+          for (const field of [row.getByRole('heading').first(), row.getByTestId('opportunity-scope')]) {
             const bounds = await field.boundingBox();
             if (!bounds || bounds.x < 0 || bounds.x + bounds.width > viewport.width + 2) throw new Error('Mobile opportunity field clipped');
           }

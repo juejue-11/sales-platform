@@ -46,7 +46,7 @@ export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProp
 
         {facts.length > 0 && (
           <div className="opportunity-feed-facts" aria-label="采购事实">
-            {facts.map((fact) => <span key={fact}>{fact}</span>)}
+            {facts.map((fact) => <span className={fact.startsWith('数量 ') ? 'opportunity-quantity' : undefined} key={fact}>{fact}</span>)}
           </div>
         )}
 

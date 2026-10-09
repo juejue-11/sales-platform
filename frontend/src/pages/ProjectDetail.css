@@ -271,11 +271,6 @@
   font-weight: 600;
 }
 
-.detail-briefing-field-heading > .ant-typography-secondary {
-  flex: 0 0 auto;
-  font-size: 11px;
-}
-
 .detail-briefing-field p,
 .detail-briefing-contact p {
   margin: 0;
@@ -305,6 +300,16 @@
 
 .detail-briefing-qualifications summary::marker {
   color: var(--detail-accent);
+}
+
+.detail-briefing-summary-title::before {
+  content: '+';
+  margin-right: 8px;
+  color: var(--detail-accent);
+}
+
+.detail-briefing-qualifications[open] .detail-briefing-summary-title::before {
+  content: '−';
 }
 
 .detail-briefing-summary-meta {

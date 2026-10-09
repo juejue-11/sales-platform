@@ -298,14 +298,14 @@ function ProcurementBriefing({ briefing, records, title }: { briefing: ProjectDe
           {recordId != null && <Text type="secondary">记录 #{recordId}</Text>}
         </div>
       </div>
-      <div className="detail-briefing-note" role="note"><FileSearchOutlined /><span>这是公告摘录，请以原文核对；以下内容不代表 AI 判断。</span></div>
+      <div className="detail-briefing-note" role="note"><FileSearchOutlined /><span>摘录自采购公告，完整要求请核对原文。</span></div>
       <div className="detail-briefing-primary">
         <article className="detail-briefing-field detail-briefing-scope">
-          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text><Text type="secondary">源字段</Text></div>
+          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
           <p>{scope || '未识别'}</p>
         </article>
         <article className="detail-briefing-field detail-briefing-delivery">
-          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text><Text type="secondary">源字段</Text></div>
+          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text></div>
           <p>{delivery || '未识别'}</p>
         </article>
       </div>
@@ -314,7 +314,7 @@ function ProcurementBriefing({ briefing, records, title }: { briefing: ProjectDe
         <p className="detail-briefing-qualification-body">{qualification || '未识别'}</p>
       </details>
       <article className="detail-briefing-contact">
-        <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text><Text type="secondary">源字段</Text></div>
+        <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text></div>
         <p>{contact || '未识别'}</p>
       </article>
     </section>

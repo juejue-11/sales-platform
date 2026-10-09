@@ -250,11 +250,11 @@
 .opportunity-feed-heading { min-width: 0; }
 .opportunity-feed-title {
   display: -webkit-box;
-  min-height: 38px;
+  min-height: 45px;
   margin: 0;
   overflow: hidden;
   color: var(--opportunity-ink);
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
   line-height: 1.32;
   overflow-wrap: anywhere;
@@ -267,11 +267,11 @@
 
 .opportunity-feed-teaser {
   display: -webkit-box;
-  min-height: 36px;
+  min-height: 43px;
   margin: 14px 0 0;
   overflow: hidden;
   color: #40536d;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.55;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -280,6 +280,7 @@
 
 .opportunity-feed-facts { display: flex; flex-wrap: wrap; gap: 5px; min-height: 23px; margin-top: 10px; }
 .opportunity-feed-facts span { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 6px; overflow: hidden; color: #48617f; background: #f1f5fa; border: 1px solid #e1e8f1; border-radius: 3px; font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.opportunity-feed-facts .opportunity-quantity { color: var(--opportunity-blue); background: var(--opportunity-soft-blue); font-size: 12px; font-weight: 600; }
 
 .opportunity-feed-footer {
   display: flex;
@@ -294,7 +295,7 @@
 .opportunity-feed-deadline { display: grid; gap: 2px; min-width: 0; }
 .opportunity-feed-deadline small { color: var(--opportunity-muted); font-size: 10px; line-height: 1.3; }
 .opportunity-feed-deadline time { overflow: hidden; color: var(--opportunity-blue); font-size: 12px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.opportunity-feed-detail-cue { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--opportunity-blue); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.opportunity-feed-detail-cue { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--opportunity-blue); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .opportunity-feed-detail-cue .anticon { font-size: 10px; }
 
 .opportunity-pagination { display: flex; flex-wrap: wrap; justify-content: flex-end; margin-top: 16px; }
@@ -317,6 +318,9 @@
 @media (max-width: 760px) {
   .opportunity-heading { flex-direction: column; gap: 9px; }
   .opportunity-sync { padding-top: 0; }
+  .opportunity-controls { min-width: 0; }
+  .opportunity-tabs { flex-wrap: nowrap; overflow-x: auto; gap: 3px; }
+  .opportunity-tab { flex: 0 0 auto; white-space: nowrap; }
   .opportunity-toolbar { align-items: stretch; flex-direction: column; }
   .opportunity-search { max-width: none; }
   .opportunity-toolbar-actions { justify-content: space-between; }
@@ -330,11 +334,11 @@
 @media (max-width: 430px) {
   .opportunity-heading h2.ant-typography { font-size: 25px; }
   .opportunity-tabs { gap: 2px; }
-  .opportunity-tab { flex: 1 1 30%; justify-content: center; padding-inline: 4px; font-size: 11px; }
+  .opportunity-tab { flex: 0 0 auto; padding-inline: 9px; font-size: 12px; }
   .opportunity-advanced { grid-template-columns: 1fr; }
   .opportunity-highlight { grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; padding: 9px 10px; }
-  .opportunity-highlight time { grid-column: 2; min-width: 0; }
-  .opportunity-highlight-cue { grid-column: 2; }
+  .opportunity-highlight time { display: flex; flex-wrap: wrap; grid-column: 1 / -1; gap: 5px; min-width: 0; }
+  .opportunity-highlight-cue { grid-column: 1 / -1; justify-self: end; margin-top: -24px; }
   .opportunity-feed-card { padding: 14px 13px 11px; }
 }
 
