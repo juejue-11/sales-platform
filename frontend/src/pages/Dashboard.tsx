@@ -1,11 +1,12 @@
 import { Button, Pagination, Typography } from 'antd'
 import { DatabaseOutlined, ReloadOutlined, RobotOutlined, WarningOutlined } from '@ant-design/icons'
+import { useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ErrorBlock, EmptyBlock, LoadingBlock, formatFreshness } from '../components/Common'
 import { FeaturedOpportunity } from '../components/opportunities/FeaturedOpportunity'
 import { OpportunityFeedItem } from '../components/opportunities/OpportunityFeedItem'
 import { OpportunityFilters } from '../components/opportunities/OpportunityFilters'
-import { useOpportunityDesk } from '../hooks/useOpportunityDesk'
+import { saveOpportunityDeskNavigation, useOpportunityDesk } from '../hooks/useOpportunityDesk'
 import './Dashboard.css'
 
 const { Title } = Typography
@@ -15,6 +16,20 @@ export function DashboardPage() {
   const desk = useOpportunityDesk()
   const hasImportNotice = Boolean(desk.dashboard?.import_error || desk.dashboard?.file_stale || desk.dashboard?.import_pending)
   const sourceNotes = desk.dashboard?.source_notes?.trim()
+  const rememberAndOpen = useCallback((_id: number) => {
+    saveOpportunityDeskNavigation({
+      query: desk.query,
+      draftSearch: desk.draftSearch,
+      advancedOpen: desk.advancedOpen,
+      scrollY: window.scrollY,
+    })
+  }, [desk.advancedOpen, desk.draftSearch, desk.query])
+
+  useEffect(() => {
+    if (desk.restoredScrollY == null || desk.loadingProjects) return
+    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: desk.restoredScrollY ?? 0, behavior: 'auto' }))
+    return () => window.cancelAnimationFrame(frame)
+  }, [desk.loadingProjects, desk.restoredScrollY])
 
   return (
     <main className="opportunity-page">
@@ -40,12 +55,6 @@ export function DashboardPage() {
         </section>
       )}
 
-      {desk.activeTab === 'current' && <FeaturedOpportunity project={desk.featured} basis={desk.featuredBasis} loading={desk.loadingDashboard || desk.loadingProjects} onOpen={(id) => navigate(`/projects/${id}`)} />}
-
-      {desk.dashboard && !desk.dashboard.ai_configured && (
-        <div className="opportunity-ai-note"><RobotOutlined aria-hidden="true" /><span>当前展示公告信息与规则筛选；配置模型后可查看 AI 理由和方案。</span><Button type="link" onClick={() => navigate('/settings')}>去配置</Button></div>
-      )}
-
       <OpportunityFilters
         tabs={desk.tabs}
         activeTab={desk.activeTab}
@@ -62,14 +71,20 @@ export function DashboardPage() {
         onRefresh={desk.refresh}
       />
 
+      {desk.activeTab === 'current' && <FeaturedOpportunity project={desk.featured} basis={desk.featuredBasis} loading={desk.loadingDashboard || desk.loadingProjects} onOpen={rememberAndOpen} />}
+
+      {desk.dashboard && !desk.dashboard.ai_configured && (
+        <div className="opportunity-ai-note"><RobotOutlined aria-hidden="true" /><span>当前展示公告信息与规则筛选；配置模型后可查看 AI 理由和方案。</span><Button type="link" onClick={() => navigate('/settings')}>去配置</Button></div>
+      )}
+
       <section className="opportunity-feed" aria-labelledby="opportunity-feed-heading">
         <header className="opportunity-feed-section-heading">
-          <div><h2 id="opportunity-feed-heading">采购信息</h2><p>公告原文摘录，可展开核对。</p></div>
+          <div><h2 id="opportunity-feed-heading">采购信息</h2><p>先看采购线索，进入详情核对完整原文。</p></div>
           <span>{desk.total.toLocaleString('zh-CN')} 条</span>
         </header>
         {desk.projectsError != null ? <ErrorBlock error={desk.projectsError} onRetry={desk.retryProjects} /> : desk.loadingProjects ? <LoadingBlock text="正在读取采购信息" /> : desk.projects.length === 0 ? <EmptyBlock description={desk.query.q || desk.query.gate || desk.query.ai_decision ? '没有符合筛选条件的采购信息' : '暂无候选或待核实采购信息'} /> : (
           <div className="opportunity-feed-list">
-            {desk.projects.map((project) => <OpportunityFeedItem key={project.id} project={project} detailState={desk.details[project.id]} expanded={desk.expandedSourceId === project.id} onOpen={(id) => navigate(`/projects/${id}`)} onToggleOriginal={desk.toggleOriginal} onRetryOriginal={desk.retryOriginal} />)}
+            {desk.projects.map((project) => <OpportunityFeedItem key={project.id} project={project} onOpen={rememberAndOpen} />)}
           </div>
         )}
         {!desk.loadingProjects && !desk.projectsError && desk.total > 0 && <Pagination className="opportunity-pagination" current={desk.query.page} pageSize={desk.query.page_size} total={desk.total} showSizeChanger pageSizeOptions={[12, 24, 48]} onChange={desk.changePage} showTotal={(value) => `共 ${value} 条`} />}

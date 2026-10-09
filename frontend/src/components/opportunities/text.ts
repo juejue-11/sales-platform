@@ -61,3 +61,68 @@ export function isTodayShanghai(value: string | null | undefined): boolean {
   const formatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
   return formatter.format(date) === formatter.format(new Date())
 }
+
+/**
+ * Return a short, source-backed sentence for a catalogue card.
+ *
+ * The feed is intentionally conservative: it prefers a clause containing a
+ * quantity, specification, or delivery term and otherwise leaves the fact
+ * undiscovered. It never turns a long qualification or contact block into a
+ * clipped-looking recommendation.
+ */
+export function procurementTeaser(value: string | null | undefined, title?: string | null): string {
+  const cleaned = cleanScopeExcerpt(value, title)
+  if (!cleaned) return ''
+  const clauses = cleaned
+    .split(/(?<=[。！？；;])\s*|\n+/)
+    .map((part) => part.replace(/^[\s:：,，。；;]+|[\s:：,，。；;]+$/g, '').trim())
+    .filter((part) => part.length > 0)
+    .filter((part) => !/^(?:招标方式|资金落实情况|招标失败转其他采购方式|本项目招标内容、范围及规模详见附件)/.test(part))
+
+  const highSignal = clauses.find((part) => /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|型号|交货期|交期|工期|服务期|采购|设备|工程|施工|备件|材料/.test(part))
+  const selected = highSignal ?? clauses[0] ?? ''
+  if (!selected) return ''
+  return selected.length > 120 ? `${selected.slice(0, 117).trimEnd()}…` : selected
+}
+
+function sourceFact(value: string, pattern: RegExp, label: string, limit = 34): string {
+  const match = value.match(pattern)
+  if (!match) return ''
+  const raw = match[0].replace(/^[\s:：,，。；;]+|[\s:：,，。；;]+$/g, '').trim()
+  if (!raw) return ''
+  const concise = raw.length > limit ? `${raw.slice(0, limit - 1).trimEnd()}…` : raw
+  return `${label} ${concise.replace(/^(?:交货期|交期|工期|服务期|交货地点)\s*[:：]?\s*/, '')}`.trim()
+}
+
+/** Select at most two concise facts for a card, preserving the source wording. */
+export function procurementFacts(
+  scope: string | null | undefined,
+  delivery: string | null | undefined,
+  equipment: string[] = [],
+): string[] {
+  const scopeText = normalizeOpportunityText(scope)
+  const deliveryText = normalizeOpportunityText(delivery)
+  const facts: string[] = []
+  const quantity = sourceFact(scopeText, /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)/, '数量')
+  if (quantity) facts.push(quantity)
+
+  const deliveryFact = sourceFact(`${deliveryText} ${scopeText}`, /(?:交货期|交期|工期|服务期)\s*[:：]?\s*[^。；;\n]{1,42}/, '交付')
+  if (deliveryFact && facts.length < 2) facts.push(deliveryFact)
+
+  if (facts.length < 2) {
+    const specFact = sourceFact(scopeText, /(?:额定负载|规格型号|型号|功率|B\s*=|V\s*=|kW|MPa)\s*[:：]?\s*[^。；;\n]{1,32}/, '规格')
+    if (specFact) facts.push(specFact)
+  }
+
+  if (facts.length < 2 && equipment[0]) facts.push(`设备 ${equipment[0]}`)
+  return facts.slice(0, 2)
+}
+
+/** True only for a future deadline within the requested number of days. */
+export function isDeadlineWithinDays(value: string | null | undefined, days = 7): boolean {
+  if (!value) return false
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) return false
+  const remaining = timestamp - Date.now()
+  return remaining >= 0 && remaining <= days * 24 * 60 * 60 * 1000
+}
