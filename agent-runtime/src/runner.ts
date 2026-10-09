@@ -525,6 +525,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     void session.abort();
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastRunAssistant: AssistantMessage | undefined;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "turn_start") {
       // turn_start is emitted before the provider request. Abort here so a
@@ -542,6 +543,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
         void session.abort();
       }
     } else if (event.type === "message_end" && event.message.role === "assistant") {
+      lastRunAssistant = event.message;
       addUsage(usage, event.message);
     } else if (event.type === "tool_execution_start" && TOOL_NAME_SET.has(event.toolName)) {
       emit(progress("tool_start", "读取业务资料", event.toolName as ToolName));
@@ -557,6 +559,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
   try {
     await session.prompt(prompt, { expandPromptTemplates: false, source: "rpc" });
     if (limitError) throw limitError;
+    if (!lastRunAssistant || lastRunAssistant.stopReason !== "stop") throw new Error("MODEL_ERROR");
     const content = session.getLastAssistantText()?.trim();
     if (!content) throw new Error("NO_FINAL");
     emit(progress("completed", "完成分析"));
