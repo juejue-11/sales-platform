@@ -10,6 +10,7 @@ interface OpportunityFiltersProps {
   draftSearch: string
   advancedOpen: boolean
   resultCount: number
+  refreshTitle: string
   onSelectTab: (key: OpportunityTabKey) => void
   onSearchChange: (value: string) => void
   onSearch: (value: string) => void
@@ -70,7 +71,7 @@ const aiDecisionOptions = [
   { value: 'not_recommended', label: '不建议' },
 ]
 
-export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advancedOpen, resultCount, onSelectTab, onSearchChange, onSearch, onUpdateFilter, onReset, onToggleAdvanced, onRefresh }: OpportunityFiltersProps) {
+export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advancedOpen, resultCount, refreshTitle, onSelectTab, onSearchChange, onSearch, onUpdateFilter, onReset, onToggleAdvanced, onRefresh }: OpportunityFiltersProps) {
   const [sourceDraft, setSourceDraft] = useState(query.source_id)
   useEffect(() => setSourceDraft(query.source_id), [query.source_id])
 
@@ -101,9 +102,9 @@ export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advanc
           prefix={<SearchOutlined aria-hidden="true" />}
         />
         <div className="opportunity-toolbar-actions">
-          <span className="opportunity-result-count">显示 {resultCount.toLocaleString('zh-CN')} 条</span>
-          <Button className={advancedOpen ? 'opportunity-advanced-button opportunity-advanced-button-open' : 'opportunity-advanced-button'} icon={<FilterOutlined />} onClick={onToggleAdvanced} aria-expanded={advancedOpen}>高级筛选</Button>
-          <Button className="opportunity-refresh-button" icon={<ReloadOutlined />} onClick={onRefresh} aria-label="刷新机会列表" />
+          <span className="opportunity-result-count">{resultCount.toLocaleString('zh-CN')} 条</span>
+          <Button className={advancedOpen ? 'opportunity-advanced-button opportunity-advanced-button-open' : 'opportunity-advanced-button'} icon={<FilterOutlined />} onClick={onToggleAdvanced} aria-expanded={advancedOpen} aria-label="高级筛选"><span className="opportunity-filter-label">筛选</span></Button>
+          <Button className="opportunity-refresh-button" icon={<ReloadOutlined />} onClick={onRefresh} aria-label="刷新机会列表" title={refreshTitle} />
         </div>
       </div>
       {advancedOpen && (

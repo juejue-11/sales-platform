@@ -1,7 +1,6 @@
-import { Button, Pagination, Typography } from 'antd'
-import { DatabaseOutlined, ReloadOutlined, RobotOutlined, WarningOutlined } from '@ant-design/icons'
+import { Button, Pagination } from 'antd'
+import { WarningOutlined } from '@ant-design/icons'
 import { useCallback, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { ErrorBlock, EmptyBlock, LoadingBlock, formatFreshness } from '../components/Common'
 import { FeaturedOpportunity } from '../components/opportunities/FeaturedOpportunity'
 import { OpportunityFeedItem } from '../components/opportunities/OpportunityFeedItem'
@@ -9,10 +8,7 @@ import { OpportunityFilters } from '../components/opportunities/OpportunityFilte
 import { saveOpportunityDeskNavigation, useOpportunityDesk } from '../hooks/useOpportunityDesk'
 import './Dashboard.css'
 
-const { Title } = Typography
-
 export function DashboardPage() {
-  const navigate = useNavigate()
   const desk = useOpportunityDesk()
   const hasImportNotice = Boolean(desk.dashboard?.import_error || desk.dashboard?.file_stale || desk.dashboard?.import_pending)
   const sourceNotes = desk.dashboard?.source_notes?.trim()
@@ -35,18 +31,6 @@ export function DashboardPage() {
 
   return (
     <main className="opportunity-page">
-      <header className="opportunity-heading">
-        <div>
-          <Title level={2}>机会池</Title>
-          <p>采购什么、能否参与、何时截止，在这里先看清。</p>
-        </div>
-        <div className="opportunity-sync" aria-label="数据同步状态">
-          <DatabaseOutlined aria-hidden="true" />
-          <span>{formatFreshness(desk.dashboard?.data_updated_at)}</span>
-          <Button type="text" icon={<ReloadOutlined />} onClick={desk.refresh}>刷新</Button>
-        </div>
-      </header>
-
       {(desk.dashboardError || hasImportNotice) && (
         <section className="opportunity-notices" aria-label="数据提醒">
           <div className="opportunity-notice-heading"><WarningOutlined aria-hidden="true" /><span>数据提醒</span></div>
@@ -64,6 +48,7 @@ export function DashboardPage() {
         draftSearch={desk.draftSearch}
         advancedOpen={desk.advancedOpen}
         resultCount={desk.total}
+        refreshTitle={`刷新机会列表；${formatFreshness(desk.dashboard?.data_updated_at)}`}
         onSelectTab={desk.selectTab}
         onSearchChange={desk.setDraftSearch}
         onSearch={desk.submitSearch}
@@ -75,15 +60,8 @@ export function DashboardPage() {
 
       {desk.activeTab === 'current' && <FeaturedOpportunity project={desk.featured} onOpen={rememberAndOpen} />}
 
-      {desk.dashboard && !desk.dashboard.ai_configured && (
-        <div className="opportunity-ai-note"><RobotOutlined aria-hidden="true" /><span>当前展示公告信息与规则筛选；配置模型后可查看 AI 理由和方案。</span><Button type="link" onClick={() => navigate('/settings')}>去配置</Button></div>
-      )}
-
       <section className="opportunity-feed" aria-labelledby="opportunity-feed-heading">
-        <header className="opportunity-feed-section-heading">
-          <div><h2 id="opportunity-feed-heading">采购信息</h2><p>先看采购线索，进入详情核对完整原文。</p></div>
-          <span>{desk.total.toLocaleString('zh-CN')} 条</span>
-        </header>
+        <h2 className="opportunity-screen-reader" id="opportunity-feed-heading">采购信息</h2>
         {desk.projectsError != null ? <ErrorBlock error={desk.projectsError} onRetry={desk.retryProjects} /> : desk.loadingProjects ? <LoadingBlock text="正在读取采购信息" /> : desk.projects.length === 0 ? <EmptyBlock description={desk.query.q || desk.query.gate || desk.query.ai_decision ? '没有符合筛选条件的采购信息' : '暂无候选或待核实采购信息'} /> : (
           <div className="opportunity-feed-list">
             {desk.projects.map((project) => <OpportunityFeedItem key={project.id} project={project} onOpen={rememberAndOpen} />)}

@@ -12,7 +12,7 @@ const { chromium } = require(path.join(process.env.USERPROFILE, '.cache/codex-ru
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const pages = [
-      ['/', '机会池', 'home'],
+      ['/', '采购信息', 'home'],
       ['/projects/93', '选矿厂美卓破碎机国产化备件12项公开招标招标公告', 'project'],
       ['/settings', '业务配置', 'settings'],
       ['/operations', '处理状态', 'operations'],

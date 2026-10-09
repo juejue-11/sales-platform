@@ -52,6 +52,12 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
 .internal-badge { padding: 4px 8px; color: #506B70; border: 1px solid #D9E3E4; border-radius: 4px; font-size: 11px; }
 .mobile-menu-button.ant-btn { display: none; }
 .app-content { min-width: 0; padding: 28px 30px 42px; }
+.workspace-home .app-header { display: none; }
+.workspace-home .app-content { padding-top: 16px; }
+@media (max-width: 760px) {
+  .workspace-home .app-header { display: flex; height: 40px; }
+  .workspace-home .app-content { padding-top: 12px; }
+}
 .page-stack { display: flex; flex-direction: column; gap: 20px; max-width: 1580px; margin: 0 auto; min-width: 0; }
 .page-heading, .detail-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .page-heading h2, .detail-title-row h2 { margin: 0 0 7px; color: var(--ink); font-size: 29px; line-height: 1.4; letter-spacing: -.035em; font-weight: 600; }

@@ -29,9 +29,8 @@ export function FeaturedOpportunity({ project, onOpen }: FeaturedOpportunityProp
       <span className="opportunity-highlight-label"><CalendarOutlined aria-hidden="true" /> 临近截止</span>
       <span className="opportunity-highlight-project">
         <strong>{title}</strong>
-        <small>{project.buyer || '采购方未标明'}</small>
       </span>
-      <time dateTime={project.deadline_at ?? undefined}><b>{deadline.label}</b>{deadline.date}</time>
+      <time dateTime={project.deadline_at ?? undefined}>{deadline.label} {deadline.date}</time>
       <span className="opportunity-highlight-cue">查看详情</span>
     </Link>
   )
