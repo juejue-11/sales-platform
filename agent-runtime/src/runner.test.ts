@@ -198,6 +198,23 @@ test("normalizes a configured chat completions URL before the SDK appends its pa
   }
 });
 
+test("length-terminated JSON-looking output is not reported as completed", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      { id: "chatcmpl-length", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"recommend"}' }, finish_reason: null }] },
+      { id: "chatcmpl-length", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
+    assert.ok(!result.lines.some((line) => line.type === "result"));
+    assert.ok(!result.lines.some((line) => line.type === "progress" && line.stage === "completed"));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 async function assertToolCap(cap: number, expectedReads: number, expectedErrors: number): Promise<void> {
   const fake = await startFakeServer((_body, response) => {
     streamResponse(response, [

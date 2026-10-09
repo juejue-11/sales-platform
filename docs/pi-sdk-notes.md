@@ -71,7 +71,9 @@ output schema. Tool calls are limited to project records, the company capability
 card, and related-record candidates; related projects are explicitly labelled as
 candidate relations and not proof of the same project. A failed business-tool
 completion adds `is_error: true` to its `tool_end` progress event; successful
-`tool_end` events omit that field.
+`tool_end` events omit that field. A result is emitted only when the final
+assistant message has SDK stop reason `stop`; length, error, aborted, or tool-use
+termination is returned as a safe model error.
 
 The integration test runs a local fake OpenAI-compatible SSE server. It verifies a
 tool request followed by execution and a second model response, bearer-key
