@@ -92,9 +92,10 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     if (!detail || !['queued', 'running'].includes(detail.ai_status)) return
-    const timer = window.setInterval(() => { void loadDetail(false) }, 8000)
+    const interval = detail.ai_status === 'running' || detail.agent_run?.status === 'running' ? 3000 : 8000
+    const timer = window.setInterval(() => { void loadDetail(false) }, interval)
     return () => window.clearInterval(timer)
-  }, [detail, loadDetail])
+  }, [detail?.ai_status, detail?.agent_run?.status, loadDetail])
 
   const setDecision = <K extends keyof DecisionFormState>(key: K, value: DecisionFormState[K]) => {
     markDecisionDirty(true)
@@ -240,6 +241,7 @@ export function ProjectDetailPage() {
         <div className="detail-side-column">
           <Card className="detail-panel detail-analysis-card" title={<span><RobotOutlined /> AI 理由与证据</span>} extra={<AiStatusTag status={detail.ai_status} />}>
             {detail.judgment ? <div className="detail-judgment-body"><div className="detail-judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="detail-reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="detail-evidence-list">{reason.evidence.map((evidence) => <div className="detail-evidence-item" key={`${evidence.record_id}-${evidence.quote}`}><Text type="secondary">记录 #{evidence.record_id}</Text><q>{evidence.quote}</q></div>)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+            <AgentExecutionActivity run={detail.agent_run} retrying={actionLoading === 'analyze'} onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')} />
             {detail.judgment?.unknowns && detail.judgment.unknowns.length > 0 && <div className="detail-unknown-panel"><Text strong><WarningOutlined /> 待确认信息</Text><ul className="detail-compact-list">{detail.judgment.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul></div>}
           </Card>
         </div>
@@ -270,6 +272,39 @@ export function ProjectDetailPage() {
         <Form layout="vertical"><Form.Item label="对方项目编号" required><InputNumber min={1} value={linkTarget} onChange={(value) => setLinkTarget(value)} placeholder="输入项目 ID" style={{ width: '100%' }} /></Form.Item><Form.Item label="关系" required><Select value={linkRelation} onChange={setLinkRelation} options={[{ value: 'same_project', label: '同项目' }, { value: 'duplicate', label: '重复项目' }, { value: 'dismiss', label: '排除提示' }]} /></Form.Item><Form.Item label="备注"><Input.TextArea rows={3} value={linkNote} onChange={(event) => setLinkNote(event.target.value)} placeholder="说明人工确认依据" /></Form.Item></Form>
       </Modal>
     </div>
+  )
+}
+
+function AgentExecutionActivity({ run, retrying, onRetry }: { run?: ProjectDetailData['agent_run']; retrying: boolean; onRetry: () => void }) {
+  if (!run) return null
+
+  const steps = Array.isArray(run.steps)
+    ? run.steps.filter((step) => typeof step?.label === 'string' && step.label.trim().length > 0)
+    : []
+  const latestLabel = steps[steps.length - 1]?.label.trim()
+  const statusLabel = run.status === 'running' ? '执行中' : run.status === 'succeeded' ? '已完成' : '失败'
+  const statusColor = run.status === 'running' ? 'processing' : run.status === 'succeeded' ? 'success' : 'error'
+  const usageItems = run.usage
+    ? [
+        ['模型调用', run.usage.model_calls],
+        ['工具调用', run.usage.tool_calls],
+        ['输入 token', run.usage.input_tokens],
+        ['输出 token', run.usage.output_tokens],
+      ].filter(([, value]) => typeof value === 'number')
+    : []
+
+  return (
+    <section className="detail-agent-activity" aria-labelledby="detail-agent-activity-heading">
+      <div className="detail-agent-activity-heading">
+        <Text strong id="detail-agent-activity-heading"><RobotOutlined /> Agent 执行记录</Text>
+        <Tag color={statusColor}>{statusLabel}</Tag>
+      </div>
+      {run.status === 'running' && <div className="detail-agent-latest"><Text type="secondary">最新进展</Text><Text>{latestLabel || '正在执行'}</Text></div>}
+      {run.status === 'failed' && <Alert className="detail-agent-failure" type="error" showIcon message="分析失败" description={run.error || '分析任务失败，未返回具体原因'} action={<Button type="link" size="small" loading={retrying} onClick={onRetry}>重新分析</Button>} />}
+      {run.status === 'succeeded' && <Text className="detail-agent-complete" type="secondary">分析已完成，执行步骤已记录。</Text>}
+      {steps.length > 0 && <Collapse ghost items={[{ key: 'agent-steps', label: `查看执行步骤（${steps.length}）`, children: <ol className="detail-agent-step-list">{steps.map((step, index) => <li key={`${step.at}-${index}`}><span>{step.label}</span><Text type="secondary">{formatDate(step.at, true)}</Text></li>)}</ol> }]} />}
+      {usageItems.length > 0 && <div className="detail-agent-usage" aria-label="执行统计">{usageItems.map(([label, value]) => <span key={label}><Text type="secondary">{label}</Text><strong>{value}</strong></span>)}</div>}
+    </section>
   )
 }
 
