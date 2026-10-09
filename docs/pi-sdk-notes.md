@@ -73,7 +73,10 @@ candidate relations and not proof of the same project. A failed business-tool
 completion adds `is_error: true` to its `tool_end` progress event; successful
 `tool_end` events omit that field. A result is emitted only when the final
 assistant message has SDK stop reason `stop`; length, error, aborted, or tool-use
-termination is returned as a safe model error.
+termination is returned as a safe model error. Assistant text is capped during
+streaming and at finalization at an independent 256 KiB UTF-8 byte limit, and a
+final response containing the exact configured API key is rejected before it can
+be written to stdout.
 
 The integration test runs a local fake OpenAI-compatible SSE server. It verifies a
 tool request followed by execution and a second model response, bearer-key

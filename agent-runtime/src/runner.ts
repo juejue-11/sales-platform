@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 const PROTOCOL_VERSION = 1;
 const PROVIDER_ID = "sales-screening-runtime";
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
+const MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_MESSAGES = 64;
 const MAX_CONTENT_CHARS = 1_000_000;
 const DEFAULT_LIMITS = {
@@ -233,7 +234,7 @@ class ProtocolError extends Error {
 }
 
 class LimitError extends Error {
-  constructor(public readonly kind: "turn" | "tool" | "timeout") {
+  constructor(public readonly kind: "turn" | "tool" | "timeout" | "output") {
     super(kind);
     this.name = "LimitError";
   }
@@ -452,6 +453,7 @@ function normalizeError(error: unknown): ErrorEvent {
   if (error instanceof LimitError) {
     if (error.kind === "timeout") return { type: "error", code: "TIMEOUT", message: "The runtime deadline was exceeded." };
     if (error.kind === "turn") return { type: "error", code: "TURN_LIMIT", message: "The model turn limit was exceeded." };
+    if (error.kind === "output") return { type: "error", code: "MODEL_ERROR", message: "The model request failed." };
     return { type: "error", code: "TOOL_LIMIT", message: "The tool call limit was exceeded." };
   }
   if (error instanceof Error && error.message === "NO_FINAL") {
@@ -526,6 +528,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lastRunAssistant: AssistantMessage | undefined;
+  let outputBytes = 0;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "turn_start") {
       // turn_start is emitted before the provider request. Abort here so a
@@ -541,6 +544,14 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
       if (usage.model_calls > request.limits.max_turns && !limitError) {
         limitError = new LimitError("turn");
         void session.abort();
+      }
+    } else if (event.type === "message_update" && event.message.role === "assistant") {
+      if (event.assistantMessageEvent.type === "text_delta") {
+        outputBytes += Buffer.byteLength(event.assistantMessageEvent.delta, "utf8");
+        if (outputBytes > MAX_OUTPUT_BYTES && !limitError) {
+          limitError = new LimitError("output");
+          void session.abort();
+        }
       }
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       lastRunAssistant = event.message;
@@ -562,6 +573,9 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     if (!lastRunAssistant || lastRunAssistant.stopReason !== "stop") throw new Error("MODEL_ERROR");
     const content = session.getLastAssistantText()?.trim();
     if (!content) throw new Error("NO_FINAL");
+    if (Buffer.byteLength(content, "utf8") > MAX_OUTPUT_BYTES || content.includes(request.config.api_key)) {
+      throw new Error("MODEL_ERROR");
+    }
     emit(progress("completed", "完成分析"));
     return { type: "result", engine: "pi_sdk", content, usage };
   } catch (error) {
