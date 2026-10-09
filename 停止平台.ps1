@@ -10,6 +10,22 @@ $screeningCommand = Get-CimInstance Win32_Process -Filter "ProcessId = $($screen
 $screeningTimeMatches = [Math]::Abs(($screeningProcess.StartTime.ToUniversalTime() - ([datetime]$screeningServiceInfo.started_at).ToUniversalTime()).TotalSeconds) -lt 3
 if ($screeningProcess.Path -ne $screeningExpectedPython -or -not $screeningTimeMatches -or $screeningCommand.CommandLine -notmatch 'uvicorn.*backend\.main:app') { throw '进程身份与本平台启动记录不匹配，已取消停止操作。' }
 $screeningChildren = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($screeningProcess.Id)"
+$screeningOwnedPythonIds = @($screeningProcess.Id)
+foreach ($screeningChild in $screeningChildren) {
+    if ($screeningChild.Name -eq 'python.exe' -and $screeningChild.CommandLine -match 'uvicorn.*backend\.main:app' -and $screeningChild.CommandLine -match "--port\s+$($screeningServiceInfo.port)(?:\s|$)") {
+        $screeningOwnedPythonIds += $screeningChild.ProcessId
+    }
+}
+# Only stop SDK runners that are direct children of the verified platform process.
+$screeningRunnerPath = [regex]::Escape((Join-Path $screeningRoot 'agent-runtime\dist\runner.js'))
+foreach ($screeningOwnerId in $screeningOwnedPythonIds) {
+    $screeningAgentChildren = Get-CimInstance Win32_Process -Filter "ParentProcessId = $screeningOwnerId"
+    foreach ($screeningAgentChild in $screeningAgentChildren) {
+        if ($screeningAgentChild.Name -eq 'node.exe' -and $screeningAgentChild.CommandLine -match $screeningRunnerPath) {
+            Stop-Process -Id $screeningAgentChild.ProcessId -ErrorAction SilentlyContinue
+        }
+    }
+}
 foreach ($screeningChild in $screeningChildren) {
     if ($screeningChild.Name -eq 'python.exe' -and $screeningChild.CommandLine -match 'uvicorn.*backend\.main:app' -and $screeningChild.CommandLine -match "--port\s+$($screeningServiceInfo.port)(?:\s|$)") {
         Stop-Process -Id $screeningChild.ProcessId -ErrorAction SilentlyContinue

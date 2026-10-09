@@ -77,6 +77,9 @@ def main():
     provider = ThreadingHTTPServer(('127.0.0.1', 8770), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     env = dict(os.environ, SCREENING_DB_PATH=str(test_data / 'screening.sqlite3'), SCREENING_IMPORT_PATH=str(source), PYTHONUTF8='1')
+    # This fixture implements non-streaming Chat Completions. The embedded SDK
+    # and tool loop are checked separately by pi_sdk_check.py with real SSE.
+    env['SCREENING_AI_ENGINE'] = 'single_call'
     env.pop('OPENAI_API_KEY', None)
     log = (test_data / 'server.log').open('w', encoding='utf-8')
     proc = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', '8767'], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)

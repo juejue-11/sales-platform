@@ -16,6 +16,16 @@ if (Test-Path -LiteralPath (Join-Path $screeningNodeDirectory 'node.exe')) { $en
 $screeningBundledPnpm = Join-Path $screeningRuntime 'bin\fallback\pnpm.cmd'
 if (Test-Path -LiteralPath $screeningBundledPnpm) { $screeningPnpm = $screeningBundledPnpm }
 else { $screeningPnpm = (Get-Command pnpm -ErrorAction Stop).Source }
+$screeningNode = (Get-Command node -ErrorAction Stop).Source
+$screeningNodeVersion = [version]((& $screeningNode -p 'process.versions.node').Trim())
+if ($screeningNodeVersion -lt [version]'22.19.0') { throw 'Pi SDK需要Node.js 22.19或更新版本，请更新Node后重新安装。' }
+Push-Location (Join-Path $screeningRoot 'agent-runtime')
+try {
+    & $screeningPnpm install --frozen-lockfile --ignore-scripts
+    if ($LASTEXITCODE -ne 0) { throw 'Pi SDK依赖安装失败。' }
+    & $screeningPnpm build
+    if ($LASTEXITCODE -ne 0) { throw 'Pi SDK分析组件构建失败。' }
+} finally { Pop-Location }
 Push-Location (Join-Path $screeningRoot 'frontend')
 try {
     & $screeningPnpm install --frozen-lockfile
@@ -23,4 +33,4 @@ try {
     & $screeningPnpm build
     if ($LASTEXITCODE -ne 0) { throw '前端构建失败。' }
 } finally { Pop-Location }
-Write-Host '依赖与前端已准备好。运行 启动平台.ps1 即可。'
+Write-Host '后端、Pi SDK分析组件与前端已准备好。运行 启动平台.ps1 即可。'
