@@ -29,9 +29,21 @@ gate_reasons: string[]
 ai_status: not_configured|idle|skipped|queued|running|succeeded|failed|stale
 ai_decision: recommend|consider|verify|not_recommended|null
 ai_summary: string|null
+demand_summary: string|null
+ai_next_actions: string[]
+briefing: {
+  record_id: number|null
+  scope_excerpt: string
+  delivery_excerpt: string
+  qualification_excerpt: string
+  contact_excerpt: string
+  original_url: string|null
+}
 needs_review: boolean
 decision: {status: new|following|verify|closed, owner: string, next_action: string, note: string, selected_option_id: string|null, judgment_id?:number|null, updated_at: string|null}
 ```
+
+`briefing`来自项目最新记录的`body_text`确定性原文摘录，不调用AI；未知字段为空字符串，新闻仅允许正文实质范围摘录，资格与交付字段为空。摘要中的`demand_summary`和`ai_next_actions`仅来自当前未过期、未阻塞的真实判断。
 
 Judgment:
 ```
@@ -50,7 +62,7 @@ options:{id:string,title:string,description:string,suitable_for:string,tradeoffs
 
 - `GET /api/health` => `{ok:true,app:"sales-screening"}`
 - `GET /api/dashboard` => `{total_records,total_projects,gate_counts,ai_counts,ai_decision_counts,decision_counts,deadline_soon:ProjectSummary[],deadline_soon_count,data_updated_at:string|null,last_import_at,import_error:string|null,file_stale,import_pending,source_notes,ai_configured:boolean}`。统计覆盖全部项目，截止预览最多30条；推荐仅使用有效AI结论。
-- `GET /api/projects?q=&gate=&ai_status=&ai_decision=&decision=&kind=&source_id=&deadline_soon=false&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；sort支持updated、deadline；deadline_soon筛选未来7天截止且可继续处理的项目。
+- `GET /api/projects?q=&gate=&ai_status=&ai_decision=&decision=&kind=&source_id=&deadline_soon=false&active_only=false&page=1&page_size=30&sort=updated` => `{items:ProjectSummary[],total:number,page:number,page_size:number}`。过滤空值表示全部；`active_only=true`仅返回`candidate`/`review`项目；sort支持updated、deadline；deadline_soon筛选未来7天截止且可继续处理的项目。`q`同时搜索标题、采购方、设备和`briefing.scope_excerpt`。
 - `GET /api/projects/{id}` => summary字段加 `{records:Record[],judgment:Judgment|null,judgment_history:Judgment[],decision_history:object[],related_projects:ProjectSummary[],versions:object[]}`。Record保留id/title/body_text/facts/inferences/original_url/canonical_url/archive_path/parse_status/possible_duplicate_of/related_record_id等采集字段。关联提示不自动合并，只有可靠标识才能合并；人工关联另外留痕。
 - `POST /api/projects/{id}/analyze` body `{force?:boolean}` => `{job_id:number|null,status:string,message:string}`。排队异步执行。
 - `POST /api/projects/{id}/decision` body `{status,owner,next_action,note,selected_option_id:string|null,judgment_id?:number|null}` => 更新后ProjectSummary。选择方案时必须附judgment_id且等于当前非过期判断的id，否则409；纯人工决定无需id。人工决定保存历史，重判不覆盖。
