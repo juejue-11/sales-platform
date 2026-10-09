@@ -45,7 +45,7 @@ const initialQuery: OpportunityQuery = {
   active_only: true,
   page: 1,
   page_size: 12,
-  sort: 'deadline',
+  sort: 'updated',
 }
 
 function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 'ai_decision_counts' | 'decision_counts', key: string): number {
@@ -54,7 +54,7 @@ function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 
 
 function tabQuery(key: OpportunityTabKey): OpportunityQuery {
   const base = { ...initialQuery }
-  if (key === 'all') return { ...base, active_only: false, sort: 'deadline' }
+  if (key === 'all') return { ...base, active_only: false, sort: 'updated' }
   if (key === 'ai') return { ...base, active_only: false, ai_decision: 'recommend', sort: 'updated' }
   if (key === 'review') return { ...base, gate: 'review' }
   if (key === 'deadline') return { ...base, deadline_soon: true, sort: 'deadline' }
@@ -212,14 +212,9 @@ export function useOpportunityDesk() {
     { key: 'queued', label: '等待分析', count: count(dashboard, 'ai_counts', 'queued') },
   ], [dashboard])
 
-  const deadlineProjects = dashboard?.deadline_soon ?? []
   const activeProjects = projects.filter((project) => project.gate_status === 'candidate' || project.gate_status === 'review')
-  const deadlineFocus = useMemo(() => deadlineProjects
-    .filter((project) => Boolean(project.deadline_at) && (project.gate_status === 'candidate' || project.gate_status === 'review'))
-    .slice()
-    .sort((left, right) => new Date(left.deadline_at as string).getTime() - new Date(right.deadline_at as string).getTime())[0] ?? null, [deadlineProjects])
-  const featured = deadlineFocus ?? activeProjects[0] ?? null
-  const featuredBasis = deadlineFocus ? '按截止时间展示' : featured ? '当前采购' : '等待采购数据'
+  const featured = activeProjects[0] ?? null
+  const featuredBasis = featured ? '按资料更新时间展示' : '等待采购数据'
 
   return {
     dashboard,

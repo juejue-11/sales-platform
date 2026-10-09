@@ -35,7 +35,7 @@ export function FeaturedOpportunity({ project, basis, loading, onOpen }: Feature
       ) : project ? (
         <>
           <div className="opportunity-feature-main">
-            <div className="opportunity-feature-kicker"><span>当前采购</span><span>{basis}</span></div>
+            <div className="opportunity-feature-kicker"><span>最新采购</span><span>{basis}</span></div>
             <h1 id="featured-opportunity-heading">{cleanOpportunityTitle(project.title) || '未命名采购项目'}</h1>
             <div className="opportunity-feature-meta">
               <span>{project.buyer || '采购方未标明'}</span>
@@ -47,6 +47,7 @@ export function FeaturedOpportunity({ project, basis, loading, onOpen }: Feature
               <span className="opportunity-label">采购范围</span>
               <p>{scopeFor(project)}</p>
             </div>
+            {project.briefing?.delivery_excerpt && <div className="opportunity-feature-delivery"><span className="opportunity-label">交付要求</span><p>{project.briefing.delivery_excerpt}</p></div>}
             <Button className="opportunity-feature-action" type="primary" onClick={() => onOpen(project.id)} icon={<ArrowRightOutlined />}>
               进入研判
             </Button>
@@ -72,7 +73,7 @@ export function FeaturedOpportunity({ project, basis, loading, onOpen }: Feature
         <div className="opportunity-feature-empty">
           <span className="opportunity-label">当前采购</span>
           <h1 id="featured-opportunity-heading">等待采购数据</h1>
-          <p>尚未读取到候选或待核实项目，数据进入后会按截止时间展示在这里。</p>
+          <p>尚未读取到候选或待核实项目，数据进入后会在这里展示最新采购需求。</p>
         </div>
       )}
     </section>

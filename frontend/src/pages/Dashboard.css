@@ -130,6 +130,9 @@
   overflow-wrap: anywhere;
 }
 
+.opportunity-feature-delivery { margin-top: 18px; }
+.opportunity-feature-delivery p { max-width: 78ch; margin: 8px 0 0; color: #F7F9FD; font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; }
+
 .opportunity-feature-mobile-deadline {
   display: none;
 }

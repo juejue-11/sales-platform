@@ -20,7 +20,7 @@ export function cleanOpportunityTitle(value: string | null | undefined): string 
 function sectionBreaks(value: string): string {
   // This intentionally matches 3.1 / 3.1.1 style section numbers only.
   // A value such as 200.0 (万元) must remain a monetary amount.
-  return value.replace(/(?<![\d.])(?=(?:[2-9]|[1-9]\d)\.\s*(?:[1-9]\d?)(?:\.\s*[1-9]\d?)*(?=[本投供资财业信能其招采项要不有中工地交质详施]))/g, '\n')
+  return value.replace(/(?<![\d.])(?=(?:[1-9]\d?)\.\s*(?:[1-9]\d?)(?:\.\s*[1-9]\d?)*(?=[本投供资财业信能其招采项要不有中工地交质详施]))/g, '\n')
 }
 
 export function cleanScopeExcerpt(value: string | null | undefined, title?: string | null): string {
@@ -30,7 +30,7 @@ export function cleanScopeExcerpt(value: string | null | undefined, title?: stri
   const cleanedTitle = cleanOpportunityTitle(title)
   const titleAppearsInScope = Boolean(cleanedTitle && normalized.includes(cleanedTitle))
   if (attachmentSentence && titleAppearsInScope && /招标失败/.test(normalized)) return attachmentSentence
-  const withoutLabel = normalized.replace(/^(?:招标范围|项目概况与招标范围)\s*/, '')
+  const withoutLabel = normalized.replace(/^(?:招标范围|采购范围|项目概况与招标范围)\s*[:：]?\s*/, '')
   return sectionBreaks(withoutLabel.replace(/^2\.1\s*(?:项目名称|项目概况与招标范围)?\s*[:：]?\s*/, '').trim())
 }
 
@@ -45,8 +45,13 @@ export function qualificationHighlights(value: string | null | undefined, count 
   const cleaned = cleanQualificationExcerpt(value)
   if (!cleaned) return ''
   const parts = cleaned.split('\n').filter(Boolean)
-  const highlights = parts.slice(0, count).join('\n')
-  return parts.length > count ? `${highlights}\n其余条件见下方原文摘录` : highlights
+  const numbered = parts.filter((part) => /^\d+\.\d+/.test(part))
+  const selected = (numbered.length ? numbered : parts).slice(0, count)
+  const highlights = selected.map((part) => {
+    const sentence = part.match(/^[^。；]+[。；]?/)?.[0] ?? part
+    return sentence.length > 150 ? `${sentence.slice(0, 150)}…` : sentence
+  }).join('\n')
+  return `${highlights}\n完整条件请展开原文核对`
 }
 
 export function isTodayShanghai(value: string | null | undefined): boolean {
