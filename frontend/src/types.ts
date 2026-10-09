@@ -13,6 +13,16 @@ export interface Decision {
   updated_at: string | null
 }
 
+/** Procurement facts surfaced on the opportunity desk without opening a detail page. */
+export interface ProjectBriefing {
+  record_id: number | null
+  scope_excerpt: string
+  delivery_excerpt: string
+  qualification_excerpt: string
+  contact_excerpt: string
+  original_url: string | null
+}
+
 export interface ProjectSummary {
   id: number
   title: string
@@ -31,6 +41,10 @@ export interface ProjectSummary {
   ai_summary: string | null
   needs_review: boolean
   decision: Decision
+  /** Optional while older API responses are still in circulation. */
+  briefing?: ProjectBriefing | null
+  demand_summary?: string | null
+  ai_next_actions?: string[]
 }
 
 export interface Evidence {
