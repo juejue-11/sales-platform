@@ -215,6 +215,42 @@ test("length-terminated JSON-looking output is not reported as completed", async
   }
 });
 
+test("a single oversized SSE text chunk is aborted before completion", async () => {
+  const oversized = "界".repeat(90_000);
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      { id: "chatcmpl-oversized", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: oversized }, finish_reason: null }] },
+      { id: "chatcmpl-oversized", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
+    assert.ok(!result.lines.some((line) => line.type === "result"));
+    assert.ok(!result.lines.some((line) => line.type === "progress" && line.stage === "completed"));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("API key echoed in final JSON is rejected without stdout or stderr leakage", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      { id: "chatcmpl-echo", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"recommend","summary":"request-key"}' }, finish_reason: null }] },
+      { id: "chatcmpl-echo", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
+    assert.ok(!result.lines.some((line) => line.type === "result"));
+    assert.ok(!JSON.stringify(result.lines).includes("request-key"));
+    assert.ok(!result.stderr.includes("request-key"));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 async function assertToolCap(cap: number, expectedReads: number, expectedErrors: number): Promise<void> {
   const fake = await startFakeServer((_body, response) => {
     streamResponse(response, [
