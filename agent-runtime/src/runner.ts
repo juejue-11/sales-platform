@@ -84,6 +84,7 @@ interface ProgressEvent {
   label: string;
   tool?: ToolName;
   turn?: number;
+  is_error?: true;
   at: string;
 }
 
@@ -243,6 +244,7 @@ function progress(
   label: string,
   tool?: ToolName,
   turn?: number,
+  isError = false,
 ): ProgressEvent {
   return {
     type: "progress",
@@ -250,6 +252,7 @@ function progress(
     label,
     ...(tool ? { tool } : {}),
     ...(turn === undefined ? {} : { turn }),
+    ...(isError ? { is_error: true as const } : {}),
     at: new Date().toISOString(),
   };
 }
@@ -291,7 +294,7 @@ function normalizeRecords(project: JsonObject): JsonObject[] {
   return Array.isArray(records) ? records.filter(isObject) : [];
 }
 
-function makeTools(context: RuntimeContext): ToolDefinition[] {
+function makeTools(context: RuntimeContext, reserveToolCall: () => boolean): ToolDefinition[] {
   const readProjectRecords = defineTool({
     name: "read_project_records",
     label: "读取项目记录",
@@ -302,6 +305,7 @@ function makeTools(context: RuntimeContext): ToolDefinition[] {
       query: Type.Optional(Type.String()),
     }),
     execute: async (_toolCallId, params) => {
+      if (!reserveToolCall()) throw new LimitError("tool");
       const records = normalizeRecords(context.project);
       const id = valueId(params.record_id);
       const query = typeof params.query === "string" ? params.query.trim().toLocaleLowerCase() : "";
@@ -323,6 +327,7 @@ function makeTools(context: RuntimeContext): ToolDefinition[] {
       topic: Type.Optional(Type.String()),
     }),
     execute: async (_toolCallId, params) => {
+      if (!reserveToolCall()) throw new LimitError("tool");
       const topic = typeof params.topic === "string" ? params.topic.trim().toLocaleLowerCase() : "";
       if (!topic) return textResult({ company_capability_card: context.company_capability_card }, "context.company_capability_card");
       const matches: JsonObject = {};
@@ -342,6 +347,7 @@ function makeTools(context: RuntimeContext): ToolDefinition[] {
       project_id: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     }),
     execute: async (_toolCallId, params) => {
+      if (!reserveToolCall()) throw new LimitError("tool");
       const id = valueId(params.project_id);
       const projects = context.related_projects
         .filter((project) => id === undefined || valueId(project.id ?? project.project_id) === id)
@@ -488,7 +494,18 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     retry: { enabled: false },
   });
   const resourceLoader = emptyResourceLoader(request.messages[0].content);
-  const tools = makeTools(request.context);
+  let limitError: LimitError | undefined;
+  let abortSession: (() => void) | undefined;
+  const reserveToolCall = (): boolean => {
+    if (usage.tool_calls >= request.limits.max_tool_calls) {
+      limitError ??= new LimitError("tool");
+      abortSession?.();
+      return false;
+    }
+    usage.tool_calls += 1;
+    return true;
+  };
+  const tools = makeTools(request.context, reserveToolCall);
   const { session } = await createAgentSession({
     cwd: "sales-screening-agent",
     agentDir: "sales-screening-agent",
@@ -504,7 +521,9 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     customTools: tools,
   });
 
-  let limitError: LimitError | undefined;
+  abortSession = () => {
+    void session.abort();
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "turn_start") {
@@ -525,14 +544,9 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       addUsage(usage, event.message);
     } else if (event.type === "tool_execution_start" && TOOL_NAME_SET.has(event.toolName)) {
-      usage.tool_calls += 1;
       emit(progress("tool_start", "读取业务资料", event.toolName as ToolName));
-      if (usage.tool_calls > request.limits.max_tool_calls && !limitError) {
-        limitError = new LimitError("tool");
-        void session.abort();
-      }
     } else if (event.type === "tool_execution_end" && TOOL_NAME_SET.has(event.toolName)) {
-      emit(progress("tool_end", "业务资料读取完成", event.toolName as ToolName));
+      emit(progress("tool_end", "业务资料读取完成", event.toolName as ToolName, undefined, event.isError === true));
     }
   });
 

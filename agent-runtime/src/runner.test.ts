@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runRequest, type RuntimeRequest } from "./runner.js";
 
 interface CapturedRequest {
   body: Record<string, unknown>;
@@ -192,6 +193,88 @@ test("normalizes a configured chat completions URL before the SDK appends its pa
     const result = await runRunner(input);
     assert.equal(result.lines.at(-1)?.type, "result");
     assert.equal(fake.requests[0].url, "/v1/chat/completions");
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+async function assertToolCap(cap: number, expectedReads: number, expectedErrors: number): Promise<void> {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      assistantToolCallChunk(),
+      { id: "chatcmpl-cap", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const input = requestFor(fake.url, {
+      limits: { max_turns: 6, max_tool_calls: cap, timeout_ms: 10_000, max_output_tokens: 512 },
+    }) as unknown as RuntimeRequest;
+    let reads = 0;
+    const context = input.context as unknown as Record<string, unknown>;
+    const project = context.project as Record<string, unknown>;
+    Object.defineProperty(project, "records", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return [{ id: "record-1", body_text: "采购储能系统" }];
+      },
+    });
+    Object.defineProperty(context, "company_capability_card", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return { capabilities: ["储能系统集成"] };
+      },
+    });
+    Object.defineProperty(context, "related_projects", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return [{ id: "related-1", title: "候选关联", relation: "possible_duplicate", records: [] }];
+      },
+    });
+    const events: Record<string, unknown>[] = [];
+    await assert.rejects(
+      runRequest(input, (event) => events.push(event as unknown as Record<string, unknown>)),
+      (error: unknown) => error instanceof Error && error.message === "tool",
+    );
+    assert.equal(reads, expectedReads);
+    assert.equal(fake.requests.length, 1);
+    const toolEnds = events.filter((event) => event.type === "progress" && event.stage === "tool_end");
+    assert.equal(toolEnds.length, 3);
+    assert.equal(toolEnds.filter((event) => event.is_error === true).length, expectedErrors);
+    assert.ok(toolEnds.filter((event) => event.is_error !== true).every((event) => !Object.hasOwn(event, "is_error")));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+}
+
+test("max_tool_calls=0 blocks every business read before execution", async () => {
+  await assertToolCap(0, 0, 3);
+});
+
+test("max_tool_calls=1 allows only one business read", async () => {
+  await assertToolCap(1, 1, 2);
+});
+
+test("deadline aborts a hanging provider without exposing its secret", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    setTimeout(() => {
+      if (response.destroyed || response.writableEnded) return;
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "provider timed out with request-key" }));
+    }, 1_000);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url, {
+      limits: { max_turns: 6, max_tool_calls: 12, timeout_ms: 250, max_output_tokens: 512 },
+    }));
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "TIMEOUT", message: "The runtime deadline was exceeded." });
+    assert.equal(fake.requests.length, 1);
+    assert.ok(!JSON.stringify(result.lines).includes("request-key"));
   } finally {
     await new Promise<void>((resolve) => fake.server.close(() => resolve()));
   }
