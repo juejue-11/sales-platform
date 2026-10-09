@@ -73,6 +73,8 @@ export function isTodayShanghai(value: string | null | undefined): boolean {
 export function procurementTeaser(value: string | null | undefined, title?: string | null): string {
   const cleaned = cleanScopeExcerpt(value, title)
   if (!cleaned) return ''
+  const tableCue = cleaned.match(/(?:本次采购共\s*\d+\s*个包段|设备名称及数量见下表|明细见[^。；]{0,8}需求一览表)/)?.[0]
+  if (tableCue) return tableCue.replace(/\s+/g, ' ').trim()
   const clauses = cleaned
     .split(/(?<=[。！？；;])\s*|\n+/)
     .map((part) => part.replace(/^[\s:：,，。；;]+|[\s:：,，。；;]+$/g, '').trim())
@@ -82,7 +84,10 @@ export function procurementTeaser(value: string | null | undefined, title?: stri
   const highSignal = clauses.find((part) => /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|型号|交货期|交期|工期|服务期|采购|设备|工程|施工|备件|材料/.test(part))
   const selected = highSignal ?? clauses[0] ?? ''
   if (!selected) return ''
-  return selected.length > 120 ? `${selected.slice(0, 117).trimEnd()}…` : selected
+  if (selected.length <= 120) return selected
+  const concise = selected.match(/[^。；;]{0,72}(?:\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|交货期|交期|工期|服务期)[^。；;]{0,46}/)?.[0]
+  const result = concise?.trim() || selected.slice(0, 117).trimEnd()
+  return result.length > 120 ? `${result.slice(0, 117).trimEnd()}…` : result
 }
 
 function sourceFact(value: string, pattern: RegExp, label: string, limit = 34): string {
@@ -106,7 +111,8 @@ export function procurementFacts(
   const quantity = sourceFact(scopeText, /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)/, '数量')
   if (quantity) facts.push(quantity)
 
-  const deliveryFact = sourceFact(`${deliveryText} ${scopeText}`, /(?:交货期|交期|工期|服务期)\s*[:：]?\s*[^。；;\n]{1,42}/, '交付')
+  const deliveryPattern = /(?:交货期|交期|工期|服务期)\s*(?:\([^)]*\))?\s*[:：]?\s*[^。；;\n]{1,42}/
+  const deliveryFact = sourceFact(scopeText, deliveryPattern, '交付') || sourceFact(deliveryText, deliveryPattern, '交付')
   if (deliveryFact && facts.length < 2) facts.push(deliveryFact)
 
   if (facts.length < 2) {
