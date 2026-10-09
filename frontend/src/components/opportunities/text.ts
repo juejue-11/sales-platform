@@ -24,8 +24,8 @@ export function compactOpportunityTitle(value: string | null | undefined): strin
   const withoutCode = title.replace(/^[A-Z]{2,}(?:-[A-Z0-9]+){2,}\s*/i, '').trim()
   const afterProcurement = withoutCode.match(/(?:采购|生产设备采购)\s*[-—]\s*([^。]+)$/)?.[1]?.trim()
   const candidate = afterProcurement || withoutCode.match(/项目\s*([^。]{2,32})$/)?.[1]?.trim()
-  if (!candidate || !/(?:设备|机|泵|车|库|材料|备件|电缆|工程|机器人|生产线|支柱|电机|清洗)/.test(candidate)) return withoutCode
-  return candidate.replace(/(?:GHY|HYCG)[-_A-Z0-9]*$/i, '').trim() || withoutCode
+  if (!candidate || !/(?:设备|机|泵|车|库|材料|备件|电缆|工程|机器人|生产线|支柱|电机|清洗|床|卷板)/.test(candidate)) return withoutCode
+  return candidate.replace(/^[-—\s]+/, '').replace(/(?:GHY|HYCG)[-_A-Z0-9]*$/i, '').trim() || withoutCode
 }
 
 function sectionBreaks(value: string): string {
@@ -83,9 +83,11 @@ export function isTodayShanghai(value: string | null | undefined): boolean {
  */
 export function procurementTeaser(value: string | null | undefined, title?: string | null): string {
   const cleaned = cleanScopeExcerpt(value, title)
-  if (!cleaned) return ''
-  const tableCue = cleaned.match(/(?:本次采购共\s*\d+\s*个包段|设备名称及数量见下表|明细见[^。；]{0,8}需求一览表)/)?.[0]
-  const clauses = cleaned
+  const fallback = normalizeOpportunityText(value).replace(/^(?:招标范围|采购范围)\s*[:：]?\s*/, '').trim()
+  const source = cleaned && !/^本项目招标内容、范围及规模详见附件/.test(cleaned) ? cleaned : fallback
+  if (!source) return ''
+  const tableCue = source.match(/(?:本次采购共\s*\d+\s*个包段|设备名称及数量见下表|明细见[^。；]{0,8}需求一览表)/)?.[0]
+  const clauses = source
     .split(/(?<=[。！？；;,，])\s*|\n+/)
     .map((part) => part.replace(/^[\s:：,，。；;]+|[\s:：,，。；;]+$/g, '').trim())
     .filter((part) => part.length > 0)
@@ -97,9 +99,15 @@ export function procurementTeaser(value: string | null | undefined, title?: stri
   const timing = usableClauses.find((part) => /交货期|交期|工期|服务期/.test(part))
   const selected = specific ?? broad ?? tableCue ?? timing ?? clauses[0] ?? ''
   if (!selected) return ''
-  const readable = selected.replace(/^(?:项目概况|采购范围|招标范围)\s*[:：]?\s*/, '').trim()
-  if (readable.length <= 120) return readable
-  const concise = readable.match(/[^。；;]{0,72}(?:\d+(?:\.\d+)?\s*(?:台|套|根|项(?!目)|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|交货期|交期|工期|服务期)[^。；;]{0,46}/)?.[0]
+  const readable = selected.replace(/^\d+\.\d+\s*/, '').replace(/^(?:项目概况|项目名称|采购范围|招标范围)\s*[:：]?\s*/, '').trim()
+  const sectionLead = readable.split(/\d+\.\d+/)[0]?.trim() ?? readable
+  const focused = sectionLead.length >= 12 ? sectionLead : readable
+  const quantityCue = focused.match(/[^，,：:；。]{0,48}\d+(?:\.\d+)?\s*(?:台|套|根|项(?!目)|件|个|批|条|米|吨|组|标段|包)[^，,；。]{0,35}/)?.[0]
+    ?.replace(/\s*\d+\.\d+.*$/, '')
+    .trim()
+  if (quantityCue && quantityCue.length < readable.length) return quantityCue
+  if (focused.length <= 120) return focused
+  const concise = quantityCue || readable.match(/[^。；;]{0,72}(?:额定负载|规格型号|交货期|交期|工期|服务期)[^。；;]{0,46}/)?.[0]
   const result = concise?.trim() || readable.slice(0, 117).trimEnd()
   return result.length > 120 ? `${result.slice(0, 117).trimEnd()}…` : result
 }
