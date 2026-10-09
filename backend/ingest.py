@@ -227,6 +227,10 @@ def _merge_projects(db: sqlite3.Connection, source_id: int, target_id: int) -> i
     db.execute("UPDATE links SET project_id=? WHERE project_id=?", (target_id, source_id))
     db.execute("UPDATE links SET target_project_id=? WHERE target_project_id=?", (target_id, source_id))
     db.execute("DELETE FROM projects WHERE id=?", (source_id,))
+    # A merge changes the primary record set and any bounded related context.
+    # Preserve old judgments as history, but never leave the moved project's
+    # latest conclusion selectable as if its inputs were unchanged.
+    _mark_stale(db, target_id)
     return target_id
 
 
