@@ -35,7 +35,7 @@ export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProp
       data-testid="opportunity-item"
       to={`/projects/${project.id}`}
       onClick={() => onOpen?.(project.id)}
-      aria-label={`查看项目详情：${title}`}
+      aria-label={`查看项目详情：${project.title || title}`}
     >
       <article className="opportunity-feed-card">
         <div className="opportunity-feed-heading">

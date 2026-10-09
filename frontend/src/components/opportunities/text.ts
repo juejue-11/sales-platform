@@ -85,19 +85,22 @@ export function procurementTeaser(value: string | null | undefined, title?: stri
   const cleaned = cleanScopeExcerpt(value, title)
   if (!cleaned) return ''
   const tableCue = cleaned.match(/(?:本次采购共\s*\d+\s*个包段|设备名称及数量见下表|明细见[^。；]{0,8}需求一览表)/)?.[0]
-  if (tableCue) return tableCue.replace(/\s+/g, ' ').trim()
   const clauses = cleaned
-    .split(/(?<=[。！？；;])\s*|\n+/)
+    .split(/(?<=[。！？；;,，])\s*|\n+/)
     .map((part) => part.replace(/^[\s:：,，。；;]+|[\s:：,，。；;]+$/g, '').trim())
     .filter((part) => part.length > 0)
     .filter((part) => !/^(?:招标方式|资金落实情况|招标失败转其他采购方式|本项目招标内容、范围及规模详见附件)/.test(part))
 
-  const highSignal = clauses.find((part) => /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|型号|交货期|交期|工期|服务期|采购|设备|工程|施工|备件|材料/.test(part))
-  const selected = highSignal ?? clauses[0] ?? ''
+  const usableClauses = clauses.filter((part) => !/(?:设备名称及数量见下表|规格型号\s*单位\s*数量|包号\s*设备)/.test(part) && !/^\d+\.\d+\s*设备?$/.test(part))
+  const specific = usableClauses.find((part) => /\d+(?:\.\d+)?\s*(?:台|套|根|项(?!目)|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|型号/.test(part))
+  const broad = usableClauses.find((part) => /采购|设备|工程|施工|备件|材料|电机|电缆|压裂|输送机|支柱|机器人|清洗机|钻孔|破碎机/.test(part))
+  const timing = usableClauses.find((part) => /交货期|交期|工期|服务期/.test(part))
+  const selected = specific ?? broad ?? tableCue ?? timing ?? clauses[0] ?? ''
   if (!selected) return ''
-  if (selected.length <= 120) return selected
-  const concise = selected.match(/[^。；;]{0,72}(?:\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|交货期|交期|工期|服务期)[^。；;]{0,46}/)?.[0]
-  const result = concise?.trim() || selected.slice(0, 117).trimEnd()
+  const readable = selected.replace(/^(?:项目概况|采购范围|招标范围)\s*[:：]?\s*/, '').trim()
+  if (readable.length <= 120) return readable
+  const concise = readable.match(/[^。；;]{0,72}(?:\d+(?:\.\d+)?\s*(?:台|套|根|项(?!目)|件|个|批|条|米|吨|组|标段|包)|额定负载|规格型号|交货期|交期|工期|服务期)[^。；;]{0,46}/)?.[0]
+  const result = concise?.trim() || readable.slice(0, 117).trimEnd()
   return result.length > 120 ? `${result.slice(0, 117).trimEnd()}…` : result
 }
 
@@ -119,7 +122,7 @@ export function procurementFacts(
   const scopeText = normalizeOpportunityText(scope)
   const deliveryText = normalizeOpportunityText(delivery)
   const facts: string[] = []
-  const quantity = sourceFact(scopeText, /\d+(?:\.\d+)?\s*(?:台|套|根|项|件|个|批|条|米|吨|组|标段|包)/, '数量')
+  const quantity = sourceFact(scopeText, /\d+(?:\.\d+)?\s*(?:台|套|根|项(?!目)|件|个|批|条|米|吨|组|标段|包)/, '数量')
   if (quantity) facts.push(quantity)
 
   const deliveryPattern = /(?:交货期|交期|工期|服务期)\s*(?:\([^)]*\))?\s*[:：]?\s*[^。；;\n]{1,42}/
@@ -127,7 +130,8 @@ export function procurementFacts(
   if (deliveryFact && facts.length < 2) facts.push(deliveryFact)
 
   if (facts.length < 2) {
-    const specFact = sourceFact(scopeText, /(?:额定负载|规格型号|型号|功率|B\s*=|V\s*=|kW|MPa)\s*[:：]?\s*[^。；;\n]{1,32}/, '规格')
+    const hasTableHeader = /(?:设备名称及数量见下表|规格型号\s*单位\s*数量|包号\s*设备)/.test(scopeText)
+    const specFact = !hasTableHeader && sourceFact(scopeText, /(?:额定负载\s*[:：]?\s*[^。；;\n]{1,32}|(?:规格型号|型号)\s*[:：]?\s*[A-Za-z0-9][^。；;\n]{1,32}|(?:功率|B\s*=|V\s*=|kW|MPa)\s*[:：=]?\s*[^。；;\n]{1,32})/, '规格')
     if (specFact) facts.push(specFact)
   }
 
