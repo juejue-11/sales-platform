@@ -2,6 +2,7 @@ import { Button, Skeleton } from 'antd'
 import { ArrowRightOutlined, CalendarOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import type { ProjectSummary } from '../../types'
 import { formatDate, kindLabel, sourceLabel } from '../Common'
+import { cleanOpportunityTitle, cleanScopeExcerpt, isTodayShanghai, qualificationHighlights } from './text'
 
 interface FeaturedOpportunityProps {
   project: ProjectSummary | null
@@ -14,16 +15,19 @@ function missing(value: string | null | undefined): string {
   return value?.trim() || '暂未识别，请展开原文核对。'
 }
 
-function excerpt(value: string | null | undefined, limit: number): string {
-  const text = missing(value)
-  return text.length > limit ? `${text.slice(0, limit)}…` : text
+function scopeFor(project: ProjectSummary): string {
+  const cleaned = cleanScopeExcerpt(project.briefing?.scope_excerpt, project.title)
+  const text = cleaned || missing(null)
+  return text.length > 240 ? `${text.slice(0, 240)}…` : text
 }
 
-function scopeFor(project: ProjectSummary): string {
-  return excerpt(project.briefing?.scope_excerpt, 240)
+function deadlineCopy(value: string | null): { label: string; date: string } {
+  if (!value) return { label: '截止日期未提供', date: '暂未识别，请展开原文核对。' }
+  return { label: isTodayShanghai(value) ? '今天截止' : '截止日期', date: formatDate(value, true) }
 }
 
 export function FeaturedOpportunity({ project, basis, loading, onOpen }: FeaturedOpportunityProps) {
+  const deadline = project ? deadlineCopy(project.deadline_at) : null
   return (
     <section className="opportunity-feature" data-testid="featured-opportunity" aria-labelledby="featured-opportunity-heading">
       {loading && !project ? (
@@ -32,12 +36,13 @@ export function FeaturedOpportunity({ project, basis, loading, onOpen }: Feature
         <>
           <div className="opportunity-feature-main">
             <div className="opportunity-feature-kicker"><span>当前采购</span><span>{basis}</span></div>
-            <h1 id="featured-opportunity-heading">{project.title || '未命名采购项目'}</h1>
+            <h1 id="featured-opportunity-heading">{cleanOpportunityTitle(project.title) || '未命名采购项目'}</h1>
             <div className="opportunity-feature-meta">
               <span>{project.buyer || '采购方未标明'}</span>
               <span>{kindLabel(project.kind)}</span>
               <span>{sourceLabel(project.source_id)}</span>
             </div>
+            {deadline && <div className="opportunity-feature-mobile-deadline"><span className="opportunity-label">截止时间</span><strong>{deadline.label}</strong><time dateTime={project.deadline_at ?? undefined}>{deadline.date}</time></div>}
             <div className="opportunity-feature-scope">
               <span className="opportunity-label">采购范围</span>
               <p>{scopeFor(project)}</p>
@@ -47,13 +52,15 @@ export function FeaturedOpportunity({ project, basis, loading, onOpen }: Feature
             </Button>
           </div>
           <aside className="opportunity-feature-aside" aria-label="采购截止与资格要求">
-            <div className="opportunity-feature-fact">
-              <span className="opportunity-label"><CalendarOutlined aria-hidden="true" /> 截止日期</span>
-              <time dateTime={project.deadline_at ?? undefined}>{formatDate(project.deadline_at, true)}</time>
+            <div className="opportunity-feature-fact opportunity-feature-aside-deadline">
+              <div className="opportunity-feature-deadline-block">
+                <span className="opportunity-label"><CalendarOutlined aria-hidden="true" /> {deadline?.label ?? '截止日期'}</span>
+                <time dateTime={project.deadline_at ?? undefined}>{deadline?.date ?? '暂未识别，请展开原文核对。'}</time>
+              </div>
             </div>
             <div className="opportunity-feature-fact">
               <span className="opportunity-label"><SafetyCertificateOutlined aria-hidden="true" /> 参与要求</span>
-              <p>{excerpt(project.briefing?.qualification_excerpt, 180)}</p>
+              <p>{qualificationHighlights(project.briefing?.qualification_excerpt) || missing(null)}</p>
             </div>
             <div className="opportunity-feature-fact opportunity-feature-published">
               <span className="opportunity-label">发布时间</span>

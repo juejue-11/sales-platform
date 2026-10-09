@@ -40,7 +40,7 @@ export function DashboardPage() {
         </section>
       )}
 
-      <FeaturedOpportunity project={desk.featured} basis={desk.featuredBasis} loading={desk.loadingDashboard || desk.loadingProjects} onOpen={(id) => navigate(`/projects/${id}`)} />
+      {desk.activeTab === 'current' && <FeaturedOpportunity project={desk.featured} basis={desk.featuredBasis} loading={desk.loadingDashboard || desk.loadingProjects} onOpen={(id) => navigate(`/projects/${id}`)} />}
 
       {desk.dashboard && !desk.dashboard.ai_configured && (
         <div className="opportunity-ai-note"><RobotOutlined aria-hidden="true" /><span>当前展示公告信息与规则筛选；配置模型后可查看 AI 理由和方案。</span><Button type="link" onClick={() => navigate('/settings')}>去配置</Button></div>

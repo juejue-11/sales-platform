@@ -3,6 +3,7 @@ import { LinkOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons'
 import type { ProjectSummary } from '../../types'
 import type { LoadedProjectDetail } from '../../hooks/useOpportunityDesk'
 import { AiDecisionTag, AiStatusTag, DecisionTag, formatDate, GateTag, kindLabel, sourceLabel } from '../Common'
+import { cleanQualificationExcerpt, cleanScopeExcerpt } from './text'
 
 interface OpportunityFeedItemProps {
   project: ProjectSummary
@@ -22,7 +23,7 @@ function bodyValue(value: string | null | undefined): string {
 }
 
 function scopeValue(project: ProjectSummary): string {
-  return project.briefing?.scope_excerpt?.trim() || '暂未识别，请展开原文核对'
+  return cleanScopeExcerpt(project.briefing?.scope_excerpt) || '暂未识别，请展开原文核对'
 }
 
 function SourcePanel({ project, detailState, onRetry }: { project: ProjectSummary; detailState?: LoadedProjectDetail; onRetry: () => void }) {
@@ -72,33 +73,37 @@ export function OpportunityFeedItem({ project, detailState, expanded, onOpen, on
         </div>
         <div className="opportunity-feed-status" aria-label="项目状态">
           <GateTag status={project.gate_status} />
-          <AiStatusTag status={project.ai_status} />
-          <AiDecisionTag decision={project.ai_decision} />
+          {project.ai_status !== 'not_configured' && project.ai_status !== 'idle' && <AiStatusTag status={project.ai_status} />}
+          {project.ai_decision && <AiDecisionTag decision={project.ai_decision} />}
           <DecisionTag status={project.decision.status} />
         </div>
       </header>
 
       <div className="opportunity-facts" aria-label="采购信息">
-        <section className="opportunity-fact opportunity-fact-wide">
+        <section className="opportunity-fact opportunity-fact-scope">
           <h3>采购范围</h3>
           <p data-testid="opportunity-scope">{scopeValue(project)}</p>
         </section>
-        <section className="opportunity-fact">
-          <h3>交付 / 服务</h3>
-          <p>{fieldValue(briefing?.delivery_excerpt)}</p>
-        </section>
-        <section className="opportunity-fact">
-          <h3>资格条件</h3>
-          <p data-testid="opportunity-qualification">{fieldValue(briefing?.qualification_excerpt)}</p>
-        </section>
-        <section className="opportunity-fact">
-          <h3>联系方式</h3>
-          <p>{fieldValue(briefing?.contact_excerpt)}</p>
-        </section>
-        <section className="opportunity-fact opportunity-fact-deadline">
-          <h3>截止日期</h3>
-          <time dateTime={project.deadline_at ?? undefined}>{formatDate(project.deadline_at, true)}</time>
-        </section>
+        <div className="opportunity-fact-column">
+          <section className="opportunity-fact opportunity-fact-qualification">
+            <h3>资格条件</h3>
+            <p data-testid="opportunity-qualification">{cleanQualificationExcerpt(briefing?.qualification_excerpt) || fieldValue(null)}</p>
+          </section>
+          <section className="opportunity-fact opportunity-fact-delivery">
+            <h3>交付 / 服务</h3>
+            <p>{fieldValue(briefing?.delivery_excerpt)}</p>
+          </section>
+        </div>
+        <div className="opportunity-fact-bottom">
+          <section className="opportunity-fact opportunity-fact-contact">
+            <h3>联系方式</h3>
+            <p>{fieldValue(briefing?.contact_excerpt)}</p>
+          </section>
+          <section className="opportunity-fact opportunity-fact-deadline">
+            <h3>截止日期</h3>
+            <time dateTime={project.deadline_at ?? undefined}>{formatDate(project.deadline_at, true)}</time>
+          </section>
+        </div>
       </div>
 
       {(project.ai_summary || project.demand_summary || aiActions.length > 0) && (
