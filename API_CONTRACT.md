@@ -64,7 +64,7 @@ steps:{stage:started|model|tool_start|tool_end|completed,label:string,tool?:stri
 usage:{model_calls:number,tool_calls:number,input_tokens:number,output_tokens:number}
 limits:{max_turns:number,max_tool_calls:number,timeout_ms:number,max_output_tokens:number}
 ```
-`steps`只保存受信任的阶段和工具标签，不保存模型思维、正文输出或密钥；判定结果通过验证前，运行状态不会显示为`succeeded`。
+`steps`只保存受信任的阶段和工具标签（读取项目资料、读取公司能力、读取关联资料及其开始/完成/失败状态），不保存模型思维、正文输出或密钥；运行时的`completed`事件会被忽略，只有判定结果通过验证并落库后才追加`方案已通过校验`，运行状态不会提前显示为`succeeded`。
 
 `idle`表示符合条件但尚未排队，`skipped`表示规则排除/截止等无需AI。只有真实任务才可显示queued/running。人工选择绑定当时judgment_id，新判断option_id相同也必须重新确认；旧选择和旧下一步保留可追溯。
 
@@ -79,7 +79,7 @@ limits:{max_turns:number,max_tool_calls:number,timeout_ms:number,max_output_toke
 - `POST /api/projects/{id}/gate` body `{action:restore|clear,reason:string}` => ProjectSummary。规则排除可恢复，恢复不修改源事实。
 - `POST /api/projects/{id}/link` body `{target_project_id:number,relation:same_project|duplicate|dismiss,note:string}` => `{ok:true,message:string}`。人工确认关联或排除提示，保留双方源记录和决定。
 - `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences},ai:{base_url,model,enabled:boolean,has_api_key:boolean,engine:'pi_sdk'|'single_call',sdk_ready:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。默认 `engine` 为 `pi_sdk`；只有明确设置 `SCREENING_AI_ENGINE=single_call` 时才运行旧的单次 HTTP provider。`sdk_ready` 只检查 Node.js 与 `agent-runtime/dist/runner.js` 是否存在，不调用模型；缺少运行时会返回可操作错误，不会静默降级。字符串默认为空；关键词为空时不得凭空认定公司能力。
-- `PUT /api/settings` body与GET相同（version无需传），ai可多传`api_key`；空字符串表示保留现有密钥，`clear_api_key:true`可移除。返回脱敏settings。改变业务配置后重算规则、标记旧AI结果待复核；合格且AI已配置的项目自动排队。
+- `PUT /api/settings` body与GET相同（version无需传），ai可多传`api_key`；空字符串表示保留现有密钥，`clear_api_key:true`可移除。`ai.engine`与`ai.sdk_ready`为只读派生字段，写入时忽略；旧`single_call`引擎仅由环境变量`SCREENING_AI_ENGINE=single_call`显式启用。返回脱敏settings。改变业务配置后重算规则、标记旧AI结果待复核；合格且AI已配置的项目自动排队。
 - `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,import_pending:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。data_updated_at为源导出文件更新时间，last_import_at为平台导入时间；file_stale表示源文件缺失或超过48小时未更新，import_pending表示新文件尚未导入。
 - `POST /api/import` => `{inserted:number,updated:number,unchanged:number,total:number,message:string}`。完整校验文件后事务导入，无变化不重判，导入失败不得删除已有项目。
 - `POST /api/analyze-pending` => `{queued:number,message:string}`

@@ -35,12 +35,21 @@ DEFAULT_LIMITS = {
 
 _PROGRESS_STAGES = {"started", "model", "tool_start", "tool_end", "completed"}
 _TRUSTED_TOOLS = {"read_project_records", "read_company_capability", "read_related_records"}
+_TRUSTED_TOOL_LABELS = {
+    "read_project_records": "读取项目资料",
+    "read_company_capability": "读取公司能力",
+    "read_related_records": "读取关联资料",
+}
+_ERROR_CODES = {
+    "INVALID_REQUEST", "CONFIG_ERROR", "MODEL_ERROR", "NO_FINAL",
+    "TURN_LIMIT", "TOOL_LIMIT", "TIMEOUT", "RUNTIME_ERROR",
+}
 _PROGRESS_LABELS = {
     "started": "智能体已启动",
     "model": "模型调用",
     "tool_start": "工具调用开始",
     "tool_end": "工具调用完成",
-    "completed": "智能体输出已完成",
+    "completed": "方案已通过校验",
 }
 
 
@@ -126,6 +135,10 @@ def _safe_progress_event(event: dict[str, Any]) -> dict[str, Any] | None:
     stage = event.get("stage")
     if stage not in _PROGRESS_STAGES:
         return None
+    # The runner's completed event only means that it emitted JSON.  The
+    # service emits the public completion event after validation and storage.
+    if stage == "completed":
+        return None
     result: dict[str, Any] = {
         "stage": stage,
         # Labels come from this process's fixed map.  A runtime cannot put
@@ -138,9 +151,20 @@ def _safe_progress_event(event: dict[str, Any]) -> dict[str, Any] | None:
         tool = re.sub(r"[^A-Za-z0-9_.:/-]", "", tool)[:100]
         if tool:
             result["tool"] = tool
-            result["label"] = f"工具：{tool}{'失败' if stage == 'tool_end' and event.get('is_error') is True else ''}"
+            business_label = _TRUSTED_TOOL_LABELS[tool]
+            if stage == "tool_start":
+                result["label"] = f"{business_label}开始"
+            elif event.get("is_error") is True:
+                result["label"] = f"{business_label}失败"
+            else:
+                result["label"] = f"{business_label}完成"
+            if event.get("is_error") is True:
+                # Internal-only marker consumed by service persistence; this
+                # key is never serialized into the public agent_run step.
+                result["_is_error"] = True
     elif stage == "tool_end" and event.get("is_error") is True:
         result["label"] = "工具调用失败"
+        result["_is_error"] = True
     turn = event.get("turn")
     if isinstance(turn, int) and 0 <= turn <= 1000:
         result["turn"] = turn
@@ -149,9 +173,9 @@ def _safe_progress_event(event: dict[str, Any]) -> dict[str, Any] | None:
 
 def _safe_error_code(code: Any) -> str:
     if not isinstance(code, str):
-        return "runtime_error"
-    clean = re.sub(r"[^A-Za-z0-9_.-]", "", code)[:64]
-    return clean or "runtime_error"
+        return "RUNTIME_ERROR"
+    clean = re.sub(r"[^A-Za-z0-9_]", "", code).upper()[:64]
+    return clean if clean in _ERROR_CODES else "RUNTIME_ERROR"
 
 
 def sanitize_ai_error(exc: BaseException, *, default: str = "AI request failed",
@@ -362,6 +386,18 @@ class PiSDKProvider:
         result: PiSDKResult | None = None
         seen_result = False
         timeout_seconds = self._normalized_limits(limits)["timeout_ms"] / 1000.0
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+
+        async def await_with_deadline(awaitable: Awaitable[Any]) -> Any:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise AIError("Pi SDK运行超时")
+            try:
+                return await asyncio.wait_for(awaitable, timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise AIError("Pi SDK运行超时") from exc
+
         try:
             spawn_options: dict[str, Any] = {
                 "stdin": asyncio.subprocess.PIPE,
@@ -372,29 +408,34 @@ class PiSDKProvider:
             }
             if os.name == "nt":
                 spawn_options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            process = await asyncio.create_subprocess_exec(str(node), str(runner), **spawn_options)
+            # The deadline starts before process creation and stdin handling.
+            # A child that never reads its pipe must not hold the API task
+            # indefinitely while drain() waits for back-pressure to clear.
+            process = await await_with_deadline(
+                asyncio.create_subprocess_exec(str(node), str(runner), **spawn_options)
+            )
             stderr_task = asyncio.create_task(self._drain_stderr(process.stderr))
             if process.stdin is None or process.stdout is None:
                 raise AIError("Pi SDK进程管道不可用")
             try:
                 process.stdin.write(encoded + b"\n")
-                await process.stdin.drain()
+                await await_with_deadline(process.stdin.drain())
             except (BrokenPipeError, ConnectionError) as exc:
                 raise AIError("Pi SDK进程管道不可用") from exc
             process.stdin.close()
             try:
-                await process.stdin.wait_closed()
+                await await_with_deadline(process.stdin.wait_closed())
             except (AttributeError, ConnectionError, BrokenPipeError):
                 pass
 
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout_seconds
             while True:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise AIError("Pi SDK运行超时")
                 try:
                     line = await asyncio.wait_for(process.stdout.readline(), timeout=remaining)
+                except asyncio.TimeoutError as exc:
+                    raise AIError("Pi SDK运行超时") from exc
                 except (asyncio.LimitOverrunError, ValueError) as exc:
                     raise AIError("Pi SDK输出超过单行大小限制") from exc
                 if not line:
@@ -415,6 +456,10 @@ class PiSDKProvider:
                     clean = _safe_progress_event(event)
                     if clean is not None:
                         await self._emit(effective_callback, clean)
+                    elif event.get("stage") == "completed":
+                        # Completion is trusted only after service-side
+                        # judgment validation and persistence.
+                        continue
                     else:
                         raise AIError("Pi SDK进度协议无效")
                 elif event_type == "error":
@@ -426,6 +471,11 @@ class PiSDKProvider:
                     seen_result = True
                     if event.get("engine") != "pi_sdk" or not isinstance(event.get("content"), str) or not event.get("content", "").strip():
                         raise AIError("Pi SDK结果协议无效")
+                    if api_key and api_key in event["content"]:
+                        # A model/provider must never be able to echo the
+                        # request credential into a durable judgment or API
+                        # response.  Do not include the value in this error.
+                        raise AIError("Pi SDK结果包含受限凭据")
                     usage_value = event.get("usage")
                     if not isinstance(usage_value, dict):
                         raise AIError("Pi SDK结果协议无效")
@@ -440,9 +490,9 @@ class PiSDKProvider:
                     raise AIError("Pi SDK输出协议无效")
 
             try:
-                return_code = await asyncio.wait_for(process.wait(), timeout=max(0.1, deadline - loop.time()))
-            except asyncio.TimeoutError as exc:
-                raise AIError("Pi SDK运行超时") from exc
+                return_code = await await_with_deadline(process.wait())
+            except AIError:
+                raise
             if return_code != 0:
                 raise AIError(f"Pi SDK进程退出（{return_code}）")
             if result is None:

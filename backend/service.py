@@ -237,10 +237,12 @@ class ScreeningService:
         # stable escape hatch for the legacy HTTP tests while the default is
         # always the embedded Pi SDK.
         configured = os.getenv("SCREENING_AI_ENGINE", "").strip().lower()
-        if configured in {"pi_sdk", "single_call"}:
-            return configured
-        value = (ai or self._section("ai")).get("engine", "pi_sdk")
-        return str(value).strip().lower() if str(value).strip().lower() in {"pi_sdk", "single_call"} else "pi_sdk"
+        if configured == "single_call":
+            return "single_call"
+        # A persisted/client supplied engine is deliberately ignored.  This
+        # keeps the legacy path opt-in and makes Pi SDK the stable default even
+        # when upgrading a database created by an older build.
+        return "pi_sdk"
 
     def _ai_config(self) -> dict[str, Any]:
         ai = self._section("ai")
@@ -300,12 +302,12 @@ class ScreeningService:
                             current["api_key"] = key_value
                     if incoming.get("clear_api_key") is True:
                         current.pop("api_key", None)
-                    incoming = {k: v for k, v in incoming.items() if k not in {"api_key", "clear_api_key", "has_api_key"}}
-                    if "engine" in incoming:
-                        engine = str(incoming["engine"]).strip().lower()
-                        if engine not in {"pi_sdk", "single_call"}:
-                            raise ServiceError("ai.engine must be pi_sdk or single_call")
-                        incoming["engine"] = engine
+                    # Engine and runtime readiness are process-derived
+                    # read-only values.  The legacy HTTP path is enabled only
+                    # by SCREENING_AI_ENGINE=single_call, never by persisted
+                    # client input.
+                    incoming = {k: v for k, v in incoming.items()
+                                if k not in {"api_key", "clear_api_key", "has_api_key", "engine", "sdk_ready"}}
                 current.update(incoming)
                 self.db.execute("INSERT INTO settings(key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
                                 (section, json_text(current), now_iso()))
@@ -435,6 +437,38 @@ class ScreeningService:
             })
             record_count += len(selected)
         return output
+
+    def _related_context_fingerprints(self, project_ids: list[int] | tuple[int, ...] | None = None) -> dict[int, str]:
+        """Fingerprint only the bounded related snapshots used by analysis.
+
+        This intentionally excludes the primary project and capability card.
+        It lets imports and human links invalidate conclusions that actually
+        consumed a related project without expiring older conclusions that
+        had no related context or were created before this feature existed.
+        """
+        if project_ids is None:
+            project_ids = [int(row["id"]) for row in self.db.execute("SELECT id FROM projects ORDER BY id").fetchall()]
+        fingerprints: dict[int, str] = {}
+        for project_id in project_ids:
+            try:
+                related = self._analysis_related_context(int(project_id))
+            except (NotFoundError, sqlite3.Error):
+                continue
+            fingerprints[int(project_id)] = sha256_text(json_text(related))
+        return fingerprints
+
+    def _mark_related_context_changes(self, before: dict[int, str]) -> list[int]:
+        """Mark judgments stale where an import/link changed included context."""
+        changed: list[int] = []
+        after = self._related_context_fingerprints(list(before))
+        for project_id, old_fingerprint in before.items():
+            new_fingerprint = after.get(project_id)
+            if new_fingerprint is None or new_fingerprint == old_fingerprint:
+                continue
+            self.db.execute("UPDATE judgments SET stale=1 WHERE project_id=?", (project_id,))
+            self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
+            changed.append(project_id)
+        return changed
 
     def _analysis_context(self, project_id: int, capability: dict[str, Any],
                           records: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -813,10 +847,15 @@ class ScreeningService:
     async def import_file(self) -> dict[str, Any]:
         import_id = self._new_import_row()
         import_signature = self._file_signature(self.source_path)
+        # Capture bounded related snapshots before the atomic import.  The
+        # post-import comparison below catches changes to a related project's
+        # body, relation references, or project membership.
+        related_context_before = self._related_context_fingerprints()
         try:
             with self._db_lock:
                 result = import_records(self.db, self.source_path)
             with self._db_lock, self.db:
+                self._mark_related_context_changes(related_context_before)
                 self.db.execute("UPDATE imports SET status='success',inserted=?,updated=?,unchanged=?,total=?,finished_at=? WHERE id=?",
                                 (result.inserted, result.updated, result.unchanged, result.total, now_iso(), import_id))
                 # This timestamp describes the collector's source update.  It
@@ -922,7 +961,7 @@ class ScreeningService:
     def _agent_public_event(event: Any) -> dict[str, Any] | None:
         labels = {
             "started": "智能体已启动", "model": "模型调用", "tool_start": "工具调用开始",
-            "tool_end": "工具调用完成", "completed": "智能体输出已完成",
+            "tool_end": "工具调用完成", "completed": "方案已通过校验",
         }
         if not isinstance(event, dict) or event.get("stage") not in labels:
             return None
@@ -933,7 +972,18 @@ class ScreeningService:
             tool = re.sub(r"[^A-Za-z0-9_.:/-]", "", tool)[:100]
             if tool:
                 value["tool"] = tool
-                value["label"] = f"工具：{tool}{'失败' if stage == 'tool_end' and event.get('is_error') is True else ''}"
+                names = {
+                    "read_project_records": "读取项目资料",
+                    "read_company_capability": "读取公司能力",
+                    "read_related_records": "读取关联资料",
+                }
+                name = names[tool]
+                if stage == "tool_start":
+                    value["label"] = f"{name}开始"
+                elif event.get("is_error") is True or event.get("_is_error") is True:
+                    value["label"] = f"{name}失败"
+                else:
+                    value["label"] = f"{name}完成"
         elif stage == "tool_end" and event.get("is_error") is True:
             value["label"] = "工具调用失败"
         turn = event.get("turn")
@@ -1110,6 +1160,9 @@ class ScreeningService:
                 self.db.execute("UPDATE jobs SET status='succeeded',finished_at=?,updated_at=?,error=NULL WHERE id=?",
                                 (now_iso(), now_iso(), job_id))
             if agent_run_id is not None:
+                # Only this trusted event is persisted as completed.  Runner
+                # completed notifications are ignored before validation.
+                self._record_agent_event(agent_run_id, {"stage": "completed"})
                 self._finish_agent_run(agent_run_id, "succeeded")
             if stale_generation and current_config["configured"]:
                 self.queue_project(project_id, force=True, schedule=False)
@@ -1216,9 +1269,11 @@ class ScreeningService:
         if relation not in {"same_project", "duplicate", "dismiss"}:
             raise ServiceError("invalid relation")
         with self._db_lock, self.db:
+            related_context_before = self._related_context_fingerprints((project_id, target_project_id))
             self.db.execute("INSERT INTO links(project_id,target_project_id,relation,note,created_at) VALUES (?,?,?,?,?)",
                             (project_id, target_project_id, relation, str(note or ""), now_iso()))
             self.db.execute("UPDATE projects SET updated_at=? WHERE id IN (?,?)", (now_iso(), project_id, target_project_id))
+            self._mark_related_context_changes(related_context_before)
         return {"ok": True, "message": "人工关联已记录，双方源记录和决定均予保留"}
 
     def status(self) -> dict[str, Any]:
