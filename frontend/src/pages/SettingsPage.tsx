@@ -9,7 +9,7 @@ const { Title, Text, Paragraph } = Typography
 
 const emptySettings: SettingsData = {
   business: { company_name: '', scope_description: '', target_keywords: [], exclude_keywords: [], supported_products: '', capabilities: '', solution_examples: '', region_preferences: '' },
-  ai: { base_url: '', model: '', enabled: false, has_api_key: false },
+  ai: { base_url: '', model: '', enabled: false, has_api_key: false, engine: 'single_call', sdk_ready: true },
   import: { path: '', auto_import: false, poll_seconds: 300 },
   version: 0,
 }
@@ -76,7 +76,11 @@ export function SettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const body: SettingsData = copySettings({ ...draft, business: { ...draft.business, target_keywords: fromLines(keywordText.target), exclude_keywords: fromLines(keywordText.exclude) }, ai: { ...draft.ai, ...(apiKey ? { api_key: apiKey } : {}), ...(clearApiKey ? { clear_api_key: true } : {}) } })
+      const body: SettingsData = {
+        ...copySettings({ ...draft, business: { ...draft.business, target_keywords: fromLines(keywordText.target), exclude_keywords: fromLines(keywordText.exclude) } }),
+        // engine and sdk_ready describe the server runtime; keep them out of save requests.
+        ai: { base_url: draft.ai.base_url, model: draft.ai.model, enabled: draft.ai.enabled, has_api_key: draft.ai.has_api_key, ...(apiKey ? { api_key: apiKey } : {}), ...(clearApiKey ? { clear_api_key: true } : {}) },
+      }
       const saved = normalizeSettings(await api.saveSettings(body))
       const fresh = normalizeSettings(await api.settings())
       setSettings(fresh.version >= saved.version ? fresh : saved)
@@ -100,6 +104,8 @@ export function SettingsPage() {
   const capabilityEmpty = !draft.business.scope_description.trim() && !draft.business.supported_products.trim() && !draft.business.capabilities.trim()
   const modelComplete = draft.ai.enabled && draft.ai.base_url.trim() && draft.ai.model.trim() && !clearApiKey && (settings.ai.has_api_key || apiKey.trim())
   const savedModelReady = Boolean(settings.ai.enabled && settings.ai.has_api_key && settings.ai.base_url.trim() && settings.ai.model.trim())
+  const aiEngine = settings.ai.engine ?? 'single_call'
+  const sdkReady = settings.ai.sdk_ready ?? true
   return (
     <div className="page-stack settings-page">
       <div className="page-heading">
@@ -134,9 +140,12 @@ export function SettingsPage() {
         <div className="settings-side">
           <Card id="model-config" title="模型接口" className="settings-panel model-panel" extra={<Tag color={savedModelReady ? 'success' : 'default'}>{savedModelReady ? '已配置' : '待配置'}</Tag>}>
             <div className="settings-switch-row"><div><label htmlFor="ai-enabled">启用模型</label><p>保存后，符合条件的项目开始分析</p></div><Switch id="ai-enabled" checked={draft.ai.enabled} onChange={checked => updateAi('enabled', checked)} /></div>
+            <Space size={8} wrap><Text strong>Pi Agent SDK</Text><Tag color={aiEngine === 'pi_sdk' ? (sdkReady ? 'success' : 'warning') : 'default'}>{aiEngine === 'pi_sdk' ? '当前分析引擎' : '未选用'}</Tag></Space>
+            <Paragraph className="settings-bottom-note">按需读取项目原文、关联资料与公司能力，再生成判断和方案</Paragraph>
+            {aiEngine === 'pi_sdk' && !sdkReady && <Alert className="settings-alert" type="warning" showIcon message="分析组件未就绪，请运行安装依赖脚本" />}
             <Form layout="vertical">
               <Form.Item label={<label htmlFor="ai-base-url">兼容 OpenAI 的 Base URL</label>} extra="填写服务商提供的接口地址，通常以 /v1 结尾"><Input id="ai-base-url" value={draft.ai.base_url} onChange={event => updateAi('base_url', event.target.value)} placeholder="https://api.example.com/v1" /></Form.Item>
-              <Form.Item label={<label htmlFor="ai-model">模型名称</label>}><Input id="ai-model" value={draft.ai.model} onChange={event => updateAi('model', event.target.value)} placeholder="填写服务商的实际模型名称" /></Form.Item>
+              <Form.Item label={<label htmlFor="ai-model">模型名称</label>} extra="模型需支持工具调用"><Input id="ai-model" value={draft.ai.model} onChange={event => updateAi('model', event.target.value)} placeholder="填写服务商的实际模型名称" /></Form.Item>
               <Form.Item label={<label htmlFor="ai-api-key">API Key</label>} extra="留空保留已有密钥，输入新密钥可替换"><Input.Password id="ai-api-key" prefix={<LockOutlined />} value={apiKey} onChange={event => { setApiKey(event.target.value); setDirty(true) }} placeholder={settings.ai.has_api_key ? '已保存，不显示原密钥' : '粘贴接口密钥'} /></Form.Item>
               <div className="settings-key-state"><Text type="secondary"><SafetyCertificateOutlined /> {settings.ai.has_api_key ? '已保存密钥' : '尚未保存密钥'}</Text><label className="clear-key-label"><input type="checkbox" checked={clearApiKey} onChange={event => { setClearApiKey(event.target.checked); setDirty(true) }} /> 清除已有密钥</label></div>
             </Form>
@@ -163,7 +172,7 @@ function normalizeSettings(value: SettingsData): SettingsData {
     business: {
       company_name: business.company_name ?? '', scope_description: business.scope_description ?? '', target_keywords: Array.isArray(business.target_keywords) ? business.target_keywords : [], exclude_keywords: Array.isArray(business.exclude_keywords) ? business.exclude_keywords : [], supported_products: typeof business.supported_products === 'string' ? business.supported_products : JSON.stringify(business.supported_products ?? ''), capabilities: typeof business.capabilities === 'string' ? business.capabilities : JSON.stringify(business.capabilities ?? ''), solution_examples: typeof business.solution_examples === 'string' ? business.solution_examples : JSON.stringify(business.solution_examples ?? ''), region_preferences: typeof business.region_preferences === 'string' ? business.region_preferences : JSON.stringify(business.region_preferences ?? ''),
     },
-    ai: { base_url: value.ai?.base_url ?? '', model: value.ai?.model ?? '', enabled: Boolean(value.ai?.enabled), has_api_key: Boolean(value.ai?.has_api_key) },
+    ai: { base_url: value.ai?.base_url ?? '', model: value.ai?.model ?? '', enabled: Boolean(value.ai?.enabled), has_api_key: Boolean(value.ai?.has_api_key), engine: value.ai?.engine === 'pi_sdk' ? 'pi_sdk' : 'single_call', sdk_ready: value.ai?.sdk_ready ?? true },
     import: { path: value.import?.path ?? '', auto_import: Boolean(value.import?.auto_import), poll_seconds: Number(value.import?.poll_seconds ?? 300) },
   }
 }

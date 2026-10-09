@@ -2,6 +2,44 @@ export type GateStatus = 'candidate' | 'review' | 'excluded' | 'expired' | 'clos
 export type AiStatus = 'not_configured' | 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'stale' | 'skipped'
 export type AiDecision = 'recommend' | 'consider' | 'verify' | 'not_recommended' | null
 export type DecisionStatus = 'new' | 'following' | 'verify' | 'closed'
+export type AiEngine = 'pi_sdk' | 'single_call'
+export type AgentRunStatus = 'running' | 'succeeded' | 'failed'
+export type AgentStepStage = 'started' | 'model' | 'tool_start' | 'tool_end' | 'completed'
+
+export interface AgentRunStep {
+  stage: AgentStepStage
+  label: string
+  tool?: string
+  turn?: number
+  at: string
+}
+
+export interface AgentRunUsage {
+  model_calls: number
+  tool_calls: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface AgentRunLimits {
+  max_turns: number
+  max_tool_calls: number
+  timeout_ms: number
+  max_output_tokens: number
+}
+
+export interface AgentRun {
+  id: number
+  job_id: number | null
+  engine: 'pi_sdk'
+  status: AgentRunStatus
+  started_at: string
+  finished_at: string | null
+  error: string | null
+  steps: AgentRunStep[]
+  usage: AgentRunUsage
+  limits: AgentRunLimits
+}
 
 export interface Decision {
   status: DecisionStatus
@@ -108,6 +146,8 @@ export interface ProjectDetail extends ProjectSummary {
   decision_history: Array<Record<string, unknown>>
   related_projects: ProjectSummary[]
   versions: ProjectVersion[]
+  /** Optional while older detail responses are still in circulation. */
+  agent_run?: AgentRun | null
 }
 
 export interface DashboardData {
@@ -150,6 +190,9 @@ export interface AiSettings {
   model: string
   enabled: boolean
   has_api_key: boolean
+  /** Read-only runtime information returned by newer APIs. */
+  engine?: AiEngine
+  sdk_ready?: boolean
   api_key?: string
   clear_api_key?: boolean
 }

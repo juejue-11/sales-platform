@@ -707,6 +707,130 @@
   color: var(--detail-amber);
 }
 
+.detail-agent-activity {
+  margin-top: 17px;
+  padding-top: 15px;
+  border-top: 1px solid var(--detail-line);
+}
+
+.detail-agent-activity-heading,
+.detail-agent-latest,
+.detail-agent-usage {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.detail-agent-activity-heading {
+  justify-content: space-between;
+}
+
+.detail-agent-activity-heading .anticon {
+  margin-right: 4px;
+  color: var(--detail-accent);
+}
+
+.detail-agent-activity-heading .ant-tag {
+  margin: 0;
+}
+
+.detail-agent-latest {
+  align-items: baseline;
+  margin-top: 10px;
+  padding: 9px 11px;
+  background: #f4f8f8;
+  border: 1px solid #d2e1e0;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.detail-agent-latest .ant-typography:last-child {
+  overflow-wrap: anywhere;
+}
+
+.detail-agent-failure {
+  margin-top: 10px;
+  border-radius: 4px;
+}
+
+.detail-agent-failure .ant-alert-action {
+  margin-inline-start: 10px;
+}
+
+.detail-agent-complete {
+  display: block;
+  margin-top: 9px;
+  font-size: 12px;
+}
+
+.detail-agent-activity .ant-collapse {
+  margin-top: 5px;
+  background: transparent;
+}
+
+.detail-agent-activity .ant-collapse > .ant-collapse-item {
+  border-bottom: 0;
+}
+
+.detail-agent-activity .ant-collapse-header {
+  padding: 9px 0 7px;
+  color: var(--detail-accent);
+  font-size: 12px;
+}
+
+.detail-agent-activity .ant-collapse-content {
+  border-top: 0;
+}
+
+.detail-agent-activity .ant-collapse-content-box {
+  padding: 0 0 4px;
+}
+
+.detail-agent-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding-left: 21px;
+  color: #425d62;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail-agent-step-list li {
+  padding-left: 3px;
+}
+
+.detail-agent-step-list li > span {
+  overflow-wrap: anywhere;
+}
+
+.detail-agent-step-list li > .ant-typography {
+  margin-left: 7px;
+  white-space: nowrap;
+}
+
+.detail-agent-usage {
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 9px;
+  color: var(--detail-muted);
+  font-size: 11px;
+}
+
+.detail-agent-usage span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.detail-agent-usage strong {
+  color: var(--detail-ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 .detail-decision-card {
   border-top: 3px solid var(--detail-accent) !important;
 }
