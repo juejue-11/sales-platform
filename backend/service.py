@@ -11,13 +11,24 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .ai import AIError, AIProvider, OpenAICompatibleProvider, build_messages, correction_messages, extract_content, input_fingerprint, validate_judgment
+from .ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
+                  build_messages, correction_messages, extract_content, input_fingerprint,
+                  sanitize_ai_error, validate_judgment)
 from .briefing import build_briefing
 from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
 from .db import connect
 from .ingest import ImportErrorDetail, ImportResult, import_records
 from .rules import business_sort_key, gate_for_project
 from .utils import SHANGHAI, json_text, json_value, now_iso, parse_timestamp, safe_join, sha256_text
+
+
+DEFAULT_AGENT_LIMITS = {
+    "max_turns": 6,
+    "max_tool_calls": 12,
+    "timeout_ms": 180000,
+    "max_output_tokens": 4096,
+}
+TRUSTED_AGENT_TOOLS = {"read_project_records", "read_company_capability", "read_related_records"}
 
 
 class ServiceError(RuntimeError):
@@ -41,9 +52,19 @@ class ScreeningService:
         self.source_path = Path(source_path or env_source_path())
         self.archive_root = Path(archive_root or env_archive_root(self.source_path))
         self.db = connect(self.db_path)
-        self.provider: AIProvider = provider or OpenAICompatibleProvider()
+        self._injected_provider = provider is not None
+        if provider is not None:
+            # Existing callers can inject the old complete() test double (or
+            # a Pi-compatible analyze() double) without changing its API.
+            self.provider = provider
+        elif os.getenv("SCREENING_AI_ENGINE", "").strip().lower() == "single_call":
+            self.provider = OpenAICompatibleProvider()
+        else:
+            self.provider = PiSDKProvider()
+        self.provider: AIProvider = self.provider  # type: ignore[assignment]
         self._db_lock = threading.RLock()
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._run_tasks: set[asyncio.Task[Any]] = set()
         self._worker_task: asyncio.Task[Any] | None = None
         self._import_task: asyncio.Task[Any] | None = None
         self._last_import_signature: tuple[str, int | None, int | None] | None = None
@@ -60,11 +81,54 @@ class ScreeningService:
                 self._last_import_signature = None
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
-        for task in list(self._background_tasks):
+        try:
+            current_task = asyncio.current_task()
+        except RuntimeError:
+            current_task = None
+        tasks = (set(self._background_tasks) | set(self._run_tasks)) - ({current_task} if current_task else set())
+        for task in tasks:
             task.cancel()
+        # FastAPI calls close from an active event loop.  Defer the actual DB
+        # close until cancelled workers have unwound their child subprocesses;
+        # this prevents a late callback from touching a closed connection and
+        # gives PiSDKProvider a chance to kill Node on service shutdown.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._close_db()
+            return
+        if tasks:
+            loop.create_task(self._close_after_tasks(tasks))
+        else:
+            self._close_db()
+
+    async def aclose(self) -> None:
+        """Awaitable shutdown used by FastAPI so child processes are reaped."""
+        if not self._closed:
+            self._closed = True
+        current_task = asyncio.current_task()
+        tasks = (set(self._background_tasks) | set(self._run_tasks)) - ({current_task} if current_task else set())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._close_db()
+
+    def _close_db(self) -> None:
         with self._db_lock:
-            self.db.close()
+            try:
+                self.db.close()
+            except sqlite3.ProgrammingError:
+                pass
+
+    async def _close_after_tasks(self, tasks: set[asyncio.Task[Any]]) -> None:
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self._close_db()
 
     def _initialize_defaults(self) -> None:
         with self._db_lock, self.db:
@@ -168,14 +232,32 @@ class ScreeningService:
             return value
         return os.getenv("OPENAI_API_KEY", "")
 
+    def _ai_engine(self, ai: dict[str, Any] | None = None) -> str:
+        # The environment switch is intentionally explicit.  It provides a
+        # stable escape hatch for the legacy HTTP tests while the default is
+        # always the embedded Pi SDK.
+        configured = os.getenv("SCREENING_AI_ENGINE", "").strip().lower()
+        if configured in {"pi_sdk", "single_call"}:
+            return configured
+        value = (ai or self._section("ai")).get("engine", "pi_sdk")
+        return str(value).strip().lower() if str(value).strip().lower() in {"pi_sdk", "single_call"} else "pi_sdk"
+
     def _ai_config(self) -> dict[str, Any]:
         ai = self._section("ai")
         base_url = str(ai.get("base_url") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
         model = str(ai.get("model") or os.getenv("OPENAI_MODEL", ""))
         enabled = bool(ai.get("enabled", True))
         api_key = self._stored_api_key()
+        engine = self._ai_engine(ai)
+        sdk_is_ready = PiSDKProvider.sdk_ready()
+        provider_is_pi = isinstance(self.provider, PiSDKProvider) or callable(getattr(self.provider, "analyze", None))
+        runtime_ready = (self._injected_provider or engine != "pi_sdk" or not provider_is_pi
+                         or not isinstance(self.provider, PiSDKProvider) or sdk_is_ready)
+        credentials_configured = enabled and bool(base_url and model and api_key)
         return {"base_url": base_url, "model": model, "enabled": enabled,
-                "api_key": api_key, "configured": enabled and bool(base_url and model and api_key)}
+                "api_key": api_key, "engine": engine, "sdk_ready": sdk_is_ready,
+                "credentials_configured": credentials_configured,
+                "configured": credentials_configured and runtime_ready}
 
     def get_settings(self) -> dict[str, Any]:
         business = copy.deepcopy(self._section("business"))
@@ -191,6 +273,8 @@ class ScreeningService:
         ai.pop("api_key", None)
         ai["has_api_key"] = bool(self._stored_api_key())
         ai["enabled"] = bool(ai.get("enabled"))
+        ai["engine"] = self._ai_engine(ai)
+        ai["sdk_ready"] = PiSDKProvider.sdk_ready()
         version = int(self._get_meta("settings_version") or 1)
         return {"business": business, "ai": ai, "import": import_settings, "version": version}
 
@@ -217,12 +301,17 @@ class ScreeningService:
                     if incoming.get("clear_api_key") is True:
                         current.pop("api_key", None)
                     incoming = {k: v for k, v in incoming.items() if k not in {"api_key", "clear_api_key", "has_api_key"}}
+                    if "engine" in incoming:
+                        engine = str(incoming["engine"]).strip().lower()
+                        if engine not in {"pi_sdk", "single_call"}:
+                            raise ServiceError("ai.engine must be pi_sdk or single_call")
+                        incoming["engine"] = engine
                 current.update(incoming)
                 self.db.execute("INSERT INTO settings(key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
                                 (section, json_text(current), now_iso()))
                 if section == "business" and current != previous:
                     changed_business = True
-                if section == "ai" and any(current.get(key) != previous.get(key) for key in ("base_url", "model", "enabled")):
+                if section == "ai" and any(current.get(key) != previous.get(key) for key in ("base_url", "model", "enabled", "engine")):
                     changed_ai_runtime = True
                 if section == "import" and isinstance(current.get("path"), str) and current.get("path") != previous.get("path"):
                     changed_import_path = current["path"]
@@ -261,6 +350,102 @@ class ScreeningService:
         records = [self._record_dict(row) for row in rows]
         return sorted(records, key=business_sort_key, reverse=True)
 
+    @staticmethod
+    def _analysis_record(record: dict[str, Any]) -> dict[str, Any]:
+        # Keep the context self-contained while avoiding collector payloads and
+        # local archive paths.  ``record_id`` is explicit because it is the
+        # citation identity used by the Pi agent.
+        value = {
+            "id": record.get("id"),
+            "record_id": record.get("id"),
+            "source_id": record.get("source_id"),
+            "kind": record.get("kind"),
+            "title": record.get("title"),
+            "project_name": record.get("project_name"),
+            "published_at": record.get("published_at"),
+            "buyer": record.get("buyer"),
+            "notice_number": record.get("notice_number"),
+            "deadline_at": record.get("deadline_at"),
+            "original_url": record.get("original_url"),
+            "canonical_url": record.get("canonical_url"),
+            "parse_status": record.get("parse_status"),
+            "equipment": record.get("equipment", []),
+            "facts": record.get("facts", []),
+            "inferences": record.get("inferences", []),
+            "body_text": str(record.get("body_text") or ""),
+            "related_record_id": record.get("related_record_id"),
+        }
+        return value
+
+    def _analysis_project_snapshot(self, project_id: int, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        project_row = self._project_row(project_id)
+        records = records if records is not None else self._records_for_project(project_id)
+        latest = records[0] if records else {}
+        gate, gate_reasons = self._gate(records, project_id)
+        return {
+            "id": int(project_id),
+            "title": latest.get("title") or f"项目 {project_id}",
+            "buyer": latest.get("buyer"),
+            "kind": latest.get("kind") or "tender",
+            "source_id": latest.get("source_id") or "",
+            "published_at": latest.get("published_at"),
+            "deadline_at": latest.get("deadline_at"),
+            "record_ids": [int(record["id"]) for record in records if record.get("id") is not None],
+            "gate_status": gate,
+            "gate_reasons": gate_reasons,
+            "records": [self._analysis_record(record) for record in records],
+            "updated_at": project_row["updated_at"],
+        }
+
+    def _analysis_related_context(self, project_id: int,
+                                  records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """Build bounded context only from explicit record refs and active links."""
+        records = records if records is not None else self._records_for_project(project_id)
+        related: dict[int, set[str]] = {}
+        for record in records:
+            for key in ("possible_duplicate_of", "duplicate_of", "related_record_id"):
+                value = record.get(key)
+                if value is None:
+                    continue
+                related_project = self._project_for_record_id(int(value))
+                if related_project is not None and related_project != project_id:
+                    related.setdefault(related_project, set()).add("record_ref")
+        for row in self.db.execute(
+                "SELECT project_id,target_project_id,relation FROM links "
+                "WHERE active=1 AND relation IN ('same_project','duplicate') "
+                "AND (project_id=? OR target_project_id=?)", (project_id, project_id)).fetchall():
+            other = int(row["target_project_id"] if int(row["project_id"]) == project_id else row["project_id"])
+            if other != project_id:
+                related.setdefault(other, set()).add(str(row["relation"]))
+
+        output: list[dict[str, Any]] = []
+        record_count = 0
+        for related_id in sorted(related)[:5]:
+            related_records = self._records_for_project(related_id)
+            if record_count >= 20 or not related_records:
+                break
+            remaining = 20 - record_count
+            selected = related_records[:remaining]
+            latest = selected[0]
+            output.append({
+                "id": related_id,
+                "title": latest.get("title") or f"项目 {related_id}",
+                "relation": ",".join(sorted(related[related_id])),
+                "records": [self._analysis_record(record) for record in selected],
+            })
+            record_count += len(selected)
+        return output
+
+    def _analysis_context(self, project_id: int, capability: dict[str, Any],
+                          records: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        records = records if records is not None else self._records_for_project(project_id)
+        related = self._analysis_related_context(project_id, records)
+        return {
+            "project": self._analysis_project_snapshot(project_id, records),
+            "company_capability_card": copy.deepcopy(capability),
+            "related_projects": copy.deepcopy(related),
+        }, related
+
     def _project_row(self, project_id: int) -> sqlite3.Row:
         row = self.db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if row is None:
@@ -282,6 +467,43 @@ class ScreeningService:
 
     def _latest_decision(self, project_id: int) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM decisions WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()
+
+    def _latest_agent_run(self, project_id: int) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM agent_runs WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()
+
+    @staticmethod
+    def _agent_run_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        usage = json_value(row["usage_json"], {})
+        limits = json_value(row["limits_json"], {})
+        steps = json_value(row["steps_json"], [])
+        if not isinstance(usage, dict):
+            usage = {}
+        if not isinstance(limits, dict):
+            limits = {}
+        if not isinstance(steps, list):
+            steps = []
+        usage = {key: int(usage.get(key, 0) or 0) for key in ("model_calls", "tool_calls", "input_tokens", "output_tokens")}
+        limits = {key: int(limits.get(key, DEFAULT_AGENT_LIMITS[key]) or DEFAULT_AGENT_LIMITS[key])
+                  for key in DEFAULT_AGENT_LIMITS}
+        safe_steps = []
+        for step in steps:
+            if not isinstance(step, dict) or step.get("stage") not in {"started", "model", "tool_start", "tool_end", "completed"}:
+                continue
+            value = {"stage": step["stage"], "label": str(step.get("label") or "")[:120],
+                     "at": str(step.get("at") or "")[:80]}
+            if isinstance(step.get("tool"), str) and step["tool"]:
+                value["tool"] = step["tool"][:100]
+            if isinstance(step.get("turn"), int):
+                value["turn"] = step["turn"]
+            safe_steps.append(value)
+        return {
+            "id": int(row["id"]), "job_id": int(row["job_id"]), "engine": "pi_sdk",
+            "status": row["status"] if row["status"] in {"running", "succeeded", "failed"} else "failed",
+            "started_at": row["started_at"], "finished_at": row["finished_at"],
+            "error": row["error"], "steps": safe_steps, "usage": usage, "limits": limits,
+        }
 
     def _source_data_updated_at(self) -> str | None:
         """Return the collector's update time, rather than this app's import time.
@@ -498,9 +720,11 @@ class ScreeningService:
         version_values = [dict(row) for row in versions]
         for row in version_values:
             row["id"] = int(row["id"])
+        agent_run = self._agent_run_dict(self._latest_agent_run(project_id))
         return {**summary, "records": records, "judgment": history[0] if history else None,
                 "judgment_history": history, "decision_history": decision_history,
-                "related_projects": [self.summary(pid) for pid in sorted(related_ids)], "versions": version_values}
+                "related_projects": [self.summary(pid) for pid in sorted(related_ids)], "versions": version_values,
+                "agent_run": agent_run}
 
     def _project_for_record_id(self, record_id: int) -> int | None:
         row = self.db.execute("SELECT project_id FROM project_records WHERE record_id=?", (record_id,)).fetchone()
@@ -633,6 +857,10 @@ class ScreeningService:
         project_id = int(self._project_row(project_id)["id"])
         config = self._ai_config()
         if not config["configured"]:
+            if (config.get("credentials_configured") and config.get("engine") == "pi_sdk"
+                    and not config.get("sdk_ready") and isinstance(self.provider, PiSDKProvider)):
+                return {"job_id": None, "status": "not_configured",
+                        "message": "Pi SDK运行时未就绪，请安装Node.js 22.19+并构建agent-runtime/dist/runner.js"}
             return {"job_id": None, "status": "not_configured", "message": "AI 未配置，已保留项目"}
         records = self._records_for_project(project_id)
         gate, _ = self._gate(records, project_id)
@@ -667,18 +895,105 @@ class ScreeningService:
                 count += 1
         return count
 
-    def _analysis_fingerprint(self, project: dict[str, Any], capability: dict[str, Any], config: dict[str, Any]) -> str:
+    def _analysis_fingerprint(self, project: dict[str, Any], capability: dict[str, Any], config: dict[str, Any],
+                              related_context: list[dict[str, Any]] | None = None) -> str:
         return sha256_text(json_text({
-            "input": input_fingerprint(project, capability),
+            "input": input_fingerprint(project, capability, related_context),
             "gate_status": project.get("gate_status"), "gate_reasons": project.get("gate_reasons", []),
             "model": config.get("model"), "base_url": config.get("base_url"),
-            "enabled": config.get("enabled"),
+            "enabled": config.get("enabled"), "engine": config.get("engine"),
         }))
+
+    def _agent_limits(self) -> dict[str, int]:
+        return dict(DEFAULT_AGENT_LIMITS)
+
+    def _new_agent_run(self, job_id: int, project_id: int) -> int:
+        with self._db_lock, self.db:
+            row = self.db.execute(
+                "INSERT INTO agent_runs(job_id,project_id,engine,status,started_at,steps_json,usage_json,limits_json) "
+                "VALUES (?,?,?,'running',?,?,?,?) RETURNING id",
+                (job_id, project_id, "pi_sdk", now_iso(), json_text([]),
+                 json_text({"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}),
+                 json_text(self._agent_limits())),
+            ).fetchone()
+            return int(row[0])
+
+    @staticmethod
+    def _agent_public_event(event: Any) -> dict[str, Any] | None:
+        labels = {
+            "started": "智能体已启动", "model": "模型调用", "tool_start": "工具调用开始",
+            "tool_end": "工具调用完成", "completed": "智能体输出已完成",
+        }
+        if not isinstance(event, dict) or event.get("stage") not in labels:
+            return None
+        stage = str(event["stage"])
+        value: dict[str, Any] = {"stage": stage, "label": labels[stage], "at": now_iso()}
+        tool = event.get("tool")
+        if stage in {"tool_start", "tool_end"} and isinstance(tool, str) and tool in TRUSTED_AGENT_TOOLS:
+            tool = re.sub(r"[^A-Za-z0-9_.:/-]", "", tool)[:100]
+            if tool:
+                value["tool"] = tool
+                value["label"] = f"工具：{tool}{'失败' if stage == 'tool_end' and event.get('is_error') is True else ''}"
+        elif stage == "tool_end" and event.get("is_error") is True:
+            value["label"] = "工具调用失败"
+        turn = event.get("turn")
+        if isinstance(turn, int) and 0 <= turn <= 1000:
+            value["turn"] = turn
+        return value
+
+    def _record_agent_event(self, agent_run_id: int, event: Any) -> None:
+        clean = self._agent_public_event(event)
+        if clean is None:
+            return
+        try:
+            with self._db_lock, self.db:
+                row = self.db.execute("SELECT steps_json FROM agent_runs WHERE id=?", (agent_run_id,)).fetchone()
+                steps = json_value(row[0], []) if row else []
+                if not isinstance(steps, list):
+                    steps = []
+                steps.append(clean)
+                self.db.execute("UPDATE agent_runs SET steps_json=? WHERE id=?", (json_text(steps[-200:]), agent_run_id))
+        except sqlite3.ProgrammingError:
+            # Closing the host while a provider callback is in flight should
+            # not resurrect a DB connection or mask process cleanup.
+            return
+
+    def _update_agent_usage(self, agent_run_id: int, usage: dict[str, Any] | None) -> None:
+        if not isinstance(usage, dict):
+            return
+        try:
+            with self._db_lock, self.db:
+                row = self.db.execute("SELECT usage_json FROM agent_runs WHERE id=?", (agent_run_id,)).fetchone()
+                current = json_value(row[0], {}) if row else {}
+                if not isinstance(current, dict):
+                    current = {}
+                for key in ("model_calls", "tool_calls", "input_tokens", "output_tokens"):
+                    value = usage.get(key)
+                    if isinstance(value, int) and value >= 0:
+                        current[key] = int(current.get(key, 0) or 0) + min(value, 2_000_000_000)
+                self.db.execute("UPDATE agent_runs SET usage_json=? WHERE id=?", (json_text(current), agent_run_id))
+        except sqlite3.ProgrammingError:
+            return
+
+    def _finish_agent_run(self, agent_run_id: int, status: str, error: BaseException | str | None = None) -> None:
+        if status not in {"succeeded", "failed"}:
+            status = "failed"
+        safe_error = sanitize_ai_error(error if isinstance(error, BaseException) else RuntimeError(str(error))) if error else None
+        try:
+            with self._db_lock, self.db:
+                self.db.execute("UPDATE agent_runs SET status=?,finished_at=?,error=? WHERE id=?",
+                                (status, now_iso(), safe_error, agent_run_id))
+        except sqlite3.ProgrammingError:
+            return
 
     async def run_job(self, job_id: int) -> None:
         if job_id in self._active_jobs:
             return
         self._active_jobs.add(job_id)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._run_tasks.add(current_task)
+        agent_run_id: int | None = None
         try:
             with self._db_lock, self.db:
                 job = self.db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -691,6 +1006,9 @@ class ScreeningService:
             project = self.project_detail(project_id)
             config = self._ai_config()
             if not config["configured"]:
+                if (config.get("credentials_configured") and config.get("engine") == "pi_sdk"
+                        and not config.get("sdk_ready") and isinstance(self.provider, PiSDKProvider)):
+                    raise AIError("Pi SDK运行时未就绪，请安装Node.js 22.19+并构建agent-runtime/dist/runner.js")
                 raise AIError("AI is not configured")
             gate, _ = self._gate(self._records_for_project(project_id), project_id)
             if gate in {"excluded", "expired", "duplicate", "closed"}:
@@ -699,10 +1017,25 @@ class ScreeningService:
                                     (f"gate:{gate}", now_iso(), now_iso(), job_id))
                 return
             capability = self._section("business")
-            fingerprint = self._analysis_fingerprint(project, capability, config)
+            records = self._records_for_project(project_id)
+            context, related_context = self._analysis_context(project_id, capability, records)
+            related_records = [record for related_project in related_context
+                               for record in related_project.get("records", []) if isinstance(record, dict)]
+            fingerprint = self._analysis_fingerprint(project, capability, config, related_context)
             with self._db_lock, self.db:
                 self.db.execute("UPDATE jobs SET input_fingerprint=?,updated_at=? WHERE id=?", (fingerprint, now_iso(), job_id))
-            messages = build_messages(project, capability)
+            messages = build_messages(project, capability, related_context)
+            provider: Any = self.provider
+            if config.get("engine") == "single_call" and isinstance(provider, PiSDKProvider) and not self._injected_provider:
+                provider = OpenAICompatibleProvider()
+            uses_agent = config.get("engine") == "pi_sdk" and callable(getattr(provider, "analyze", None))
+            if uses_agent:
+                agent_run_id = self._new_agent_run(job_id, project_id)
+
+                async def on_event(event: dict[str, Any]) -> None:
+                    self._record_agent_event(agent_run_id, event)
+
+            usage_totals = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}
             for correction in range(2):
                 if correction:
                     with self._db_lock, self.db:
@@ -710,14 +1043,41 @@ class ScreeningService:
                                         (now_iso(), job_id))
                 # Request failures (including credentials, timeouts and rate limits)
                 # are not output errors and must not trigger a correction request.
-                response = await self.provider.complete(base_url=config["base_url"], model=config["model"],
-                                                        api_key=config["api_key"], messages=messages)
+                if uses_agent:
+                    result = await provider.analyze(  # type: ignore[attr-defined]
+                        base_url=config["base_url"], model=config["model"], api_key=config["api_key"],
+                        messages=messages, context=context, limits=self._agent_limits(), on_event=on_event,
+                    )
+                    if isinstance(result, PiSDKResult):
+                        content = result.content
+                        usage = result.usage
+                    elif isinstance(result, dict) and isinstance(result.get("content"), str):
+                        content = result["content"]
+                        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+                    else:
+                        raise AIError("Pi SDK结果协议无效")
+                    if agent_run_id is not None:
+                        self._update_agent_usage(agent_run_id, usage)
+                    for key in usage_totals:
+                        if isinstance(usage.get(key), int) and usage[key] >= 0:
+                            usage_totals[key] += int(usage[key])
+                else:
+                    response = await provider.complete(base_url=config["base_url"], model=config["model"],
+                                                            api_key=config["api_key"], messages=messages)
+                    content = extract_content(response)
                 try:
-                    judgment = validate_judgment(extract_content(response), project, config["model"], fingerprint)
+                    judgment = validate_judgment(content, project, config["model"], fingerprint,
+                                                 related_records=related_records,
+                                                 forbidden_values=[str(config.get("api_key") or "")])
                     break
                 except AIError as exc:
                     if correction:
                         raise
+                    if agent_run_id is not None:
+                        # Retain bounded correction progress in the public
+                        # activity feed.  The raw validation error can contain
+                        # model text, so only use the trusted stage label.
+                        self._record_agent_event(agent_run_id, {"stage": "model"})
                     messages = correction_messages(messages, exc)
             capability_has_content = any(str(capability.get(key) or "").strip()
                                          for key in ("company_name", "scope_description", "supported_products",
@@ -738,7 +1098,9 @@ class ScreeningService:
             current_project = self.project_detail(project_id)
             current_config = self._ai_config()
             current_capability = self._section("business")
-            stale_generation = fingerprint != self._analysis_fingerprint(current_project, current_capability, current_config)
+            current_context, current_related_context = self._analysis_context(project_id, current_capability)
+            stale_generation = fingerprint != self._analysis_fingerprint(
+                current_project, current_capability, current_config, current_related_context)
             with self._db_lock, self.db:
                 self.db.execute("""INSERT INTO judgments(project_id,created_at,model,input_fingerprint,stale,decision,summary,demand_summary,
                                   reasons_json,unknowns_json,next_actions_json,options_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -747,20 +1109,36 @@ class ScreeningService:
                                  json_text(judgment["next_actions"]), json_text(judgment["options"])))
                 self.db.execute("UPDATE jobs SET status='succeeded',finished_at=?,updated_at=?,error=NULL WHERE id=?",
                                 (now_iso(), now_iso(), job_id))
+            if agent_run_id is not None:
+                self._finish_agent_run(agent_run_id, "succeeded")
             if stale_generation and current_config["configured"]:
                 self.queue_project(project_id, force=True, schedule=False)
         except asyncio.CancelledError:
+            if agent_run_id is not None:
+                self._finish_agent_run(agent_run_id, "failed", "任务已取消")
+            if not self._closed:
+                try:
+                    with self._db_lock, self.db:
+                        self.db.execute("UPDATE jobs SET status='failed',error=?,finished_at=?,updated_at=? WHERE id=?",
+                                        ("任务已取消", now_iso(), now_iso(), job_id))
+                except sqlite3.ProgrammingError:
+                    pass
             raise
         except Exception as exc:
             # Do not retain provider response or request data in the database.
-            error = str(exc)
-            if "api_key" in error.lower() or "authorization" in error.lower():
-                error = "AI request failed"
-            with self._db_lock, self.db:
-                self.db.execute("UPDATE jobs SET status='failed',error=?,finished_at=?,updated_at=? WHERE id=?",
-                                (error[:500], now_iso(), now_iso(), job_id))
+            error = sanitize_ai_error(exc, secrets=[str(config.get("api_key") or "")] if isinstance(locals().get("config"), dict) else [])
+            if agent_run_id is not None:
+                self._finish_agent_run(agent_run_id, "failed", error)
+            try:
+                with self._db_lock, self.db:
+                    self.db.execute("UPDATE jobs SET status='failed',error=?,finished_at=?,updated_at=? WHERE id=?",
+                                    (error[:500], now_iso(), now_iso(), job_id))
+            except sqlite3.ProgrammingError:
+                pass
         finally:
             self._active_jobs.discard(job_id)
+            if current_task is not None:
+                self._run_tasks.discard(current_task)
 
     def retry_failed(self) -> int:
         if not self._ai_config()["configured"]:
