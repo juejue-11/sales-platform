@@ -167,8 +167,9 @@ def _record(record_id: int, body: str, *, project_key: str, notice_number: str,
 
 
 class ProgressProvider:
-    def __init__(self):
+    def __init__(self, quote: str = "采购破碎机，截止时间：2099-12-31 09:00。"):
         self.context: dict | None = None
+        self.quote = quote
 
     async def analyze(self, *, context, on_event, **kwargs):
         self.context = context
@@ -181,7 +182,7 @@ class ProgressProvider:
                 "summary": "关联资料支持继续核实",
                 "demand_summary": "项目涉及破碎机采购",
                 "reasons": [{"text": "关联公告正文有采购需求", "evidence": [
-                    {"record_id": 1, "quote": "采购破碎机，截止时间：2099-12-31 09:00。"},
+                    {"record_id": 1, "quote": self.quote},
                 ]}],
                 "unknowns": [], "next_actions": ["核实采购批次"], "options": [],
             }, ensure_ascii=False),
@@ -351,6 +352,38 @@ def test_related_context_truncates_body_and_tail_change_stales_judgment(tmp_path
         )
         assert current_fingerprint != old_fingerprint
         assert current_context["related_projects"][0]["records"][0]["body_text_sha256"] == sha256_text(records[0]["body_text"])
+    finally:
+        service.close()
+
+
+def test_truncation_marker_cannot_be_used_as_related_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("SCREENING_AI_ENGINE", raising=False)
+    source = tmp_path / "records.jsonl"
+    full_body = "采购破碎机，截止时间：2099-12-31 09:00。" + ("正文内容" * 10000) + "TAIL"
+    records = [
+        _record(1, full_body, project_key="k1", notice_number="A-1"),
+        _record(2, "本批次与关联公告需核实。", project_key="k2", notice_number="B-2", related_record_id=1),
+    ]
+    source.write_text("\n".join(json.dumps(record, ensure_ascii=False) for record in records), encoding="utf-8")
+    marker = "\n[正文已截断，不能引用截断部分以外的内容]"
+    service = ScreeningService(
+        db_path=tmp_path / "screening.sqlite3", source_path=source, archive_root=tmp_path,
+        provider=ProgressProvider(quote=marker),
+    )
+    try:
+        asyncio.run(service.import_file())
+        service.update_settings({
+            "business": {"capabilities": "可供应破碎机"},
+            "ai": {"base_url": "https://mock.local/v1", "model": "mock", "enabled": True,
+                   "api_key": "secret-value"},
+        })
+        job_id = service.queue_project(2)["job_id"]
+        asyncio.run(service.run_job(job_id))
+        assert service.summary(2)["ai_status"] == "failed"
+        assert service.project_detail(2)["judgment"] is None
+        assert "evidence quote does not match source record" in (service.db.execute(
+            "SELECT error FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()[0] or "")
     finally:
         service.close()
 

@@ -442,6 +442,45 @@ class ScreeningService:
             record_count += len(selected)
         return output
 
+    def _analysis_related_validation_records(self, related_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return full source snapshots for exactly the records sent in context.
+
+        The SDK receives bounded bodies with an explicit truncation marker. A
+        validator must never treat that marker as source evidence, so it uses
+        this private snapshot captured before the provider is awaited.  Record
+        IDs are taken only from the internally-built related context and are
+        checked against their project membership in SQLite.
+        """
+        output: list[dict[str, Any]] = []
+        for related_project in related_context:
+            if not isinstance(related_project, dict):
+                continue
+            try:
+                project_id = int(related_project.get("id"))
+            except (TypeError, ValueError):
+                continue
+            record_ids: list[int] = []
+            for record in related_project.get("records", []):
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    record_id = int(record.get("id", record.get("record_id")))
+                except (TypeError, ValueError):
+                    continue
+                if record_id not in record_ids:
+                    record_ids.append(record_id)
+            if not record_ids:
+                continue
+            placeholders = ",".join("?" for _ in record_ids)
+            rows = self.db.execute(
+                f"SELECT r.* FROM records r JOIN project_records pr ON pr.record_id=r.id "
+                f"WHERE pr.project_id=? AND r.id IN ({placeholders})",
+                (project_id, *record_ids),
+            ).fetchall()
+            by_id = {int(row["id"]): self._record_dict(row) for row in rows}
+            output.extend(by_id[record_id] for record_id in record_ids if record_id in by_id)
+        return output
+
     def _related_context_fingerprints(self, project_ids: list[int] | tuple[int, ...] | None = None) -> dict[int, str]:
         """Fingerprint only the bounded related snapshots used by analysis.
 
@@ -1073,8 +1112,10 @@ class ScreeningService:
             capability = self._section("business")
             records = self._records_for_project(project_id)
             context, related_context = self._analysis_context(project_id, capability, records)
-            related_records = [record for related_project in related_context
-                               for record in related_project.get("records", []) if isinstance(record, dict)]
+            # Keep a full, bounded-by-ID validation snapshot separate from the
+            # SDK context. It is captured before awaiting the provider so a
+            # concurrent import cannot mix a new body with the old fingerprint.
+            related_records = self._analysis_related_validation_records(related_context)
             fingerprint = self._analysis_fingerprint(project, capability, config, related_context)
             with self._db_lock, self.db:
                 self.db.execute("UPDATE jobs SET input_fingerprint=?,updated_at=? WHERE id=?", (fingerprint, now_iso(), job_id))
