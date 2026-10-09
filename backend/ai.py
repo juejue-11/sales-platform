@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Iterator, Protocol
 
 import httpx
 
@@ -86,43 +86,42 @@ def _runner_path() -> Path | None:
     return None
 
 
-def _node_candidates() -> list[Path]:
+def _node_candidates() -> Iterator[Path]:
+    """Yield runtime candidates in priority order without eager filesystem scans."""
     runtime = _runtime_root()
     names = ["node.exe", "node"] if os.name == "nt" else ["node"]
-    candidates: list[Path] = []
     configured = os.getenv("SCREENING_NODE_PATH")
     if configured:
         configured_path = Path(configured).expanduser()
-        candidates.extend(
-            [configured_path / name for name in names]
-            if configured_path.is_dir()
-            else [configured_path]
-        )
+        if configured_path.is_dir():
+            for name in names:
+                yield configured_path / name
+        else:
+            yield configured_path
     found = shutil.which("node")
     if found:
-        candidates.append(Path(found))
+        yield Path(found)
 
     # A packaged deployment may carry a nodebin dependency rather than rely on
     # PATH.  Keep this search explicit and bounded; never crawl the user's
     # whole filesystem looking for a binary.
-    candidates.extend([
-        runtime / "nodebin" / name for name in names
-    ])
-    candidates.extend([
-        runtime / "node_modules" / ".bin" / name for name in names
-    ])
+    for name in names:
+        yield runtime / "nodebin" / name
+    for name in names:
+        yield runtime / "node_modules" / ".bin" / name
     for package_dir in ("node", "nodebin"):
-        candidates.extend(runtime / "node_modules" / package_dir / "bin" / name for name in names)
+        for name in names:
+            yield runtime / "node_modules" / package_dir / "bin" / name
     try:
         pnpm_dir = runtime / "node_modules" / ".pnpm"
         if pnpm_dir.is_dir():
             for package_dir in pnpm_dir.iterdir():
                 if package_dir.is_dir() and package_dir.name.lower().startswith(("node@", "nodebin@")):
                     for package_name in ("node", "nodebin"):
-                        candidates.extend(package_dir / "node_modules" / package_name / "bin" / name for name in names)
+                        for name in names:
+                            yield package_dir / "node_modules" / package_name / "bin" / name
     except OSError:
         pass
-    return candidates
 
 
 def resolve_sdk_runtime() -> tuple[Path | None, Path | None]:
