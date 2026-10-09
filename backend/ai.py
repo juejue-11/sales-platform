@@ -51,8 +51,11 @@ _TRUSTED_TOOL_LABELS = {
     "read_related_records": "读取关联资料",
 }
 _ERROR_CODES = {
-    "INVALID_REQUEST", "CONFIG_ERROR", "MODEL_ERROR", "NO_FINAL",
-    "TURN_LIMIT", "TOOL_LIMIT", "TIMEOUT", "RUNTIME_ERROR",
+    "INVALID_INPUT", "MODEL_CONFIG", "MODEL_ERROR", "NO_FINAL",
+    "TURN_LIMIT", "TOOL_LIMIT", "TIMEOUT", "INTERNAL",
+    # Keep compatibility with older runner builds while still rejecting
+    # arbitrary provider/model text from the error event.
+    "INVALID_REQUEST", "CONFIG_ERROR", "RUNTIME_ERROR",
 }
 _PROGRESS_LABELS = {
     "started": "智能体已启动",

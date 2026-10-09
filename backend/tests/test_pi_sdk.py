@@ -140,6 +140,9 @@ def test_pi_sdk_bridge_deadline_covers_child_that_does_not_read_stdin(tmp_path: 
 
 def test_pi_sdk_error_codes_are_allowlisted():
     assert _safe_error_code("MODEL_ERROR") == "MODEL_ERROR"
+    assert _safe_error_code("INVALID_INPUT") == "INVALID_INPUT"
+    assert _safe_error_code("MODEL_CONFIG") == "MODEL_CONFIG"
+    assert _safe_error_code("INTERNAL") == "INTERNAL"
     assert _safe_error_code("model-key-secret") == "RUNTIME_ERROR"
 
 
