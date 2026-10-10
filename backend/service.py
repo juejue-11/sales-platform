@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import os
 import re
@@ -21,6 +22,15 @@ from .ingest import ImportErrorDetail, ImportResult, import_records
 from .rules import business_sort_key, gate_for_project
 from .utils import SHANGHAI, json_text, json_value, now_iso, parse_timestamp, safe_join, sha256_text
 
+try:
+    # The bounded parser is supplied by the root agent.  Keep the backend
+    # importable while that module is being built and make refresh report an
+    # unavailable parser rather than silently claiming that attachments were
+    # checked.
+    from .public_documents import fetch_record_documents
+except ImportError:  # pragma: no cover - exercised in the backend-only worktree
+    fetch_record_documents = None  # type: ignore[assignment]
+
 
 DEFAULT_AGENT_LIMITS = {
     "max_turns": 6,
@@ -28,7 +38,12 @@ DEFAULT_AGENT_LIMITS = {
     "timeout_ms": 180000,
     "max_output_tokens": 4096,
 }
-TRUSTED_AGENT_TOOLS = {"read_project_records", "read_company_capability", "read_related_records"}
+TRUSTED_AGENT_TOOLS = {"read_project_records", "read_company_capability", "read_related_records",
+                       "fetch_project_documents"}
+_DOCUMENT_STATUSES = {"parsed", "unsupported", "auth_required", "failed", "unreadable"}
+_PROCUREMENT_FIELDS = ("name", "specification", "material", "quantity", "unit", "delivery_period",
+                       "delivery_location", "code", "standard", "note", "source_document_id", "record_id",
+                       "page", "quote")
 
 
 class ServiceError(RuntimeError):
@@ -343,7 +358,9 @@ class ScreeningService:
         for key, default in (("equipment_json", []), ("facts_json", []), ("inferences_json", [])):
             out_key = key.removesuffix("_json")
             result[out_key] = json_value(result.pop(key), default)
-        result.pop("source_payload_json", None)
+        payload = json_value(result.pop("source_payload_json", "{}"), {})
+        attachments = payload.get("attachments", []) if isinstance(payload, dict) else []
+        result["attachments"] = attachments if isinstance(attachments, list) else []
         return result
 
     def _records_for_project(self, project_id: int) -> list[dict[str, Any]]:
@@ -353,11 +370,359 @@ class ScreeningService:
         return sorted(records, key=business_sort_key, reverse=True)
 
     @staticmethod
+    def _document_json(value: Any, default: Any) -> Any:
+        """Decode a persisted document field without trusting its shape."""
+        if isinstance(value, (list, dict)):
+            return value
+        parsed = json_value(value, default)
+        return parsed if isinstance(parsed, type(default)) else default
+
+    @staticmethod
+    def _safe_document_id(record_id: int, raw: dict[str, Any]) -> str:
+        candidate = str(raw.get("id") or "").strip()
+        if candidate and len(candidate) <= 160 and re.fullmatch(r"[A-Za-z0-9_.:/-]+", candidate):
+            return candidate
+        seed = ":".join(str(raw.get(key) or "") for key in ("url", "name", "sha256"))
+        return f"doc-{sha256_text(f'{record_id}:{seed}')[:24]}"
+
+    @classmethod
+    def _normalize_document(cls, raw: Any, record_id: int) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        document_id = cls._safe_document_id(record_id, raw)
+        status = str(raw.get("status") or "failed").strip()
+        if status not in _DOCUMENT_STATUSES:
+            status = "failed"
+        try:
+            pages = max(0, int(raw.get("pages") or 0))
+        except (TypeError, ValueError):
+            pages = 0
+        try:
+            byte_size = max(0, int(raw.get("byte_size") or 0))
+        except (TypeError, ValueError):
+            byte_size = 0
+        text = str(raw.get("text") or "")
+        # The parser itself has a lower cap; this protects the DB and tool
+        # response if a future parser returns an unexpectedly large value.
+        text = text[:500_000]
+        page_texts: list[dict[str, Any]] = []
+        for page_value in raw.get("page_texts", []) if isinstance(raw.get("page_texts"), list) else []:
+            if not isinstance(page_value, dict):
+                continue
+            try:
+                page = max(1, int(page_value.get("page") or 1))
+            except (TypeError, ValueError):
+                page = 1
+            page_texts.append({"page": page, "text": str(page_value.get("text") or "")[:200_000]})
+            if len(page_texts) >= 200:
+                break
+        items: list[dict[str, Any]] = []
+        for item_value in raw.get("items", []) if isinstance(raw.get("items"), list) else []:
+            if not isinstance(item_value, dict):
+                continue
+            item = {key: item_value.get(key, "") for key in _PROCUREMENT_FIELDS}
+            for key in ("name", "specification", "material", "quantity", "unit", "delivery_period",
+                        "delivery_location", "code", "standard", "note", "source_document_id", "quote"):
+                item[key] = str(item.get(key) or "")[:20_000]
+            # The server document is the authority for provenance; never let
+            # a parser payload point an item at an unrelated document id.
+            item["source_document_id"] = document_id
+            try:
+                item["record_id"] = int(item.get("record_id") or record_id)
+            except (TypeError, ValueError):
+                item["record_id"] = record_id
+            try:
+                item["page"] = max(1, int(item.get("page") or 1))
+            except (TypeError, ValueError):
+                item["page"] = 1
+            items.append(item)
+            if len(items) >= 2000:
+                break
+        return {
+            "id": document_id, "record_id": int(record_id),
+            "name": str(raw.get("name") or "")[:2000], "url": str(raw.get("url") or "")[:4000],
+            "status": status, "pages": pages, "sha256": str(raw.get("sha256") or "")[:128],
+            "fetched_at": str(raw.get("fetched_at") or "")[:100],
+            "mime_type": str(raw.get("mime_type") or "")[:200], "byte_size": byte_size,
+            "text": text, "page_texts": page_texts, "items": items,
+            "error": str(raw.get("error") or "")[:240],
+        }
+
+    def _document_row_value(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": str(row["id"]), "record_id": int(row["record_id"]), "name": row["name"] or "",
+            "url": row["url"] or "", "status": row["status"] if row["status"] in _DOCUMENT_STATUSES else "failed",
+            "pages": int(row["pages"] or 0), "sha256": row["sha256"] or "", "fetched_at": row["fetched_at"],
+            "mime_type": row["mime_type"] or "", "byte_size": int(row["byte_size"] or 0),
+            "text": row["text"] or "", "page_texts": self._document_json(row["page_texts_json"], []),
+            "items": self._document_json(row["items_json"], []), "error": row["error"] or "",
+            "is_current": bool(row["is_current"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def _document_sources_for_records(self, record_ids: list[int] | tuple[int, ...] | None = None,
+                                      *, current_only: bool = True) -> list[dict[str, Any]]:
+        current_clause = " WHERE is_current=1" if current_only else ""
+        if record_ids is None:
+            rows = self.db.execute(f"SELECT * FROM procurement_documents{current_clause} ORDER BY record_id,id").fetchall()
+        elif not record_ids:
+            return []
+        else:
+            placeholders = ",".join("?" for _ in record_ids)
+            rows = self.db.execute(
+                f"SELECT * FROM procurement_documents WHERE record_id IN ({placeholders})"
+                f"{' AND is_current=1' if current_only else ''} ORDER BY record_id,id",
+                tuple(int(value) for value in record_ids),
+            ).fetchall()
+        return [self._document_row_value(row) for row in rows]
+
+    @staticmethod
+    def _document_public_metadata(document: dict[str, Any]) -> dict[str, Any]:
+        return {key: document.get(key) for key in (
+            "id", "record_id", "name", "url", "status", "pages", "sha256", "fetched_at", "mime_type",
+            "byte_size", "error", "updated_at",
+        )}
+
+    @staticmethod
+    def _procurement_fingerprint(procurement: dict[str, Any] | None) -> str:
+        """Hash semantic procurement facts while ignoring refresh timestamps."""
+        value = procurement if isinstance(procurement, dict) else {}
+        documents = []
+        for document in value.get("documents", []) if isinstance(value.get("documents"), list) else []:
+            if not isinstance(document, dict):
+                continue
+            documents.append({key: document.get(key) for key in (
+                "id", "record_id", "name", "url", "status", "pages", "sha256", "mime_type", "byte_size", "error",
+            )})
+        return sha256_text(json_text({
+            "status": value.get("status"), "scope_summary": value.get("scope_summary"),
+            "items": value.get("items", []), "delivery_period": value.get("delivery_period"),
+            "delivery_location": value.get("delivery_location"), "missing_fields": value.get("missing_fields", []),
+            "documents": documents,
+        }))
+
+    def _procurement_for_project(self, project_id: int) -> dict[str, Any]:
+        record_rows = self.db.execute(
+            "SELECT r.id,r.source_payload_json FROM records r JOIN project_records pr ON pr.record_id=r.id "
+            "WHERE pr.project_id=? ORDER BY r.id", (project_id,)
+        ).fetchall()
+        record_ids = [int(row["id"]) for row in record_rows]
+        documents = self._document_sources_for_records(record_ids)
+        refresh = self.db.execute("SELECT * FROM procurement_refreshes WHERE project_id=?", (project_id,)).fetchone()
+        source_attachment_count = 0
+        for row in record_rows:
+            payload = json_value(row["source_payload_json"], {})
+            if isinstance(payload, dict) and isinstance(payload.get("attachments"), list):
+                source_attachment_count += len(payload["attachments"])
+
+        public_documents = [self._document_public_metadata(document) for document in documents]
+        parsed_documents = [document for document in documents if document.get("status") == "parsed"]
+        unresolved_documents = [document for document in documents if document.get("status") != "parsed"]
+        items: list[dict[str, Any]] = []
+        seen_items: set[tuple[Any, ...]] = set()
+        for document in parsed_documents:
+            for raw_item in document.get("items", []):
+                if not isinstance(raw_item, dict):
+                    continue
+                item = {key: raw_item.get(key, "") for key in _PROCUREMENT_FIELDS}
+                item["source_document_id"] = str(item.get("source_document_id") or document["id"])
+                try:
+                    item["record_id"] = int(item.get("record_id") or document["record_id"])
+                except (TypeError, ValueError):
+                    item["record_id"] = int(document["record_id"])
+                try:
+                    item["page"] = max(1, int(item.get("page") or 1))
+                except (TypeError, ValueError):
+                    item["page"] = 1
+                key = (item["source_document_id"], item["page"], item.get("name"), item.get("quote"))
+                if key in seen_items:
+                    continue
+                seen_items.add(key)
+                items.append(item)
+
+        names: list[str] = []
+        for item in items:
+            name = str(item.get("name") or "").strip()
+            spec = str(item.get("specification") or "").strip()
+            material = str(item.get("material") or "").strip()
+            label = name
+            details = " / ".join(value for value in (spec, material) if value)
+            if details:
+                label = f"{label}（{details}）" if label else details
+            if label and label not in names:
+                names.append(label)
+        if names:
+            scope_summary = "、".join(names[:8])
+            if len(names) > 8:
+                scope_summary += f"等{len(items)}项"
+            else:
+                scope_summary += f"（共{len(items)}项）"
+        else:
+            scope_summary = ""
+
+        periods = list(dict.fromkeys(str(item.get("delivery_period") or "").strip() for item in items if str(item.get("delivery_period") or "").strip()))
+        locations = list(dict.fromkeys(str(item.get("delivery_location") or "").strip() for item in items if str(item.get("delivery_location") or "").strip()))
+        missing: list[str] = []
+        if not items:
+            missing.append("明细")
+        else:
+            if any(not str(item.get("quantity") or "").strip() or not str(item.get("unit") or "").strip() for item in items):
+                missing.append("数量/单位")
+            if any(not str(item.get("specification") or "").strip() and not str(item.get("material") or "").strip() for item in items):
+                missing.append("规格/材质")
+        if not periods:
+            missing.append("交期")
+        if not locations:
+            missing.append("交地")
+        if unresolved_documents or (source_attachment_count and not documents):
+            missing.append("附件未解析")
+        missing = list(dict.fromkeys(missing))
+
+        attempted = refresh is not None
+        if not documents:
+            status = "unavailable" if attempted else "not_checked"
+        elif not parsed_documents:
+            status = "unavailable"
+        elif unresolved_documents or missing:
+            status = "partial"
+        else:
+            status = "complete"
+        updated_values = [str(document.get("updated_at") or "") for document in documents if document.get("updated_at")]
+        if refresh and refresh["attempted_at"]:
+            updated_values.append(str(refresh["attempted_at"]))
+        updated_at = max(updated_values) if updated_values else None
+        return {
+            "status": status, "scope_summary": scope_summary, "items": items,
+            "delivery_period": "；".join(periods)[:4000], "delivery_location": "；".join(locations)[:4000],
+            "missing_fields": missing, "documents": public_documents, "updated_at": updated_at,
+        }
+
+    async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Fetch and persist attachment documents without invoking an AI provider."""
+        if fetch_record_documents is None:
+            raise ServiceError("采购附件解析模块未就绪")
+        before = self._procurement_for_project(project_id)
+        target_record_ids = [int(record["id"]) for record in records]
+        fetched: list[dict[str, Any]] = []
+        for record in records:
+            record_id = int(record["id"])
+            request_record = {
+                "id": record_id, "record_id": record_id,
+                "source_url": record.get("original_url") or record.get("canonical_url") or "",
+                "original_url": record.get("original_url") or "",
+                "canonical_url": record.get("canonical_url") or "",
+                "body_text": record.get("body_text") or "",
+                "attachments": record.get("attachments") if isinstance(record.get("attachments"), list) else [],
+            }
+            try:
+                result = await fetch_record_documents(request_record)
+                if not isinstance(result, list):
+                    raise ValueError("invalid_document_result")
+            except Exception as exc:
+                raw_code = str(exc).strip()
+                safe_code = raw_code if raw_code in {"auth_required", "source_unreachable", "download_failed",
+                                                      "attachment_too_large", "redirect_limit", "invalid_source_url",
+                                                      "attachment_outside_source", "non_public_source"} else "fetch_failed"
+                result = [{"id": f"fetch-{record_id}", "record_id": record_id,
+                           "name": "附件获取失败", "url": request_record["source_url"],
+                           "status": "auth_required" if safe_code == "auth_required" else "failed",
+                           "error": safe_code}]
+            for raw in result:
+                document = self._normalize_document(raw, record_id)
+                if document is not None:
+                    fetched.append(document)
+
+        with self._db_lock, self.db:
+            if target_record_ids:
+                placeholders = ",".join("?" for _ in target_record_ids)
+                # Keep superseded rows for historical citations, but exclude
+                # them from the current aggregate after every refresh. An
+                # empty result therefore also reflects attachment deletion.
+                self.db.execute(f"UPDATE procurement_documents SET is_current=0 WHERE record_id IN ({placeholders})",
+                                tuple(target_record_ids))
+            for document in fetched:
+                existing = self.db.execute("SELECT sha256 FROM procurement_documents WHERE id=?", (document["id"],)).fetchone()
+                if existing and existing["sha256"] and document["sha256"] and existing["sha256"] != document["sha256"]:
+                    old_id = document["id"]
+                    document["id"] = f"{old_id}-{document['sha256'][:16]}"
+                    for item in document["items"]:
+                        if item.get("source_document_id") == old_id:
+                            item["source_document_id"] = document["id"]
+                self.db.execute(
+                    """INSERT INTO procurement_documents
+                    (id,record_id,name,url,status,pages,sha256,fetched_at,mime_type,byte_size,text,page_texts_json,items_json,error,is_current,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET record_id=excluded.record_id,name=excluded.name,url=excluded.url,
+                    status=excluded.status,pages=excluded.pages,sha256=excluded.sha256,fetched_at=excluded.fetched_at,
+                    mime_type=excluded.mime_type,byte_size=excluded.byte_size,text=excluded.text,
+                    page_texts_json=excluded.page_texts_json,items_json=excluded.items_json,error=excluded.error,
+                    is_current=1,updated_at=excluded.updated_at""",
+                    (document["id"], document["record_id"], document["name"], document["url"], document["status"],
+                     document["pages"], document["sha256"], document["fetched_at"], document["mime_type"],
+                     document["byte_size"], document["text"], json_text(document["page_texts"]),
+                     json_text(document["items"]), document["error"], 1, now_iso()),
+                )
+            self.db.execute(
+                "INSERT INTO procurement_refreshes(project_id,attempted_at,status,message) VALUES (?,?,?,?) "
+                "ON CONFLICT(project_id) DO UPDATE SET attempted_at=excluded.attempted_at,status=excluded.status,message=excluded.message",
+                (project_id, now_iso(), "succeeded", "附件已刷新" if fetched else "未发现可解析附件"),
+            )
+            after = self._procurement_for_project(project_id)
+            semantic_changed = self._procurement_fingerprint(before) != self._procurement_fingerprint(after)
+            if semantic_changed:
+                self.db.execute("UPDATE judgments SET stale=1 WHERE project_id=?", (project_id,))
+            self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
+        return after
+
+    async def refresh_project_documents(self, project_id: int) -> dict[str, Any]:
+        project_id = int(self._project_row(project_id)["id"])
+        records = self._records_for_project(project_id)
+        try:
+            procurement = await self._refresh_record_documents(project_id, records)
+            message = "采购附件刷新完成"
+        except ServiceError as exc:
+            with self._db_lock, self.db:
+                self.db.execute(
+                    "INSERT INTO procurement_refreshes(project_id,attempted_at,status,message) VALUES (?,?,?,?) "
+                    "ON CONFLICT(project_id) DO UPDATE SET attempted_at=excluded.attempted_at,status=excluded.status,message=excluded.message",
+                    (project_id, now_iso(), "failed", str(exc)[:240]),
+                )
+                self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
+            procurement = self._procurement_for_project(project_id)
+            message = str(exc)
+        return {"procurement": procurement, "message": message}
+
+    async def _agent_fetch_documents(self, project_id: int, arguments: Any) -> dict[str, Any]:
+        if not isinstance(arguments, dict) or any(key != "record_id" for key in arguments):
+            raise AIError("工具参数无效")
+        value = arguments.get("record_id")
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise AIError("工具参数无效")
+        records = self._records_for_project(project_id)
+        allowed = {int(record["id"]): record for record in records}
+        if value is None:
+            targets = records
+        elif int(value) in allowed:
+            targets = [allowed[int(value)]]
+        else:
+            raise AIError("工具无权限")
+        await self._refresh_record_documents(project_id, targets)
+        documents = self._document_sources_for_records([int(record["id"]) for record in targets])
+        return {"documents": documents, "procurement": self._procurement_for_project(project_id)}
+
+    @staticmethod
     def _analysis_record(record: dict[str, Any]) -> dict[str, Any]:
         # Keep the context self-contained while avoiding collector payloads and
         # local archive paths.  ``record_id`` is explicit because it is the
         # citation identity used by the Pi agent.
         full_body = str(record.get("body_text") or "")
+        attachment_metadata = []
+        for attachment in record.get("attachments", []) if isinstance(record.get("attachments"), list) else []:
+            if not isinstance(attachment, dict):
+                continue
+            attachment_metadata.append({key: attachment.get(key) for key in (
+                "name", "url", "status", "sha256", "mime_type", "byte_size", "pages",
+            )})
         value = {
             "id": record.get("id"),
             "record_id": record.get("id"),
@@ -379,6 +744,8 @@ class ScreeningService:
             # Keep the complete source identity even when the protocol body is
             # truncated, so changes in an unseen tail invalidate the input.
             "body_text_sha256": sha256_text(full_body),
+            "attachments": attachment_metadata,
+            "attachments_sha256": sha256_text(json_text(attachment_metadata)),
             "related_record_id": record.get("related_record_id"),
         }
         return value
@@ -388,6 +755,7 @@ class ScreeningService:
         records = records if records is not None else self._records_for_project(project_id)
         latest = records[0] if records else {}
         gate, gate_reasons = self._gate(records, project_id)
+        procurement = self._procurement_for_project(project_id)
         return {
             "id": int(project_id),
             "title": latest.get("title") or f"项目 {project_id}",
@@ -400,6 +768,10 @@ class ScreeningService:
             "gate_status": gate,
             "gate_reasons": gate_reasons,
             "records": [self._analysis_record(record) for record in records],
+            # The aggregate contains only server-parsed facts and document
+            # metadata. Full text remains available through the trusted tool.
+            "procurement": procurement,
+            "procurement_fingerprint": self._procurement_fingerprint(procurement),
             "updated_at": project_row["updated_at"],
         }
 
@@ -746,6 +1118,10 @@ class ScreeningService:
         published = latest.get("published_at")
         deadline = latest.get("deadline_at")
         briefing = build_briefing(latest)
+        procurement = self._procurement_for_project(project_id)
+        # Keep source-derived briefing fields intact while exposing parsed
+        # attachment facts beside them for detail and list clients.
+        briefing["procurement"] = procurement
         ai_next_actions = active_judgment.get("next_actions") if active_judgment else []
         if not isinstance(ai_next_actions, list):
             ai_next_actions = []
@@ -761,6 +1137,8 @@ class ScreeningService:
             "demand_summary": active_judgment["demand_summary"] if active_judgment else None,
             "ai_next_actions": ai_next_actions,
             "briefing": briefing,
+            "procurement": procurement,
+            "procurement_fingerprint": self._procurement_fingerprint(procurement),
             "needs_review": gate == "review" or ai_status in {"stale", "failed", "not_configured", "idle"} or
                             (judgment is not None and judgment["decision"] == "verify") or selection_needs_review,
             "decision": decision_value,
@@ -819,7 +1197,9 @@ class ScreeningService:
             equipment = " ".join(str(value) for value in item.get("equipment") or [])
             haystack = " ".join([str(item.get("title") or ""), str(item.get("buyer") or ""),
                                  equipment, str(item.get("ai_summary") or ""),
-                                 str(briefing.get("scope_excerpt") or "")]).lower()
+                                 str(briefing.get("scope_excerpt") or ""),
+                                 str((item.get("procurement") or {}).get("scope_summary") or ""),
+                                 str((item.get("procurement") or {}).get("delivery_location") or "")]).lower()
             if q and q.lower() not in haystack:
                 continue
             if active_only and item["gate_status"] not in {"candidate", "review"}:
@@ -1019,6 +1399,7 @@ class ScreeningService:
                     "read_project_records": "读取项目资料",
                     "read_company_capability": "读取公司能力",
                     "read_related_records": "读取关联资料",
+                    "fetch_project_documents": "读取采购附件",
                 }
                 name = names[tool]
                 if stage == "tool_start":
@@ -1130,6 +1511,19 @@ class ScreeningService:
                 async def on_event(event: dict[str, Any]) -> None:
                     self._record_agent_event(agent_run_id, event)
 
+                async def tool_callback(arguments: dict[str, Any]) -> dict[str, Any]:
+                    nonlocal fingerprint
+                    value = await self._agent_fetch_documents(project_id, arguments)
+                    # The first attachment fetch is part of this job's
+                    # trusted input. Refresh the fingerprint after the tool
+                    # persists it so the job does not mark its own judgment
+                    # stale and enqueue itself again. A concurrent source
+                    # import is still detected by the final comparison below.
+                    fingerprint = self._analysis_fingerprint(
+                        self.project_detail(project_id), capability, config, related_context
+                    )
+                    return value
+
             usage_totals = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}
             for correction in range(2):
                 if correction:
@@ -1139,10 +1533,18 @@ class ScreeningService:
                 # Request failures (including credentials, timeouts and rate limits)
                 # are not output errors and must not trigger a correction request.
                 if uses_agent:
-                    result = await provider.analyze(  # type: ignore[attr-defined]
-                        base_url=config["base_url"], model=config["model"], api_key=config["api_key"],
-                        messages=messages, context=context, limits=self._agent_limits(), on_event=on_event,
-                    )
+                    analyze_kwargs = {
+                        "base_url": config["base_url"], "model": config["model"], "api_key": config["api_key"],
+                        "messages": messages, "context": context, "limits": self._agent_limits(), "on_event": on_event,
+                    }
+                    try:
+                        parameters = inspect.signature(provider.analyze).parameters  # type: ignore[attr-defined]
+                    except (TypeError, ValueError):
+                        parameters = {}
+                    if "tool_callback" in parameters or any(parameter.kind == inspect.Parameter.VAR_KEYWORD
+                                                            for parameter in parameters.values()):
+                        analyze_kwargs["tool_callback"] = tool_callback
+                    result = await provider.analyze(**analyze_kwargs)  # type: ignore[attr-defined]
                     if isinstance(result, PiSDKResult):
                         content = result.content
                         usage = result.usage
@@ -1161,9 +1563,13 @@ class ScreeningService:
                                                             api_key=config["api_key"], messages=messages)
                     content = extract_content(response)
                 try:
+                    document_sources = self._document_sources_for_records(
+                        [int(record["id"]) for record in records if record.get("id") is not None]
+                    )
                     judgment = validate_judgment(content, project, config["model"], fingerprint,
                                                  related_records=related_records,
-                                                 forbidden_values=[str(config.get("api_key") or "")])
+                                                 forbidden_values=[str(config.get("api_key") or "")],
+                                                 document_sources=document_sources)
                     break
                 except AIError as exc:
                     if correction:

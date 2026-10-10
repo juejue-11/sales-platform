@@ -144,6 +144,35 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id, id DESC);
+-- Procurement documents are kept independently from the collector正文.  A
+-- refresh can therefore add parsed attachment facts without rewriting the
+-- source record or its version history.
+CREATE TABLE IF NOT EXISTS procurement_documents (
+    id TEXT PRIMARY KEY,
+    record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    pages INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT,
+    mime_type TEXT,
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    text TEXT NOT NULL DEFAULT '',
+    page_texts_json TEXT NOT NULL DEFAULT '[]',
+    items_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_documents_record ON procurement_documents(record_id);
+CREATE INDEX IF NOT EXISTS idx_procurement_documents_status ON procurement_documents(status);
+CREATE TABLE IF NOT EXISTS procurement_refreshes (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    attempted_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT NOT NULL,
@@ -185,6 +214,11 @@ def connect(path: Path) -> sqlite3.Connection:
         db.execute("ALTER TABLE decisions ADD COLUMN judgment_id INTEGER")
     if "judgment_fingerprint" not in decision_columns:
         db.execute("ALTER TABLE decisions ADD COLUMN judgment_fingerprint TEXT")
+    document_columns = {row[1] for row in db.execute("PRAGMA table_info(procurement_documents)")}
+    if "is_current" not in document_columns:
+        # Existing document rows predate version-aware refreshes. Treat them
+        # as current once so the first refresh can supersede them safely.
+        db.execute("ALTER TABLE procurement_documents ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1")
     return db
 
 
