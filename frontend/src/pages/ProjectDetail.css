@@ -962,6 +962,10 @@
   font-size: 12px;
 }
 
+.detail-evidence-source {
+  overflow-wrap: anywhere;
+}
+
 .detail-evidence-item q {
   color: #516a83;
   line-height: 1.65;

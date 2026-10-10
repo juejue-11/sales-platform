@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Table, Tag, Typography, message } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { DecisionStatus, JudgmentOption, ProcurementData, ProcurementDocument, ProcurementItem, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
+import type { DecisionStatus, Evidence, JudgmentOption, ProcurementData, ProcurementDocument, ProcurementItem, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
 import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
 import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
 import { cleanQualificationExcerpt, cleanScopeExcerpt, normalizeOpportunityText } from '../components/opportunities/text'
@@ -246,7 +246,7 @@ export function ProjectDetailPage() {
             <div className="detail-side-column">
               <section className="detail-panel detail-analysis-card" id="ai-evidence" aria-labelledby="ai-evidence-heading">
                 <header className="detail-section-header"><div className="detail-section-heading"><RobotOutlined /><h2 id="ai-evidence-heading">AI 理由与证据</h2></div><AiStatusTag status={detail.ai_status} /></header>
-                {detail.judgment ? <div className="detail-judgment-body"><div className="detail-judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="detail-reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="detail-evidence-list">{reason.evidence.map((evidence) => <div className="detail-evidence-item" key={`${evidence.record_id}-${evidence.quote}`}><Text type="secondary">记录 #{evidence.record_id}</Text><q>{evidence.quote}</q></div>)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+                {detail.judgment ? <div className="detail-judgment-body"><div className="detail-judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="detail-reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="detail-evidence-list">{reason.evidence.map((evidence, index) => <EvidenceItem evidence={evidence} procurement={detail.procurement} records={detail.records} key={`${evidence.document_id ?? 'record'}-${evidence.record_id}-${evidence.page ?? ''}-${evidence.quote}-${index}`} />)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />}
                 <AgentExecutionActivity run={detail.agent_run} retrying={actionLoading === 'analyze'} onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')} />
                 {detail.judgment?.unknowns && detail.judgment.unknowns.length > 0 && <div className="detail-unknown-panel"><Text strong><WarningOutlined /> 待确认信息</Text><ul className="detail-compact-list">{detail.judgment.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul></div>}
               </section>
@@ -349,6 +349,28 @@ function RecordPanel({ record }: { record: ProjectDetailData['records'][number] 
   return <div className="detail-record-panel"><Space wrap><Tag>记录 #{record.id}</Tag>{record.parse_status && <Tag>{record.parse_status}</Tag>}{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开原文</a>}<a href={api.archiveUrl(record.id)} target="_blank" rel="noreferrer">下载归档</a></Space><Paragraph className="detail-record-body">{record.body_text || '这条记录没有正文内容。'}</Paragraph><Collapse ghost items={[{ key: 'facts', label: '已抽取事实', children: <StructuredFields value={record.facts} emptyText="暂无已抽取事实" /> }, { key: 'inferences', label: '推测与待核实线索', children: <StructuredFields value={record.inferences} emptyText="暂无推测；请以公告正文为准" tone="warning" /> }]} /></div>
 }
 
+function sourceHrefWithPage(href: string, page?: number | null): string {
+  if (!href || page == null || page <= 0) return href
+  const hashIndex = href.indexOf('#')
+  return `${hashIndex >= 0 ? href.slice(0, hashIndex) : href}#page=${page}`
+}
+
+function EvidenceItem({ evidence, procurement, records }: { evidence: Evidence; procurement: ProjectDetailData['procurement']; records: ProjectDetailData['records'] }) {
+  const hasDocumentId = evidence.document_id !== null && evidence.document_id !== undefined && String(evidence.document_id).trim() !== ''
+  const document = hasDocumentId ? procurement?.documents.find((candidate) => String(candidate.id) === String(evidence.document_id)) : undefined
+  const record = records.find((candidate) => candidate.id === evidence.record_id)
+  const attachmentName = evidence.document_name || document?.name || '采购附件'
+  const page = evidence.page != null && evidence.page > 0 ? evidence.page : null
+  const label = hasDocumentId
+    ? `${attachmentName}${page ? ` · 第 ${page} 页` : ''} · 记录 #${evidence.record_id}`
+    : `公告正文 · 记录 #${evidence.record_id}`
+  const rawHref = hasDocumentId
+    ? evidence.source_url || document?.url || ''
+    : record?.original_url || record?.canonical_url || api.archiveUrl(evidence.record_id)
+  const href = sourceHrefWithPage(rawHref, page)
+  return <div className="detail-evidence-item"><span className="detail-evidence-source">{href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : label}</span><q>{evidence.quote}</q></div>
+}
+
 const procurementStatusMeta: Record<ProcurementData['status'], { label: string; description: string }> = {
   not_checked: { label: '尚未检查附件', description: '当前只有公告正文，附件资料还没有被读取。' },
   partial: { label: '已解析部分资料', description: '已读取部分采购资料，仍有字段需要人工核对。' },
@@ -438,11 +460,7 @@ function procurementSourceHref(item: ProcurementItem, document: ProcurementDocum
     const record = records.find((candidate) => candidate.id === item.record_id)
     return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
   })()
-  if (item.page > 0 && baseHref) {
-    const hashIndex = baseHref.indexOf('#')
-    return `${hashIndex >= 0 ? baseHref.slice(0, hashIndex) : baseHref}#page=${item.page}`
-  }
-  if (baseHref) return baseHref
+  if (baseHref) return sourceHrefWithPage(baseHref, item.page)
   const record = records.find((candidate) => candidate.id === item.record_id)
   return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
 }
