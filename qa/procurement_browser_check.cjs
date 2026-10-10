@@ -25,7 +25,9 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
       assert.ok(text.includes('本溪市'));
       assert.ok(text.includes('21 组物料'));
       assert.ok(text.includes('交货地点'));
-      assert.ok(text.includes('具体收货地址需确认'));
+      assert.ok(text.includes('具体收货地址待确认'));
+      assert.ok(!text.includes('同类物料汇总'));
+      assert.ok(!text.includes('已读取部分采购资料'));
       assert.ok(!text.includes('共143项物料，包括'));
       assert.equal(await section.getByRole('heading',{name:'采购范围',exact:true}).count(),1);
       assert.ok(!text.includes('采购范围明细'));
@@ -63,11 +65,11 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
     if(process.argv.includes('--refresh')) {
       const [response] = await Promise.all([
         page.waitForResponse(r=>r.url().endsWith('/api/projects/174/documents/refresh') && r.request().method()==='POST',{timeout:65000}),
-        page.getByRole('button',{name:/重新核对资料/}).click(),
+        page.getByRole('button',{name:'更新资料',exact:true}).click(),
       ]);
       assert.equal(response.status(),200);
       assert.equal((await response.json()).procurement.items.length,143);
-      await page.getByRole('button',{name:/重新核对资料/}).waitFor();
+      await page.getByRole('button',{name:'更新资料',exact:true}).waitFor();
     }
     await page.getByRole('textbox',{name:'搜索物料明细'}).fill('H型钢');
     await page.locator('.detail-procurement-table-wrap tbody tr.ant-table-row').first().waitFor();

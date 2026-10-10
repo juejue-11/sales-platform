@@ -373,13 +373,6 @@ function EvidenceItem({ evidence, procurement, records }: { evidence: Evidence; 
   return <div className="detail-evidence-item"><span className="detail-evidence-source">{href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : label}</span><q>{evidence.quote}</q></div>
 }
 
-const procurementStatusMeta: Record<ProcurementData['status'], { label: string; description: string }> = {
-  not_checked: { label: '尚未检查附件', description: '当前只有公告正文，附件资料还没有被读取。' },
-  partial: { label: '已解析部分资料', description: '已读取部分采购资料，仍有字段需要人工核对。' },
-  complete: { label: '资料已核对', description: '采购明细与交付信息来自已解析的采购资料。' },
-  unavailable: { label: '资料暂不可用', description: '附件下载或解析没有完成，缺少部分采购依据。' },
-}
-
 const procurementDocumentStatusMeta: Record<ProcurementDocument['status'], { label: string; color?: string }> = {
   parsed: { label: '已解析', color: 'success' },
   unsupported: { label: '暂不支持解析', color: 'default' },
@@ -497,9 +490,7 @@ function ProcurementBriefing({
 }) {
   const fallbackRecord = records.find((record) => record.original_url || record.canonical_url)
   const sourceUrl = briefing?.original_url || fallbackRecord?.original_url || fallbackRecord?.canonical_url || ''
-  const recordId = briefing?.record_id ?? records[0]?.id ?? null
   const status = procurement?.status ?? 'not_checked'
-  const statusMeta = procurementStatusMeta[status]
   const parsedScope = cleanScopeExcerpt(procurement?.scope_summary, title)
   const scope = parsedScope || cleanScopeExcerpt(briefing?.scope_excerpt, title)
   const items = procurement?.items ?? []
@@ -578,14 +569,21 @@ function ProcurementBriefing({
     },
   ]
   const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
+  const deliveryHeadline = deliveryPeriod.match(/(?:\d+|[一二三四五六七八九十百]+)(?:个)?(?:工作)?(?:日|天)内(?:供完|交完|交货|送达|完成交付)/)?.[0]
   const deliveryContent = deliveryPeriod || deliveryLocation ? (
     <dl className="detail-procurement-delivery-facts">
-      <div><dt>交货时间</dt><dd>{deliveryPeriod || '待核对'}</dd></div>
+      <div>
+        <dt>交货时间</dt>
+        <dd>
+          <strong className="detail-procurement-delivery-value">{deliveryHeadline || deliveryPeriod || '待确认'}</strong>
+          {deliveryHeadline && deliveryHeadline !== deliveryPeriod && <span className="detail-procurement-delivery-context">{deliveryPeriod}</span>}
+        </dd>
+      </div>
       <div>
         <dt>交货地点</dt>
         <dd>
-          {deliveryLocation || '待核对'}
-          {/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">资料仅注明城市或地区，具体收货地址需确认</span>}
+          <strong className="detail-procurement-delivery-value">{deliveryLocation || '待确认'}</strong>
+          {/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">具体收货地址待确认</span>}
         </dd>
       </div>
     </dl>
@@ -595,17 +593,15 @@ function ProcurementBriefing({
     <section className="detail-briefing detail-procurement" aria-labelledby="procurement-briefing-heading">
       <div className="detail-briefing-heading-row">
         <div className="detail-briefing-heading">
-          <div className="detail-procurement-title-line"><h2 id="procurement-briefing-heading">采购信息</h2><Tag color={statusMeta.label === '资料已核对' ? 'success' : status === 'unavailable' ? 'error' : 'warning'}>{statusMeta.label}</Tag></div>
-          <span className="detail-briefing-note" role="note">同类物料汇总，展开核对规格与来源</span>
+          <h2 id="procurement-briefing-heading">采购信息</h2>
         </div>
         <div className="detail-briefing-source detail-procurement-actions">
-          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未提供</Text>}
-          {recordId != null && <Text type="secondary">记录 #{recordId}</Text>}
-          <Button size="small" icon={status === 'not_checked' || status === 'unavailable' ? <FileTextOutlined /> : <ReloadOutlined />} loading={refreshing} onClick={onRefresh}>{status === 'not_checked' || status === 'unavailable' ? '补充采购资料' : '重新核对资料'}</Button>
+          {procurement?.updated_at && <time className="detail-procurement-updated" dateTime={procurement.updated_at}>{formatDate(procurement.updated_at, true).slice(5)} 更新</time>}
+          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 公告原文</a> : <Text type="secondary">原文链接未提供</Text>}
+          <Button type="text" size="small" icon={status === 'not_checked' || status === 'unavailable' ? <FileTextOutlined /> : <ReloadOutlined />} loading={refreshing} onClick={onRefresh}>{status === 'not_checked' || status === 'unavailable' ? '读取附件' : '更新资料'}</Button>
         </div>
       </div>
 
-      <div className="detail-procurement-status-line"><FileTextOutlined /><span>{statusMeta.description}</span>{procurement?.updated_at && <Text type="secondary">更新于 {formatDate(procurement.updated_at, true)}</Text>}</div>
       {Boolean(error) && <Alert className="detail-procurement-error" type="error" showIcon message="采购资料核对失败" description={errorText} />}
 
       {items.length > 0 ? <div className="detail-procurement-delivery-strip" aria-label="交付要求">{deliveryContent}</div> : <div className="detail-briefing-primary">
@@ -667,7 +663,7 @@ function ProcurementBriefing({
 
       <section className="detail-procurement-documents" aria-labelledby="procurement-documents-heading">
         <div className="detail-procurement-section-heading"><div><h3 id="procurement-documents-heading">附件与来源</h3><Text type="secondary">附件名、页码和链接用于回到原文核对</Text></div><Text type="secondary">{documents.length ? `${documents.length} 份资料` : procurementMissingValue(procurement, '')}</Text></div>
-        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; const documentError = procurementDocumentError(document.error); return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{procurementPageLabel(document.pages)} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{documentError && <div className="detail-procurement-document-error">{documentError}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">尚未检查附件；点击“补充采购资料”开始核对。</div>}
+        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; const documentError = procurementDocumentError(document.error); return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{procurementPageLabel(document.pages)} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{documentError && <div className="detail-procurement-document-error">{documentError}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">点击“读取附件”，查看采购清单。</div>}
       </section>
 
       <details className="detail-briefing-qualifications">
