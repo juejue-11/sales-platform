@@ -362,6 +362,8 @@ interface PendingRpc {
 class DuplexRpc implements HostToolBridge {
   private nextId = 0;
   private closed = false;
+  private terminalError: RpcError | undefined;
+  private failureNotified = false;
   private onFailure: ((error: RpcError) => void) | undefined;
   private readonly pending = new Map<string, PendingRpc>();
   private readonly readerTask: Promise<void>;
@@ -376,6 +378,7 @@ class DuplexRpc implements HostToolBridge {
   }
 
   request(tool: "fetch_project_documents", argumentsValue: { record_id?: number }): Promise<JsonObject> {
+    if (this.terminalError) return Promise.reject(this.terminalError);
     if (this.closed) return Promise.reject(new RpcError("RPC bridge is closed"));
     const id = `rpc-${++this.nextId}`;
     const remaining = this.deadline - Date.now();
@@ -392,6 +395,15 @@ class DuplexRpc implements HostToolBridge {
 
   setAbort(onFailure: (error: RpcError) => void): void {
     this.onFailure = onFailure;
+    this.notifyFailure();
+  }
+
+  private notifyFailure(): void {
+    if (this.failureNotified || !this.onFailure) return;
+    const failure = this.terminalError ?? (this.closed ? new RpcError("RPC bridge closed") : undefined);
+    if (!failure) return;
+    this.failureNotified = true;
+    this.onFailure(failure);
   }
 
   private async consumeResponses(): Promise<void> {
@@ -427,13 +439,14 @@ class DuplexRpc implements HostToolBridge {
       }
     } catch (error) {
       const failure = error instanceof RpcError ? error : new RpcError();
+      this.terminalError ??= failure;
       for (const [id, pending] of this.pending) {
         this.pending.delete(id);
         clearTimeout(pending.timer);
         pending.reject(failure);
       }
       if (!this.closed) {
-        this.onFailure?.(failure);
+        this.notifyFailure();
         throw failure;
       }
     }
@@ -442,6 +455,7 @@ class DuplexRpc implements HostToolBridge {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.terminalError ??= new RpcError("RPC bridge closed");
     for (const [id, pending] of this.pending) {
       this.pending.delete(id);
       clearTimeout(pending.timer);
@@ -587,16 +601,17 @@ function makeTools(
       "失败或未解析时必须写明资料缺口，不能编造，也不能把投标截止时间当成交付时间。",
     promptSnippet: "按当前项目记录读取公告公开资料",
     parameters: Type.Object({
-      record_id: Type.Optional(Type.Number()),
+      record_id: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     execute: async (_toolCallId, params) => {
       if (!reserveToolCall()) throw new LimitError("tool");
       if (!rpc) {
         return textResult({ documents: [], procurement: {}, error: "unsupported" }, "rpc.fetch_project_documents");
       }
-      const recordId = typeof params.record_id === "number" && Number.isInteger(params.record_id)
-        ? params.record_id
-        : undefined;
+      if (params.record_id !== undefined && (!Number.isSafeInteger(params.record_id) || params.record_id < 1)) {
+        return textResult({ documents: [], procurement: {}, error: "invalid_request" }, "rpc.fetch_project_documents");
+      }
+      const recordId = params.record_id;
       const records = normalizeRecords(context.project);
       if (recordId !== undefined && !records.some((record) => valueId(record.record_id ?? record.id) === String(recordId))) {
         return textResult(
@@ -792,6 +807,10 @@ export async function runRequest(
     rpcError ??= error;
     abortSession?.();
   });
+  if (rpcError) {
+    session.dispose();
+    throw rpcError;
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lastRunAssistant: AssistantMessage | undefined;
   let outputBytes = 0;

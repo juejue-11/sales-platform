@@ -98,6 +98,8 @@ async function runDuplexRunner(
   input: Record<string, unknown>,
   onToolRequest: (frame: Record<string, unknown>, child: ReturnType<typeof spawn>) => void,
   timeoutMs = 5_000,
+  initialHostFrames: Record<string, unknown>[] = [],
+  closeInputAfterInitial = false,
 ): Promise<{ lines: Record<string, unknown>[]; stderr: string }> {
   const child = spawn(process.execPath, [runnerPath], {
     cwd: here,
@@ -125,6 +127,8 @@ async function runDuplexRunner(
   });
   child.stderr.on("data", (chunk: Buffer) => stderr.push(Buffer.from(chunk)));
   child.stdin.write(`${JSON.stringify(input)}\n`);
+  for (const frame of initialHostFrames) child.stdin.write(`${JSON.stringify(frame)}\n`);
+  if (closeInputAfterInitial) child.stdin.end();
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
@@ -539,6 +543,34 @@ test("protocol 2 rejects a record id outside the current project without an RPC 
   }
 });
 
+test("protocol 2 returns invalid_request for an unsafe record id", async () => {
+  const invalidRecordId = Number.MAX_SAFE_INTEGER + 1;
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [
+        assistantFetchToolCallChunk(invalidRecordId),
+        { id: "chatcmpl-fetch-invalid-record", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ]);
+      return;
+    }
+    const toolMessage = (body.messages as Array<Record<string, unknown>>).find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /invalid_request/u);
+    streamResponse(response, [
+      { id: "chatcmpl-fetch-invalid-record-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify","summary":"记录参数无效","demand_summary":"待核实","reasons":[],"unknowns":["record_id 无效"],"next_actions":[],"options":[]}' }, finish_reason: null }] },
+      { id: "chatcmpl-fetch-invalid-record-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 4, total_tokens: 6 } },
+    ]);
+  });
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), () => { hostCalls += 1; });
+    assert.equal(hostCalls, 0);
+    assert.equal(fake.requests.length, 2);
+    assert.equal(result.lines.at(-1)?.type, "result");
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 test("protocol 2 rejects an unknown host response safely", async () => {
   const fake = await startFakeServer((_body, response) => {
     streamResponse(response, [
@@ -573,6 +605,35 @@ test("protocol 2 rejects a host response for an unknown request id", async () =>
     });
     assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
     assert.equal(fake.requests.length, 1);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 fails fast on an unknown host response before the first model response", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
+  });
+  try {
+    const result = await runDuplexRunner(
+      duplexRequestFor(fake.url),
+      () => {},
+      3_000,
+      [{ type: "tool_response", id: "rpc-unknown", ok: true, data: { documents: [], procurement: {} } }],
+    );
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 fails fast on host EOF before the first model response", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), () => {}, 3_000, [], true);
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
   } finally {
     await new Promise<void>((resolve) => fake.server.close(() => resolve()));
   }
