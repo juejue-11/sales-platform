@@ -1,0 +1,55 @@
+import asyncio
+import unittest
+from unittest.mock import patch
+
+from backend.public_documents import DocumentError, discover_attachments, parse_document, validate_public_url
+
+
+class PublicDocumentTests(unittest.TestCase):
+    def test_onclick_attachment_is_discovered_outside_body(self):
+        html = '''<div class="article-materials"><a onclick="ztbfjyz('/f/物料清单附件.pdf','0','1')">物料清单附件.pdf</a>
+        <a href="https://evil.example/f.pdf">其他</a><a href="javascript:alert(1)">x</a></div>'''
+        links = discover_attachments(html, "https://bid.example/notice.html")
+        self.assertEqual(links, [{"url": "https://bid.example/f/物料清单附件.pdf", "name": "物料清单附件.pdf"}])
+
+    def test_source_host_and_private_ip_rejected(self):
+        with self.assertRaises(DocumentError):
+            asyncio.run(validate_public_url("https://evil.example/f.pdf", "https://bid.example/n"))
+        with patch("backend.public_documents.socket.getaddrinfo", return_value=[(2,1,6,'',('127.0.0.1',443))]):
+            with self.assertRaisesRegex(DocumentError, "non_public_source"):
+                asyncio.run(validate_public_url("https://bid.example/f.pdf", "https://bid.example/n"))
+
+    def test_unparsed_and_auth_are_explicit(self):
+        doc = parse_document(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1old doc', record_id=174, url="https://bid.example/f.doc")
+        self.assertEqual(doc["status"], "unsupported")
+        self.assertEqual(doc["items"], [])
+        doc = parse_document(b'<html>login</html>', record_id=174, url="https://bid.example/f.pdf")
+        self.assertEqual(doc["status"], "auth_required")
+
+    def test_fake_pdf_does_not_claim_parsed(self):
+        doc = parse_document(b'%PDF-broken', record_id=174, url="https://bid.example/f.pdf")
+        self.assertEqual(doc["status"], "unreadable")
+        self.assertEqual(doc["text"], "")
+
+    def test_material_table_preserves_facts_and_provenance(self):
+        from types import SimpleNamespace
+        header = ['序','物料名称','规格型号','材质','采购数量','计量单位','交货地/交货港','交货期']
+        row = ['1','普碳\n中板','4mm','Q235B','5.0','t','本溪市','合同签订后，按通知供货量三日内供完']
+        page = SimpleNamespace(extract_text=lambda:'物料清单附件', extract_tables=lambda:[[header,row]])
+        class PDF:
+            pages = [page]
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+        with patch('pdfplumber.open', return_value=PDF()):
+            doc = parse_document(b'%PDF-fixture', record_id=174, url='https://bid.example/f.pdf')
+        item = doc['items'][0]
+        self.assertEqual(item['name'], '普碳中板')
+        self.assertEqual(item['quantity'], '5.0')
+        self.assertEqual(item['delivery_location'], '本溪市')
+        self.assertIn('三日内供完', item['delivery_period'])
+        self.assertEqual(item['source_document_id'], doc['id'])
+        self.assertIn(item['quote'], doc['text'])
+
+
+if __name__ == '__main__':
+    unittest.main()
