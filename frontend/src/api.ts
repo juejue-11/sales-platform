@@ -1,5 +1,6 @@
 import type {
   DashboardData,
+  ProcurementData,
   ProjectDetail,
   ProjectSummary,
   ProjectsResponse,
@@ -53,6 +54,10 @@ export const api = {
     return request<ProjectsResponse>(`/projects?${search.toString()}`)
   },
   project: (id: number) => request<ProjectDetail>(`/projects/${id}`),
+  refreshDocuments: (id: number) => request<{ procurement: ProcurementData; message: string }>(`/projects/${id}/documents/refresh`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
   analyze: (id: number, force = false) => request<{ job_id: number | null; status: string; message: string }>(`/projects/${id}/analyze`, {
     method: 'POST',
     body: JSON.stringify({ force }),

@@ -61,6 +61,51 @@ export interface ProjectBriefing {
   original_url: string | null
 }
 
+export type ProcurementStatus = 'not_checked' | 'partial' | 'complete' | 'unavailable'
+export type ProcurementDocumentStatus = 'parsed' | 'unsupported' | 'auth_required' | 'failed' | 'unreadable'
+
+export interface ProcurementItem {
+  name: string
+  specification: string
+  material: string
+  quantity: string
+  unit: string
+  delivery_period: string
+  delivery_location: string
+  code?: string
+  standard?: string
+  note?: string
+  source_document_id: number | string
+  record_id: number
+  page: number
+  quote: string
+}
+
+export interface ProcurementDocument {
+  id: number | string
+  record_id: number
+  name: string
+  url: string
+  status: ProcurementDocumentStatus
+  pages: number | null
+  sha256: string | null
+  fetched_at: string | null
+  error?: string | null
+  mime_type?: string | null
+  byte_size?: number | null
+}
+
+export interface ProcurementData {
+  status: ProcurementStatus
+  scope_summary: string
+  items: ProcurementItem[]
+  delivery_period: string
+  delivery_location: string
+  missing_fields: string[]
+  documents: ProcurementDocument[]
+  updated_at: string | null
+}
+
 export interface ProjectSummary {
   id: number
   title: string
@@ -81,6 +126,8 @@ export interface ProjectSummary {
   decision: Decision
   /** Optional while older API responses are still in circulation. */
   briefing?: ProjectBriefing | null
+  /** Optional while older API responses are still in circulation. */
+  procurement?: ProcurementData | null
   demand_summary?: string | null
   ai_next_actions?: string[]
 }

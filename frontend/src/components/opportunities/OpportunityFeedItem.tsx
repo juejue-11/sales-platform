@@ -23,11 +23,14 @@ function deadlineValue(value: string | null): string {
  */
 export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProps) {
   const briefing = project.briefing
+  const procurement = project.procurement
   const title = compactOpportunityTitle(project.title) || '未命名项目'
-  const teaser = procurementTeaser(briefing?.scope_excerpt, project.title)
-    || procurementTeaser(briefing?.delivery_excerpt, project.title)
-    || '具体采购范围暂未识别，进入详情核对原文。'
-  const facts = procurementFacts(briefing?.scope_excerpt, briefing?.delivery_excerpt, project.equipment)
+  const scopeText = procurement?.scope_summary || briefing?.scope_excerpt
+  const deliveryText = procurement?.delivery_period || procurement?.delivery_location || briefing?.delivery_excerpt
+  const teaser = procurementTeaser(scopeText, project.title)
+    || procurementTeaser(deliveryText, project.title)
+    || '采购范围尚未从正文或附件核对，进入详情查看来源。'
+  const facts = procurementFacts(scopeText, deliveryText, project.equipment)
 
   return (
     <Link

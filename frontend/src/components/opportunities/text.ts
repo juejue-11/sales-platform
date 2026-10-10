@@ -38,9 +38,15 @@ export function cleanScopeExcerpt(value: string | null | undefined, title?: stri
   const normalized = normalizeOpportunityText(value)
   if (!normalized) return ''
   const attachmentSentence = normalized.match(/本项目招标内容、范围及规模详见附件[^。！？]*[。！？]?/)?.[0]
+  // The attachment pointer alone does not disclose a scope, regardless of
+  // whether the announcement title is present in the same extracted text.
+  if (/^本项目招标内容、范围及规模详见附件[^。！？]*[。！？]?$/.test(normalized)) return ''
   const cleanedTitle = cleanOpportunityTitle(title)
   const titleAppearsInScope = Boolean(cleanedTitle && normalized.includes(cleanedTitle))
-  if (attachmentSentence && titleAppearsInScope && /招标失败/.test(normalized)) return attachmentSentence
+  // A notice that only points to a material list has not disclosed its scope
+  // in the notice body. Keep it empty so the UI can say that the attachment
+  // still needs checking instead of presenting the pointer as evidence.
+  if (attachmentSentence && titleAppearsInScope && /招标失败/.test(normalized)) return ''
   const withoutLabel = normalized.replace(/^(?:招标范围|采购范围|项目概况与招标范围)\s*[:：]?\s*/, '')
   return sectionBreaks(withoutLabel.replace(/^2\.1\s*(?:项目名称|项目概况与招标范围)?\s*[:：]?\s*/, '').trim())
 }
@@ -84,7 +90,8 @@ export function isTodayShanghai(value: string | null | undefined): boolean {
 export function procurementTeaser(value: string | null | undefined, title?: string | null): string {
   const cleaned = cleanScopeExcerpt(value, title)
   const fallback = normalizeOpportunityText(value).replace(/^(?:招标范围|采购范围)\s*[:：]?\s*/, '').trim()
-  const source = cleaned && !/^本项目招标内容、范围及规模详见附件/.test(cleaned) ? cleaned : fallback
+  const attachmentOnly = /^本项目招标内容、范围及规模详见附件[^。！？]*[。！？]?$/.test(fallback)
+  const source = attachmentOnly ? '' : (cleaned || fallback)
   if (!source) return ''
   const tableCue = source.match(/(?:本次采购共\s*\d+\s*个包段|设备名称及数量见下表|明细见[^。；]{0,8}需求一览表)/)?.[0]
   const clauses = source
