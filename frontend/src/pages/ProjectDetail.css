@@ -545,6 +545,130 @@
   min-width: 755px;
 }
 
+.detail-procurement-group-table .ant-table {
+  min-width: 0;
+}
+
+.detail-procurement-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+}
+
+.detail-procurement-count strong {
+  color: var(--detail-ink);
+  font-size: 16px;
+}
+
+.detail-procurement-count > span {
+  color: var(--detail-muted);
+  font-size: 12px;
+}
+
+.detail-procurement-delivery-facts {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.detail-procurement-delivery-facts > div {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.detail-procurement-delivery-facts dt {
+  color: var(--detail-muted);
+}
+
+.detail-procurement-delivery-facts dd {
+  margin: 0;
+  color: #334e68;
+  overflow-wrap: anywhere;
+}
+
+.detail-procurement-address-note {
+  display: block;
+  color: var(--detail-muted);
+  font-size: 12px;
+}
+
+.detail-procurement-overview {
+  grid-template-columns: minmax(180px, .65fr) minmax(0, 1.35fr);
+}
+
+.detail-procurement-overview + .detail-procurement-items {
+  margin-top: 16px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.detail-procurement-group-name,
+.detail-procurement-group-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.detail-procurement-group-name .ant-typography,
+.detail-procurement-group-spec .ant-typography {
+  font-size: 12px;
+}
+
+.detail-procurement-group-quantity {
+  color: var(--detail-ink);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.detail-procurement-mobile-spec {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .detail-procurement-group-table > .ant-table-wrapper > .ant-spin-nested-loading > .ant-spin-container > .ant-table colgroup col {
+    width: auto !important;
+  }
+
+  .detail-procurement-group-name {
+    max-width: 160px;
+    overflow-wrap: anywhere;
+  }
+
+  .detail-procurement-mobile-spec {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+  }
+
+  .detail-procurement-group-table .ant-btn-link {
+    padding-inline: 0;
+    font-size: 12px;
+  }
+}
+
+.detail-procurement-expanded-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 10px;
+  color: var(--detail-ink);
+  font-weight: 600;
+}
+
+.detail-procurement-expanded-heading .ant-typography {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.detail-procurement-group-table .ant-table-expanded-row > td {
+  padding: 14px 16px !important;
+}
+
 .detail-procurement-table-wrap .ant-table-thead > tr > th {
   color: var(--detail-muted);
   font-size: 12px;
@@ -1633,6 +1757,7 @@
   }
 
   .detail-briefing-primary,
+  .detail-procurement-overview,
   .detail-summary-grid {
     grid-template-columns: 1fr;
   }

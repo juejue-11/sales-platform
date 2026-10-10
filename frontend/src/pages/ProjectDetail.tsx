@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Table, Tag, Typography, message } from 'antd'
+import type { TableColumnsType } from 'antd'
 import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { DecisionStatus, Evidence, JudgmentOption, ProcurementData, ProcurementDocument, ProcurementItem, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
 import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
 import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
 import { cleanQualificationExcerpt, cleanScopeExcerpt, normalizeOpportunityText } from '../components/opportunities/text'
+import { groupProcurementItems, type ProcurementGroup } from '../utils/procurementGroups'
 import './ProjectDetail.css'
 
 const { Title, Text, Paragraph } = Typography
@@ -506,30 +508,40 @@ function ProcurementBriefing({
   const itemDeliveryLocation = uniformProcurementField(items, 'delivery_location')
   const deliveryPeriod = procurementValue(procurement?.delivery_period) || itemDeliveryPeriod
   const deliveryLocation = procurementValue(procurement?.delivery_location) || itemDeliveryLocation
-  const delivery = [deliveryPeriod, deliveryLocation].filter(Boolean).join('；') || procurementValue(briefing?.delivery_excerpt)
+  const deliveryFallback = !deliveryPeriod && !deliveryLocation ? procurementValue(briefing?.delivery_excerpt) : ''
   const uniformDelivery = Boolean(items.length && itemDeliveryPeriod && itemDeliveryLocation && items.every((item) => procurementValue(item.delivery_period) === itemDeliveryPeriod && procurementValue(item.delivery_location) === itemDeliveryLocation))
   const itemMissing = procurementMissingValue(procurement, '', 'items')
   const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
   const contact = procurementValue(briefing?.contact_excerpt)
   const [itemSearch, setItemSearch] = useState('')
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([])
+  const groups = useMemo(() => groupProcurementItems(items), [items])
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLocaleLowerCase()
     if (!query) return items
     return items.filter((item) => [item.name, item.specification, item.material, item.code, item.standard, item.delivery_period, item.delivery_location]
       .some((value) => procurementValue(value).toLocaleLowerCase().includes(query)))
   }, [itemSearch, items])
+  const filteredGroups = useMemo(() => {
+    const visibleItems = new Set(filteredItems)
+    return groups.flatMap((group) => {
+      const matchingItems = group.items.filter((item) => visibleItems.has(item))
+      if (!matchingItems.length) return []
+      return [{ ...groupProcurementItems(matchingItems)[0], key: group.key }]
+    })
+  }, [filteredItems, groups])
   const columns = useMemo(() => [
     {
-      title: '名称', key: 'name', width: 160,
-      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-item-name">{procurementValue(item.name) || itemMissing}</span>,
+      title: '物料编号', key: 'code', width: 115,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.code) || '未提供'}</span>,
     },
     {
       title: '规格', key: 'specification', width: 170,
       render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.specification) || itemMissing}</span>,
     },
     {
-      title: '材质', key: 'material', width: 120,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.material) || itemMissing}</span>,
+      title: '执行标准', key: 'standard', width: 120,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.standard) || '未提供'}</span>,
     },
     {
       title: '数量 / 单位', key: 'quantity', width: 115,
@@ -537,7 +549,7 @@ function ProcurementBriefing({
     },
     ...(uniformDelivery ? [] : [{
       title: '交付', key: 'delivery', width: 210,
-      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>{procurementValue(item.delivery_location) || itemMissing}</span><span>{procurementValue(item.delivery_period) || itemMissing}</span></div>,
+      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>交货地点：{procurementValue(item.delivery_location) || itemMissing}</span><span>交货时间：{procurementValue(item.delivery_period) || itemMissing}</span></div>,
     }]),
     {
       title: '来源', key: 'source', width: 190,
@@ -547,6 +559,24 @@ function ProcurementBriefing({
       },
     },
   ], [documents, itemMissing, records, uniformDelivery])
+  const groupColumns: TableColumnsType<ProcurementGroup> = [
+    {
+      title: '名称 / 材质', key: 'name', width: 180,
+      render: (_value: unknown, group: ProcurementGroup) => <div className="detail-procurement-group-name"><span className="detail-procurement-item-name">{group.name || '名称未提供'}</span><Text type="secondary">{group.material || '材质未提供'}</Text><span className="detail-procurement-mobile-spec">{group.specificationSummary}<Text type="secondary">{group.items.length} 条明细</Text></span></div>,
+    },
+    {
+      title: '规格', key: 'specification', responsive: ['md'],
+      render: (_value: unknown, group: ProcurementGroup) => <div className="detail-procurement-group-spec"><span>{group.specificationSummary}</span><Text type="secondary">{group.items.length} 条明细{group.specifications.length > 0 ? `，${group.specifications.length} 种规格` : ''}</Text></div>,
+    },
+    {
+      title: itemSearch.trim() ? '匹配数量' : '合计数量', key: 'quantity', width: 145,
+      render: (_value: unknown, group: ProcurementGroup) => <span className="detail-procurement-group-quantity">{group.quantitySummary}</span>,
+    },
+    {
+      title: '', key: 'details', width: 95,
+      render: (_value: unknown, group: ProcurementGroup) => <Button type="link" size="small" aria-expanded={expandedGroups.includes(group.key)} aria-label={`${expandedGroups.includes(group.key) ? '收起' : '展开'}${group.name} ${group.material}明细`} onClick={() => setExpandedGroups((keys) => keys.includes(group.key) ? keys.filter((key) => key !== group.key) : [...keys, group.key])}>{expandedGroups.includes(group.key) ? '收起明细' : '查看明细'}</Button>,
+    },
+  ]
   const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
 
   return (
@@ -554,7 +584,7 @@ function ProcurementBriefing({
       <div className="detail-briefing-heading-row">
         <div className="detail-briefing-heading">
           <div className="detail-procurement-title-line"><h2 id="procurement-briefing-heading">采购信息</h2><Tag color={statusMeta.label === '资料已核对' ? 'success' : status === 'unavailable' ? 'error' : 'warning'}>{statusMeta.label}</Tag></div>
-          <span className="detail-briefing-note" role="note">范围与交付优先 · 明细按来源核对</span>
+          <span className="detail-briefing-note" role="note">同类物料汇总，展开核对规格与来源</span>
         </div>
         <div className="detail-briefing-source detail-procurement-actions">
           {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未提供</Text>}
@@ -566,23 +596,54 @@ function ProcurementBriefing({
       <div className="detail-procurement-status-line"><FileTextOutlined /><span>{statusMeta.description}</span>{procurement?.updated_at && <Text type="secondary">更新于 {formatDate(procurement.updated_at, true)}</Text>}</div>
       {Boolean(error) && <Alert className="detail-procurement-error" type="error" showIcon message="采购资料核对失败" description={errorText} />}
 
-      <div className="detail-briefing-primary">
+      <div className={`detail-briefing-primary${items.length ? ' detail-procurement-overview' : ''}`}>
         <article className="detail-briefing-field detail-briefing-scope">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
-          <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '')}</p>
+          {items.length ? <p className="detail-procurement-count"><strong>{groups.length} 组物料</strong><span>共 {items.length} 条采购明细</span></p> : <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '')}</p>}
         </article>
         <article className="detail-briefing-field detail-briefing-delivery">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text></div>
-          <p className={!delivery ? 'detail-procurement-missing' : undefined}>{delivery || procurementMissingValue(procurement, '')}</p>
+          {deliveryPeriod || deliveryLocation ? <dl className="detail-procurement-delivery-facts"><div><dt>交货时间</dt><dd>{deliveryPeriod || '待核对'}</dd></div><div><dt>交货地点</dt><dd>{deliveryLocation || '待核对'}{/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">资料仅注明城市或地区，具体收货地址需确认</span>}</dd></div></dl> : <p className={!deliveryFallback ? 'detail-procurement-missing' : undefined}>{deliveryFallback || procurementMissingValue(procurement, '', 'delivery')}</p>}
         </article>
       </div>
 
       <section className="detail-procurement-items" aria-labelledby="procurement-items-heading">
         <div className="detail-procurement-section-heading">
-          <div><h3 id="procurement-items-heading">物料明细</h3><Text type="secondary">{items.length ? `${items.length} 项；不同单位不合并${uniformDelivery ? ' · 统一交付已收在上方摘要' : ''}` : itemMissing}</Text></div>
+          <div><h3 id="procurement-items-heading">{items.length ? '采购范围明细' : '物料明细'}</h3><Text type="secondary">{items.length ? `${itemSearch.trim() ? `找到 ${filteredGroups.length} 组，${filteredItems.length} 条明细；` : ''}按名称与材质归组，数量按单位分别汇总` : itemMissing}</Text></div>
           {items.length > 0 && <Input className="detail-procurement-search" allowClear prefix={<SearchOutlined />} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="搜索名称、规格、材质或编号" aria-label="搜索物料明细" />}
         </div>
-        {items.length > 0 ? <div className={`detail-procurement-table-wrap${uniformDelivery ? ' detail-procurement-table-wrap-compact' : ''}`}><Table<ProcurementItem> size="small" rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`} columns={columns} dataSource={filteredItems} scroll={{ x: uniformDelivery ? 755 : 965 }} pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 项` }} locale={{ emptyText: '当前筛选没有匹配的物料' }} /></div> : <div className="detail-procurement-empty">采购附件尚未形成可展示的物料行。</div>}
+        {items.length > 0 ? (
+          <div className="detail-procurement-table-wrap detail-procurement-group-table">
+            <Table<ProcurementGroup>
+              size="small"
+              rowKey="key"
+              columns={groupColumns}
+              dataSource={filteredGroups}
+              expandable={{
+                showExpandColumn: false,
+                expandedRowKeys: expandedGroups,
+                expandedRowRender: (group) => (
+                  <div className="detail-procurement-expanded">
+                    <div className="detail-procurement-expanded-heading">
+                      {group.name} · {group.material || '材质未提供'}
+                      <Text type="secondary">逐项规格、数量及原文来源</Text>
+                    </div>
+                    <Table<ProcurementItem>
+                      size="small"
+                      rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`}
+                      columns={columns}
+                      dataSource={group.items}
+                      scroll={{ x: uniformDelivery ? 710 : 920 }}
+                      pagination={group.items.length > 12 ? { pageSize: 12, size: 'small' } : false}
+                    />
+                  </div>
+                ),
+              }}
+              pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 组` }}
+              locale={{ emptyText: '当前筛选没有匹配的物料' }}
+            />
+          </div>
+        ) : <div className="detail-procurement-empty">采购附件尚未形成可展示的物料行。</div>}
       </section>
 
       <section className="detail-procurement-documents" aria-labelledby="procurement-documents-heading">
