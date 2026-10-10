@@ -50,6 +50,18 @@ class PublicDocumentTests(unittest.TestCase):
         self.assertEqual(item['source_document_id'], doc['id'])
         self.assertIn(item['quote'], doc['text'])
 
+    def test_scanned_pdf_page_number_is_not_procurement_text(self):
+        from types import SimpleNamespace
+        page = SimpleNamespace(extract_text=lambda:'',extract_tables=lambda:[])
+        class PDF:
+            pages = [page]
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+        with patch('pdfplumber.open',return_value=PDF()):
+            doc = parse_document(b'%PDF-fixture',record_id=174,url='https://bid.example/scan.pdf')
+        self.assertEqual(doc['status'],'unreadable')
+        self.assertEqual(doc['text'],'')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -152,8 +152,9 @@ def _pdf(raw: bytes, document: dict) -> None:
             if sum(map(len, texts)) > MAX_TEXT:
                 raise DocumentError("text_limit")
     document.update(text="\n\n".join(texts), page_texts=pages, items=items)
-    document["status"] = "parsed" if document["text"].strip() else "unreadable"
+    document["status"] = "parsed" if any(page["text"].strip() for page in pages) else "unreadable"
     if document["status"] == "unreadable":
+        document["text"] = ""
         document["error"] = "PDF无可提取文字，需要OCR或人工补充"
 
 
