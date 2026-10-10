@@ -299,13 +299,20 @@
 
 .detail-briefing-heading-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
 }
 
+.detail-briefing-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
 .detail-briefing h2 {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--detail-ink);
   font-size: 18px;
   font-weight: 650;
@@ -319,7 +326,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  padding-top: 4px;
   font-size: 12px;
 }
 
@@ -331,29 +337,16 @@
 }
 
 .detail-briefing-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: 80ch;
-  margin-top: 16px;
-  padding: 8px 0 8px 12px;
-  border-left: 2px solid #cbd5e1;
   color: var(--detail-muted);
   font-size: 12px;
   line-height: 1.6;
-}
-
-.detail-briefing-note > .anticon {
-  flex: 0 0 auto;
-  margin-top: 3px;
-  color: var(--detail-blue);
 }
 
 .detail-briefing-primary {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(240px, .9fr);
   gap: 24px;
-  margin-top: 21px;
+  margin-top: 12px;
 }
 
 .detail-briefing-field {
@@ -1389,6 +1382,7 @@
   }
 
   .detail-briefing-heading-row {
+    align-items: flex-start;
     flex-direction: column;
     gap: 8px;
   }

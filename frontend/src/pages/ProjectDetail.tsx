@@ -343,16 +343,15 @@ function ProcurementBriefing({ briefing, records, title }: { briefing: ProjectDe
   return (
     <section className="detail-briefing" aria-labelledby="procurement-briefing-heading">
       <div className="detail-briefing-heading-row">
-        <div>
-          <div className="detail-section-kicker"><FileSearchOutlined /> 公告摘录</div>
+        <div className="detail-briefing-heading">
           <h2 id="procurement-briefing-heading">采购信息</h2>
+          <span className="detail-briefing-note" role="note">公告摘录 · 完整要求以原文为准</span>
         </div>
         <div className="detail-briefing-source">
           {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未识别</Text>}
           {recordId != null && <Text type="secondary">记录 #{recordId}</Text>}
         </div>
       </div>
-      <div className="detail-briefing-note" role="note"><FileSearchOutlined /><span>摘录自采购公告，完整要求请核对原文。</span></div>
       <div className="detail-briefing-primary">
         <article className="detail-briefing-field detail-briefing-scope">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
