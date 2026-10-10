@@ -135,6 +135,11 @@ export interface ProjectSummary {
 export interface Evidence {
   record_id: number
   quote: string
+  document_id?: number | string | null
+  page?: number | null
+  document_name?: string | null
+  source_url?: string | null
+  document_sha256?: string | null
 }
 
 export interface JudgmentReason {
