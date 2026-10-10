@@ -27,6 +27,8 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
       assert.ok(text.includes('交货地点'));
       assert.ok(text.includes('具体收货地址需确认'));
       assert.ok(!text.includes('共143项物料，包括'));
+      assert.equal(await section.getByRole('heading',{name:'采购范围',exact:true}).count(),1);
+      assert.ok(!text.includes('采购范围明细'));
       assert.ok(text.includes('采购方案.doc'));
       assert.ok(text.includes('暂不支持解析'));
       assert.ok(!text.includes('未识别'));

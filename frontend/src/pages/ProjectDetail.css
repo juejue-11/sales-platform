@@ -557,8 +557,9 @@
 }
 
 .detail-procurement-count strong {
-  color: var(--detail-ink);
-  font-size: 16px;
+  color: var(--detail-muted);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .detail-procurement-count > span {
@@ -596,11 +597,34 @@
   font-size: 12px;
 }
 
-.detail-procurement-overview {
-  grid-template-columns: minmax(180px, .65fr) minmax(0, 1.35fr);
+.detail-procurement-range-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
 }
 
-.detail-procurement-overview + .detail-procurement-items {
+.detail-procurement-range-heading h3 {
+  margin-bottom: 0;
+}
+
+.detail-procurement-delivery-strip {
+  margin-top: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--detail-line);
+}
+
+.detail-procurement-delivery-strip .detail-procurement-delivery-facts {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.detail-procurement-delivery-strip p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.detail-procurement-delivery-strip + .detail-procurement-items {
   margin-top: 16px;
   padding-top: 0;
   border-top: 0;
@@ -1757,9 +1781,13 @@
   }
 
   .detail-briefing-primary,
-  .detail-procurement-overview,
   .detail-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-procurement-delivery-strip .detail-procurement-delivery-facts {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .detail-briefing-field + .detail-briefing-field {

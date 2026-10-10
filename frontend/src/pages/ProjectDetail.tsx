@@ -578,6 +578,18 @@ function ProcurementBriefing({
     },
   ]
   const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
+  const deliveryContent = deliveryPeriod || deliveryLocation ? (
+    <dl className="detail-procurement-delivery-facts">
+      <div><dt>交货时间</dt><dd>{deliveryPeriod || '待核对'}</dd></div>
+      <div>
+        <dt>交货地点</dt>
+        <dd>
+          {deliveryLocation || '待核对'}
+          {/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">资料仅注明城市或地区，具体收货地址需确认</span>}
+        </dd>
+      </div>
+    </dl>
+  ) : <p className={!deliveryFallback ? 'detail-procurement-missing' : undefined}>{deliveryFallback || procurementMissingValue(procurement, '', 'delivery')}</p>
 
   return (
     <section className="detail-briefing detail-procurement" aria-labelledby="procurement-briefing-heading">
@@ -596,20 +608,27 @@ function ProcurementBriefing({
       <div className="detail-procurement-status-line"><FileTextOutlined /><span>{statusMeta.description}</span>{procurement?.updated_at && <Text type="secondary">更新于 {formatDate(procurement.updated_at, true)}</Text>}</div>
       {Boolean(error) && <Alert className="detail-procurement-error" type="error" showIcon message="采购资料核对失败" description={errorText} />}
 
-      <div className={`detail-briefing-primary${items.length ? ' detail-procurement-overview' : ''}`}>
+      {items.length > 0 ? <div className="detail-procurement-delivery-strip" aria-label="交付要求">{deliveryContent}</div> : <div className="detail-briefing-primary">
         <article className="detail-briefing-field detail-briefing-scope">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
-          {items.length ? <p className="detail-procurement-count"><strong>{groups.length} 组物料</strong><span>共 {items.length} 条采购明细</span></p> : <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '')}</p>}
+          <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '')}</p>
         </article>
         <article className="detail-briefing-field detail-briefing-delivery">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text></div>
-          {deliveryPeriod || deliveryLocation ? <dl className="detail-procurement-delivery-facts"><div><dt>交货时间</dt><dd>{deliveryPeriod || '待核对'}</dd></div><div><dt>交货地点</dt><dd>{deliveryLocation || '待核对'}{/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">资料仅注明城市或地区，具体收货地址需确认</span>}</dd></div></dl> : <p className={!deliveryFallback ? 'detail-procurement-missing' : undefined}>{deliveryFallback || procurementMissingValue(procurement, '', 'delivery')}</p>}
+          {deliveryContent}
         </article>
-      </div>
+      </div>}
 
       <section className="detail-procurement-items" aria-labelledby="procurement-items-heading">
         <div className="detail-procurement-section-heading">
-          <div><h3 id="procurement-items-heading">{items.length ? '采购范围明细' : '物料明细'}</h3><Text type="secondary">{items.length ? `${itemSearch.trim() ? `找到 ${filteredGroups.length} 组，${filteredItems.length} 条明细；` : ''}按名称与材质归组，数量按单位分别汇总` : itemMissing}</Text></div>
+          <div>
+            <div className="detail-procurement-range-heading">
+              <h3 id="procurement-items-heading">{items.length ? '采购范围' : '物料明细'}</h3>
+              {items.length > 0 && <span className="detail-procurement-count"><strong>{groups.length} 组物料</strong><span>共 {items.length} 条采购明细</span></span>}
+            </div>
+            {itemSearch.trim() && items.length > 0 && <Text type="secondary">找到 {filteredGroups.length} 组，{filteredItems.length} 条明细；数量仅统计匹配项</Text>}
+            {!items.length && <Text type="secondary">{itemMissing}</Text>}
+          </div>
           {items.length > 0 && <Input className="detail-procurement-search" allowClear prefix={<SearchOutlined />} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="搜索名称、规格、材质或编号" aria-label="搜索物料明细" />}
         </div>
         {items.length > 0 ? (
