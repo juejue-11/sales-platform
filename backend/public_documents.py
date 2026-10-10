@@ -7,6 +7,7 @@ import io
 import ipaddress
 import re
 import socket
+import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import PurePosixPath
@@ -72,7 +73,7 @@ class _Links(HTMLParser):
             self.links.append(self.current)
 
     def handle_data(self, data):
-        if self.current:
+        if self.current and data.strip() not in self.current["name"]:
             self.current["name"] += data.strip()
 
     def handle_endtag(self, tag):
@@ -164,6 +165,9 @@ def parse_document(raw: bytes, *, record_id: int, url: str, name: str = "", mime
             _pdf(raw, document)
         elif raw.startswith(b"PK") and urlsplit(url).path.lower().endswith(".docx"):
             from docx import Document
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                if sum(member.file_size for member in archive.infolist()) > 25 * 1024 * 1024:
+                    raise DocumentError("expanded_document_limit")
             doc = Document(io.BytesIO(raw))
             lines = [p.text for p in doc.paragraphs]
             lines += ["；".join(cell.text for cell in row.cells) for table in doc.tables for row in table.rows]
