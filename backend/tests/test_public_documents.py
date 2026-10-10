@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from backend.public_documents import DocumentError, discover_attachments, parse_document, validate_public_url
+from backend.public_documents import DocumentError, _download, discover_attachments, parse_document, validate_public_url
 
 
 class PublicDocumentTests(unittest.TestCase):
@@ -61,6 +61,38 @@ class PublicDocumentTests(unittest.TestCase):
             doc = parse_document(b'%PDF-fixture',record_id=174,url='https://bid.example/scan.pdf')
         self.assertEqual(doc['status'],'unreadable')
         self.assertEqual(doc['text'],'')
+
+    def test_redirect_is_checked_before_second_request(self):
+        class Response:
+            status_code = 302
+            headers = {'location':'http://127.0.0.1/private.pdf'}
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+        class Client:
+            urls = []
+            def stream(self,method,url,**kwargs):
+                self.urls.append(url)
+                return Response()
+        client = Client()
+        with patch('backend.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            with self.assertRaisesRegex(DocumentError,'attachment_outside_source'):
+                asyncio.run(_download(client,'https://bid.example/file.pdf','https://bid.example/notice'))
+        self.assertEqual(len(client.urls),1)
+
+    def test_stream_limit_does_not_trust_content_length(self):
+        class Response:
+            status_code = 200
+            headers = {}
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+            async def aiter_bytes(self):
+                yield b'first'
+                yield b'second'
+        class Client:
+            def stream(self,*args,**kwargs): return Response()
+        with patch('backend.public_documents.MAX_BYTES',8), patch('backend.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            with self.assertRaisesRegex(DocumentError,'attachment_too_large'):
+                asyncio.run(_download(Client(),'https://bid.example/file.pdf','https://bid.example/notice'))
 
 
 if __name__ == '__main__':
