@@ -489,6 +489,60 @@ test("protocol 2 fetches trusted public documents through the duplex tool bridge
   }
 });
 
+test("protocol 2 keeps all custom tools when seeded history is followed by a correction user", async () => {
+  const fake = await startFakeServer((body, response) => {
+    const tools = body.tools as Array<{ function: { name: string } }>;
+    assert.ok(Array.isArray(tools), `provider body omitted tools: ${JSON.stringify(body)}`);
+    assert.deepEqual(tools.map((tool) => tool.function.name), [
+      "read_project_records",
+      "read_company_capability",
+      "read_related_records",
+      "fetch_project_documents",
+    ]);
+    if (fake.requests.length === 1) {
+      const messages = body.messages as Array<Record<string, unknown>>;
+      assert.ok(messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("校验纠错")), JSON.stringify(messages));
+      streamResponse(response, [
+        assistantFetchToolCallChunk(7),
+        { id: "chatcmpl-fetch-seeded", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } },
+      ]);
+      return;
+    }
+    const toolMessage = (body.messages as Array<Record<string, unknown>>).find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /采购破碎机/u);
+    streamResponse(response, [
+      { id: "chatcmpl-fetch-seeded-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify","summary":"纠错后仍可读取附件","demand_summary":"采购破碎机","reasons":[],"unknowns":[],"next_actions":[],"options":[]}' }, finish_reason: null }] },
+      { id: "chatcmpl-fetch-seeded-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } },
+    ]);
+  });
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url, {
+      messages: [
+        { role: "system", content: "Return JSON with decision, summary, reasons, unknowns, next_actions, and options." },
+        { role: "user", content: '{"record_id":7,"body":"采购范围见附件"}' },
+        { role: "user", content: "校验纠错：原始内容的附件字段格式异常，请按当前记录重新判断。" },
+      ],
+    }), (frame, child) => {
+      hostCalls += 1;
+      child.stdin?.write(JSON.stringify({
+        type: "tool_response",
+        id: frame.id,
+        ok: true,
+        data: {
+          documents: [{ id: "doc-seeded", record_id: 7, name: "采购附件.pdf", url: "https://notice.example/doc-seeded.pdf", status: "parsed", pages: 1, sha256: "hash-seeded", fetched_at: "2026-10-10T00:00:00+08:00", mime_type: "application/pdf", byte_size: 123, text: "采购破碎机", page_texts: [{ page: 1, text: "采购破碎机" }], items: [] }],
+          procurement: { items: [] },
+        },
+      }) + "\n");
+    });
+    assert.equal(hostCalls, 1);
+    assert.equal(fake.requests.length, 2);
+    assert.equal(result.lines.at(-1)?.type, "result");
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 test("protocol 2 returns a safe document failure to the model", async () => {
   const fake = await startFakeServer((body, response) => {
     if (fake.requests.length === 1) {

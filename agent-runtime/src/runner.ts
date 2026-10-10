@@ -704,7 +704,12 @@ function modelDefinition(config: RuntimeConfig, maxOutputTokens: number): Model<
       supportsFinishReason: true,
       maxTokensField: "max_tokens",
       supportsMidConvoSystemMessages: true,
-      supportsMidConvoToolAdditions: true,
+      // The runtime accepts seeded transcripts whose first message can be a user
+      // message. pi-ai can only anchor incremental tool additions at a leading
+      // system message; otherwise it intentionally omits the top-level tools
+      // field. Keep the complete executable loadout on every request for this
+      // generic OpenAI-compatible endpoint.
+      supportsMidConvoToolAdditions: false,
     },
   };
 }
@@ -799,6 +804,10 @@ export async function runRequest(
     excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"],
     customTools: tools,
   });
+  // Keep the custom loadout explicit after session construction as well as in
+  // createAgentSession options. This public SDK API is the authoritative
+  // activation path when a session starts from seeded messages.
+  session.setActiveToolsByName(tools.map((tool) => tool.name));
 
   abortSession = () => {
     void session.abort();
