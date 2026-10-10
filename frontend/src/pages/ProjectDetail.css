@@ -451,6 +451,215 @@
   font-size: 13px;
 }
 
+.detail-procurement {
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--detail-line);
+}
+
+.detail-procurement-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-procurement-title-line .ant-tag {
+  margin: 0;
+  font-size: 11px;
+}
+
+.detail-procurement-actions {
+  max-width: 100%;
+}
+
+.detail-procurement-actions .ant-btn {
+  border-color: #c9d4e1;
+  color: var(--detail-blue);
+}
+
+.detail-procurement-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #425b73;
+  font-size: 12px;
+}
+
+.detail-procurement-status-line > .anticon {
+  color: var(--detail-blue);
+}
+
+.detail-procurement-error {
+  margin-top: 12px;
+}
+
+.detail-procurement-missing {
+  color: var(--detail-amber) !important;
+}
+
+.detail-procurement-items,
+.detail-procurement-documents {
+  margin-top: 23px;
+  padding-top: 18px;
+  border-top: 1px solid var(--detail-line);
+}
+
+.detail-procurement-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.detail-procurement-section-heading h3 {
+  margin: 0 0 3px;
+  color: var(--detail-ink);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.detail-procurement-section-heading > .ant-typography,
+.detail-procurement-section-heading div > .ant-typography {
+  font-size: 12px;
+}
+
+.detail-procurement-search {
+  width: min(310px, 100%);
+}
+
+.detail-procurement-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border-top: 1px solid #edf1f5;
+}
+
+.detail-procurement-table-wrap .ant-table {
+  min-width: 965px;
+}
+
+.detail-procurement-table-wrap .ant-table-thead > tr > th {
+  color: var(--detail-muted);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.detail-procurement-table-wrap .ant-table-tbody > tr > td {
+  color: #334e68;
+  font-size: 13px;
+  vertical-align: top;
+}
+
+.detail-procurement-item-name {
+  color: var(--detail-ink);
+  font-weight: 600;
+}
+
+.detail-procurement-quantity {
+  color: var(--detail-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.detail-procurement-delivery-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.5;
+}
+
+.detail-procurement-delivery-cell span:first-child {
+  color: var(--detail-ink);
+}
+
+.detail-procurement-delivery-cell span:last-child {
+  color: var(--detail-muted);
+}
+
+.detail-procurement-source-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.5;
+}
+
+.detail-procurement-source-cell a {
+  overflow-wrap: anywhere;
+}
+
+.detail-procurement-quote {
+  display: block;
+  max-width: 28ch;
+  overflow: hidden;
+  color: var(--detail-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-procurement-empty {
+  padding: 14px 0;
+  color: var(--detail-amber);
+  font-size: 13px;
+}
+
+.detail-procurement-document-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.detail-procurement-document-list li {
+  padding: 12px 0;
+  border-top: 1px solid #edf1f5;
+}
+
+.detail-procurement-document-list li:first-child {
+  border-top: 0;
+}
+
+.detail-procurement-document-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.detail-procurement-document-main > .anticon {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--detail-blue);
+}
+
+.detail-procurement-document-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 3px;
+  color: var(--detail-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.detail-procurement-document-title .ant-tag {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.detail-procurement-document-error {
+  margin-top: 4px;
+  color: var(--detail-amber);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .detail-summary {
   padding: 0 0 28px;
   border-bottom: 1px solid var(--detail-line);
@@ -1390,6 +1599,29 @@
   .detail-briefing-source {
     justify-content: flex-start;
     padding-top: 0;
+  }
+
+  .detail-procurement-actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .detail-procurement-status-line {
+    align-items: flex-start;
+  }
+
+  .detail-procurement-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .detail-procurement-search {
+    width: 100%;
+  }
+
+  .detail-procurement-table-wrap {
+    margin-right: -1px;
   }
 
   .detail-briefing-primary,

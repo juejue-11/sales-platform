@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Tag, Typography, message } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons'
+import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { DecisionStatus, JudgmentOption, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
+import type { DecisionStatus, JudgmentOption, ProcurementData, ProcurementDocument, ProcurementItem, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
 import { AiDecisionTag, AiStatusTag, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
 import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
 import { cleanQualificationExcerpt, cleanScopeExcerpt, normalizeOpportunityText } from '../components/opportunities/text'
@@ -42,6 +42,8 @@ export function ProjectDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
   const [actionLoading, setActionLoading] = useState('')
+  const [procurementLoading, setProcurementLoading] = useState(false)
+  const [procurementError, setProcurementError] = useState<unknown>(null)
   const [linkTarget, setLinkTarget] = useState<number | null>(null)
   const [linkRelation, setLinkRelation] = useState<'same_project' | 'duplicate' | 'dismiss'>('same_project')
   const [linkNote, setLinkNote] = useState('')
@@ -156,6 +158,22 @@ export function ProjectDetailPage() {
     }
   }
 
+  const refreshProcurement = async () => {
+    setProcurementLoading(true)
+    setProcurementError(null)
+    try {
+      const result = await api.refreshDocuments(projectId)
+      setDetail((current) => current ? { ...current, procurement: result.procurement } : current)
+      message.success(result.message || '采购资料已更新')
+      await loadDetail(false)
+    } catch (refreshError) {
+      setProcurementError(refreshError)
+      message.error(refreshError instanceof Error ? refreshError.message : '采购资料核对失败，请稍后重试')
+    } finally {
+      setProcurementLoading(false)
+    }
+  }
+
   const options = detail?.judgment?.options ?? []
   const optionBlockedByGate = Boolean(detail && ['expired', 'closed', 'duplicate', 'excluded'].includes(detail.gate_status))
   const optionAvailable = Boolean(detail?.judgment && !detail.judgment.stale && !optionBlockedByGate && options.length > 0)
@@ -194,7 +212,7 @@ export function ProjectDetailPage() {
 
       <div className="detail-workspace">
         <main className="detail-main-column">
-          <ProcurementBriefing briefing={detail.briefing} records={detail.records} title={detail.title} />
+          <ProcurementBriefing briefing={detail.briefing} procurement={detail.procurement} records={detail.records} title={detail.title} onRefresh={() => void refreshProcurement()} refreshing={procurementLoading} error={procurementError} />
 
           <section className="detail-summary" id="ai-judgment" aria-labelledby="detail-summary-heading">
             <div className="detail-summary-header">
@@ -220,7 +238,7 @@ export function ProjectDetailPage() {
               <section className="detail-panel detail-record-card" id="records" aria-labelledby="records-heading">
                 <header className="detail-section-header"><div className="detail-section-heading"><FileSearchOutlined /><h2 id="records-heading">公告正文与事实</h2></div><Text type="secondary">{detail.records.length} 条源记录</Text></header>
                 <div className="detail-panel-intro">原文是判断依据。展开记录查看正文、来源链接以及已抽取的事实。</div>
-                <div className="detail-demand-strip"><Text className="detail-label">需求范围</Text><div>{detail.equipment.length ? detail.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>) : <Text type="secondary">设备信息待从正文确认</Text>}</div></div>
+                <div className="detail-demand-strip"><Text className="detail-label">采购提示</Text><div>{detail.procurement?.items?.length ? <Text type="secondary">物料明细以采购资料为准；标题中的设备词仅表示项目背景。</Text> : detail.equipment.length ? detail.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>) : <Text type="secondary">设备信息待从正文确认</Text>}</div></div>
                 {detail.records.length === 0 ? <EmptyBlock description="暂无公告正文" /> : <Collapse className="detail-record-list" items={detail.records.map((record) => ({ key: String(record.id), label: <div className="detail-record-label"><span>{record.title || `记录 #${record.id}`}</span><Text type="secondary">记录 #{record.id} · {record.parse_status || '已接入'}</Text></div>, children: <RecordPanel record={record} /> }))} />}
               </section>
             </div>
@@ -279,7 +297,7 @@ export function ProjectDetailPage() {
           </section>
           <nav className="detail-rail-section detail-contents-nav" aria-label="页面内容">
             <h2 className="detail-rail-heading">本页内容</h2>
-            <a href="#procurement-briefing-heading">采购信息</a>
+            <a href="#procurement-briefing-heading">采购资料</a>
             <a href="#ai-judgment">AI研判</a>
             <a href="#decision">方案与决定</a>
             <a href="#history">历史与关联</a>
@@ -331,44 +349,173 @@ function RecordPanel({ record }: { record: ProjectDetailData['records'][number] 
   return <div className="detail-record-panel"><Space wrap><Tag>记录 #{record.id}</Tag>{record.parse_status && <Tag>{record.parse_status}</Tag>}{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开原文</a>}<a href={api.archiveUrl(record.id)} target="_blank" rel="noreferrer">下载归档</a></Space><Paragraph className="detail-record-body">{record.body_text || '这条记录没有正文内容。'}</Paragraph><Collapse ghost items={[{ key: 'facts', label: '已抽取事实', children: <StructuredFields value={record.facts} emptyText="暂无已抽取事实" /> }, { key: 'inferences', label: '推测与待核实线索', children: <StructuredFields value={record.inferences} emptyText="暂无推测；请以公告正文为准" tone="warning" /> }]} /></div>
 }
 
-function ProcurementBriefing({ briefing, records, title }: { briefing: ProjectDetailData['briefing']; records: ProjectDetailData['records']; title: string }) {
+const procurementStatusMeta: Record<ProcurementData['status'], { label: string; description: string }> = {
+  not_checked: { label: '尚未检查附件', description: '当前只有公告正文，附件资料还没有被读取。' },
+  partial: { label: '已解析部分资料', description: '已读取部分采购资料，仍有字段需要人工核对。' },
+  complete: { label: '资料已核对', description: '采购明细与交付信息来自已解析的采购资料。' },
+  unavailable: { label: '资料暂不可用', description: '附件下载或解析没有完成，缺少部分采购依据。' },
+}
+
+const procurementDocumentStatusMeta: Record<ProcurementDocument['status'], { label: string; color?: string }> = {
+  parsed: { label: '已解析', color: 'success' },
+  unsupported: { label: '暂不支持解析', color: 'default' },
+  auth_required: { label: '需登录', color: 'warning' },
+  failed: { label: '下载失败', color: 'error' },
+  unreadable: { label: '无法读取', color: 'error' },
+}
+
+function procurementValue(value: string | null | undefined): string {
+  return normalizeOpportunityText(value) || ''
+}
+
+function procurementMissingValue(procurement: ProcurementData | null | undefined, value: string | null | undefined): string {
+  if (procurementValue(value)) return procurementValue(value)
+  if (!procurement || procurement.status === 'not_checked') return '未检查附件'
+  const statuses = procurement.documents.map((document) => document.status)
+  if (statuses.includes('auth_required')) return '需登录'
+  if (statuses.includes('failed') || statuses.includes('unreadable')) return '解析失败'
+  if (statuses.includes('unsupported')) return '暂不支持解析'
+  return procurement.status === 'unavailable' ? '资料不可用（原因未提供）' : '原文未写'
+}
+
+function procurementDocumentFor(item: ProcurementItem, documents: ProcurementDocument[]): ProcurementDocument | undefined {
+  return documents.find((document) => String(document.id) === String(item.source_document_id))
+}
+
+function procurementSourceHref(item: ProcurementItem, document: ProcurementDocument | undefined, records: ProjectDetailData['records']): string {
+  if (document?.url) return document.url
+  const record = records.find((candidate) => candidate.id === item.record_id)
+  return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
+}
+
+function ProcurementSource({ item, document, href }: { item: ProcurementItem; document?: ProcurementDocument; href: string }) {
+  const label = `${document?.name || `记录 #${item.record_id}`}${item.page ? ` · 第 ${item.page} 页` : ''}`
+  const quote = procurementValue(item.quote)
+  return (
+    <div className="detail-procurement-source-cell">
+      {href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : <span>{label}</span>}
+      {quote && <span className="detail-procurement-quote" title={quote}>“{quote}”</span>}
+    </div>
+  )
+}
+
+function ProcurementBriefing({
+  briefing,
+  procurement,
+  records,
+  title,
+  onRefresh,
+  refreshing,
+  error,
+}: {
+  briefing: ProjectDetailData['briefing']
+  procurement: ProjectDetailData['procurement']
+  records: ProjectDetailData['records']
+  title: string
+  onRefresh: () => void
+  refreshing: boolean
+  error: unknown
+}) {
   const fallbackRecord = records.find((record) => record.original_url || record.canonical_url)
   const sourceUrl = briefing?.original_url || fallbackRecord?.original_url || fallbackRecord?.canonical_url || ''
   const recordId = briefing?.record_id ?? records[0]?.id ?? null
-  const scope = cleanScopeExcerpt(briefing?.scope_excerpt, title)
-  const delivery = normalizeOpportunityText(briefing?.delivery_excerpt)
+  const status = procurement?.status ?? 'not_checked'
+  const statusMeta = procurementStatusMeta[status]
+  const parsedScope = cleanScopeExcerpt(procurement?.scope_summary, title)
+  const scope = parsedScope || cleanScopeExcerpt(briefing?.scope_excerpt, title)
+  const deliveryPeriod = procurementValue(procurement?.delivery_period)
+  const deliveryLocation = procurementValue(procurement?.delivery_location)
+  const delivery = [deliveryPeriod, deliveryLocation].filter(Boolean).join('；') || procurementValue(briefing?.delivery_excerpt)
   const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
-  const contact = normalizeOpportunityText(briefing?.contact_excerpt)
+  const contact = procurementValue(briefing?.contact_excerpt)
+  const items = procurement?.items ?? []
+  const documents = procurement?.documents ?? []
+  const [itemSearch, setItemSearch] = useState('')
+  const filteredItems = useMemo(() => {
+    const query = itemSearch.trim().toLocaleLowerCase()
+    if (!query) return items
+    return items.filter((item) => [item.name, item.specification, item.material, item.code, item.standard, item.delivery_period, item.delivery_location]
+      .some((value) => procurementValue(value).toLocaleLowerCase().includes(query)))
+  }, [itemSearch, items])
+  const columns = useMemo(() => [
+    {
+      title: '名称', key: 'name', width: 160,
+      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-item-name">{procurementValue(item.name) || '原文未写'}</span>,
+    },
+    {
+      title: '规格', key: 'specification', width: 170,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.specification) || '原文未写'}</span>,
+    },
+    {
+      title: '材质', key: 'material', width: 120,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.material) || '原文未写'}</span>,
+    },
+    {
+      title: '数量 / 单位', key: 'quantity', width: 115,
+      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-quantity">{procurementValue(item.quantity) || '原文未写'}{procurementValue(item.unit) ? ` ${item.unit}` : ''}</span>,
+    },
+    {
+      title: '交付', key: 'delivery', width: 210,
+      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>{procurementValue(item.delivery_location) || '原文未写'}</span><span>{procurementValue(item.delivery_period) || '原文未写'}</span></div>,
+    },
+    {
+      title: '来源', key: 'source', width: 190,
+      render: (_value: unknown, item: ProcurementItem) => {
+        const document = procurementDocumentFor(item, documents)
+        return <ProcurementSource item={item} document={document} href={procurementSourceHref(item, document, records)} />
+      },
+    },
+  ], [documents, records])
+  const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
 
   return (
-    <section className="detail-briefing" aria-labelledby="procurement-briefing-heading">
+    <section className="detail-briefing detail-procurement" aria-labelledby="procurement-briefing-heading">
       <div className="detail-briefing-heading-row">
         <div className="detail-briefing-heading">
-          <h2 id="procurement-briefing-heading">采购信息</h2>
-          <span className="detail-briefing-note" role="note">公告摘录 · 完整要求以原文为准</span>
+          <div className="detail-procurement-title-line"><h2 id="procurement-briefing-heading">采购资料</h2><Tag color={statusMeta.label === '资料已核对' ? 'success' : status === 'unavailable' ? 'error' : 'warning'}>{statusMeta.label}</Tag></div>
+          <span className="detail-briefing-note" role="note">范围与交付优先 · 明细按来源核对</span>
         </div>
-        <div className="detail-briefing-source">
-          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未识别</Text>}
+        <div className="detail-briefing-source detail-procurement-actions">
+          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 查看公告原文</a> : <Text type="secondary">原文链接：未提供</Text>}
           {recordId != null && <Text type="secondary">记录 #{recordId}</Text>}
+          <Button size="small" icon={status === 'not_checked' || status === 'unavailable' ? <FileTextOutlined /> : <ReloadOutlined />} loading={refreshing} onClick={onRefresh}>{status === 'not_checked' || status === 'unavailable' ? '补充采购资料' : '重新核对资料'}</Button>
         </div>
       </div>
+
+      <div className="detail-procurement-status-line"><FileTextOutlined /><span>{statusMeta.description}</span>{procurement?.updated_at && <Text type="secondary">更新于 {formatDate(procurement.updated_at, true)}</Text>}</div>
+      {Boolean(error) && <Alert className="detail-procurement-error" type="error" showIcon message="采购资料核对失败" description={errorText} />}
+
       <div className="detail-briefing-primary">
         <article className="detail-briefing-field detail-briefing-scope">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
-          <p>{scope || '未识别'}</p>
+          <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '')}</p>
         </article>
         <article className="detail-briefing-field detail-briefing-delivery">
           <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text></div>
-          <p>{delivery || '未识别'}</p>
+          <p className={!delivery ? 'detail-procurement-missing' : undefined}>{delivery || procurementMissingValue(procurement, '')}</p>
         </article>
       </div>
+
+      <section className="detail-procurement-items" aria-labelledby="procurement-items-heading">
+        <div className="detail-procurement-section-heading">
+          <div><h3 id="procurement-items-heading">物料明细</h3><Text type="secondary">{items.length ? `${items.length} 项；不同单位不合并` : procurementMissingValue(procurement, '')}</Text></div>
+          {items.length > 0 && <Input className="detail-procurement-search" allowClear prefix={<SearchOutlined />} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="搜索名称、规格、材质或编号" aria-label="搜索物料明细" />}
+        </div>
+        {items.length > 0 ? <div className="detail-procurement-table-wrap"><Table<ProcurementItem> size="small" rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`} columns={columns} dataSource={filteredItems} scroll={{ x: 965 }} pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 项` }} locale={{ emptyText: '当前筛选没有匹配的物料' }} /></div> : <div className="detail-procurement-empty">采购附件尚未形成可展示的物料行。</div>}
+      </section>
+
+      <section className="detail-procurement-documents" aria-labelledby="procurement-documents-heading">
+        <div className="detail-procurement-section-heading"><div><h3 id="procurement-documents-heading">附件与来源</h3><Text type="secondary">附件名、页码和链接用于回到原文核对</Text></div><Text type="secondary">{documents.length ? `${documents.length} 份资料` : procurementMissingValue(procurement, '')}</Text></div>
+        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{document.pages != null ? `${document.pages} 页` : '页数未提取'} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{document.error && <div className="detail-procurement-document-error">{document.error}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">尚未检查附件；点击“补充采购资料”开始核对。</div>}
+      </section>
+
       <details className="detail-briefing-qualifications">
-        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : '未识别'}</span></summary>
-        <p className="detail-briefing-qualification-body">{qualification || '未识别'}</p>
+        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : '原文未写或尚未检查'}</span></summary>
+        <p className="detail-briefing-qualification-body">{qualification || '原文未写；如资格要求在未解析附件中，请先补充采购资料。'}</p>
       </details>
       <article className="detail-briefing-contact">
         <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text></div>
-        <p>{contact || '未识别'}</p>
+        <p>{contact || '原文未写'}</p>
       </article>
     </section>
   )
