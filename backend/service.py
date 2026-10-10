@@ -540,23 +540,21 @@ class ScreeningService:
                 seen_items.add(key)
                 items.append(item)
 
+        # Keep the scope useful as a category summary.  A material list often
+        # has many rows with the same name but different specifications; using
+        # ``name + specification`` here makes the first rows crowd out the
+        # category breadth and can read like a claim about one equipment title.
         names: list[str] = []
         for item in items:
             name = str(item.get("name") or "").strip()
-            spec = str(item.get("specification") or "").strip()
-            material = str(item.get("material") or "").strip()
-            label = name
-            details = " / ".join(value for value in (spec, material) if value)
-            if details:
-                label = f"{label}（{details}）" if label else details
-            if label and label not in names:
-                names.append(label)
+            if name and name not in names:
+                names.append(name)
         if names:
-            scope_summary = "、".join(names[:8])
-            if len(names) > 8:
-                scope_summary += f"等{len(items)}项"
-            else:
-                scope_summary += f"（共{len(items)}项）"
+            preview = "、".join(names[:8])
+            suffix = "等" if len(names) > 8 else ""
+            scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；各项规格、材质和数量见明细。"
+        elif items:
+            scope_summary = f"共{len(items)}项物料；各项规格、材质和数量见明细。"
         else:
             scope_summary = ""
 
@@ -749,6 +747,37 @@ class ScreeningService:
             "related_record_id": record.get("related_record_id"),
         }
         return value
+
+    @staticmethod
+    def _replace_job_document_snapshot(current: list[dict[str, Any]], returned: Any,
+                                        target_record_ids: set[int]) -> list[dict[str, Any]]:
+        """Replace only records read by this job's document tool.
+
+        Validation must use the initial snapshot plus this job's own tool
+        responses. A later manual refresh in another request must not make a
+        model citation valid retroactively.
+        """
+        result = []
+        for document in current:
+            if not isinstance(document, dict):
+                continue
+            try:
+                record_id = int(document.get("record_id"))
+            except (TypeError, ValueError):
+                continue
+            if record_id not in target_record_ids:
+                result.append(document)
+        if isinstance(returned, list):
+            for document in returned:
+                if not isinstance(document, dict) or not isinstance(document.get("id"), str):
+                    continue
+                try:
+                    record_id = int(document.get("record_id"))
+                except (TypeError, ValueError):
+                    continue
+                if record_id in target_record_ids:
+                    result.append(copy.deepcopy(document))
+        return result
 
     def _analysis_project_snapshot(self, project_id: int, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         project_row = self._project_row(project_id)
@@ -1117,8 +1146,8 @@ class ScreeningService:
                                       judgment and int(decision["judgment_id"] or -1) != int(judgment["id"]))
         published = latest.get("published_at")
         deadline = latest.get("deadline_at")
-        briefing = build_briefing(latest)
         procurement = self._procurement_for_project(project_id)
+        briefing = build_briefing(latest, procurement=procurement)
         # Keep source-derived briefing fields intact while exposing parsed
         # attachment facts beside them for detail and list clients.
         briefing["procurement"] = procurement
@@ -1497,6 +1526,9 @@ class ScreeningService:
             # SDK context. It is captured before awaiting the provider so a
             # concurrent import cannot mix a new body with the old fingerprint.
             related_records = self._analysis_related_validation_records(related_context)
+            document_sources = self._document_sources_for_records(
+                [int(record["id"]) for record in records if record.get("id") is not None]
+            )
             fingerprint = self._analysis_fingerprint(project, capability, config, related_context)
             with self._db_lock, self.db:
                 self.db.execute("UPDATE jobs SET input_fingerprint=?,updated_at=? WHERE id=?", (fingerprint, now_iso(), job_id))
@@ -1512,15 +1544,25 @@ class ScreeningService:
                     self._record_agent_event(agent_run_id, event)
 
                 async def tool_callback(arguments: dict[str, Any]) -> dict[str, Any]:
-                    nonlocal fingerprint
+                    nonlocal fingerprint, document_sources
                     value = await self._agent_fetch_documents(project_id, arguments)
-                    # The first attachment fetch is part of this job's
-                    # trusted input. Refresh the fingerprint after the tool
-                    # persists it so the job does not mark its own judgment
-                    # stale and enqueue itself again. A concurrent source
-                    # import is still detected by the final comparison below.
+                    requested_record_id = arguments.get("record_id") if isinstance(arguments, dict) else None
+                    target_record_ids = ({int(record["id"]) for record in records}
+                                         if requested_record_id is None else {int(requested_record_id)})
+                    document_sources = self._replace_job_document_snapshot(
+                        document_sources, value.get("documents") if isinstance(value, dict) else None,
+                        target_record_ids,
+                    )
+                    # The tool response is part of this job's trusted input.
+                    # Keep the original source/capability/config snapshot and
+                    # replace only the procurement component. A concurrent
+                    # source import is still detected by the final comparison.
+                    fingerprint_project = copy.deepcopy(project)
+                    if isinstance(value, dict) and isinstance(value.get("procurement"), dict):
+                        fingerprint_project["procurement"] = value["procurement"]
+                        fingerprint_project["procurement_fingerprint"] = self._procurement_fingerprint(value["procurement"])
                     fingerprint = self._analysis_fingerprint(
-                        self.project_detail(project_id), capability, config, related_context
+                        fingerprint_project, capability, config, related_context
                     )
                     return value
 
@@ -1563,9 +1605,6 @@ class ScreeningService:
                                                             api_key=config["api_key"], messages=messages)
                     content = extract_content(response)
                 try:
-                    document_sources = self._document_sources_for_records(
-                        [int(record["id"]) for record in records if record.get("id") is not None]
-                    )
                     judgment = validate_judgment(content, project, config["model"], fingerprint,
                                                  related_records=related_records,
                                                  forbidden_values=[str(config.get("api_key") or "")],

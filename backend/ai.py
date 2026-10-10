@@ -58,7 +58,7 @@ _ERROR_CODES = {
     # Keep compatibility with older runner builds while still rejecting
     # arbitrary provider/model text from the error event.
     "INVALID_REQUEST", "CONFIG_ERROR", "RUNTIME_ERROR",
-    "TOOL_INVALID", "TOOL_FORBIDDEN", "TOOL_UNAVAILABLE", "TOOL_ERROR",
+    "TOOL_INVALID", "TOOL_FORBIDDEN", "TOOL_UNAVAILABLE", "TOOL_ERROR", "RPC_ERROR",
 }
 _PROGRESS_LABELS = {
     "started": "智能体已启动",
@@ -194,16 +194,20 @@ def _safe_error_code(code: Any) -> str:
 
 
 def _safe_tool_error(exc: BaseException) -> str:
-    """Map a server tool failure to a non-sensitive protocol enum."""
+    """Map a server tool failure to the runner's lower-case safe enum."""
     if isinstance(exc, AIError):
         text = str(exc)
         if "无权限" in text:
-            return "TOOL_FORBIDDEN"
+            return "record_not_in_project"
         if "参数" in text:
-            return "TOOL_INVALID"
+            return "invalid_request"
         if "未就绪" in text or "不可用" in text:
-            return "TOOL_UNAVAILABLE"
-    return "TOOL_ERROR"
+            return "not_configured"
+        if "不支持" in text:
+            return "unsupported"
+        if "超时" in text:
+            return "timeout"
+    return "internal"
 
 
 def sanitize_ai_error(exc: BaseException, *, default: str = "AI request failed",
@@ -613,6 +617,14 @@ class PiSDKProvider:
         return {"choices": [{"message": {"content": result.content}}], "usage": result.usage}
 
 
+def _attachments_fingerprint_value(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [{key: item_value for key, item_value in item.items()
+             if key not in {"fetched_at", "updated_at"}}
+            for item in value if isinstance(item, dict)]
+
+
 def _record_fingerprint(record: dict[str, Any]) -> dict[str, Any]:
     body = str(record.get("body_text") or "")
     return {
@@ -622,7 +634,9 @@ def _record_fingerprint(record: dict[str, Any]) -> dict[str, Any]:
         # The protocol body is bounded, so the full source hash is part of the
         # input identity to catch changes beyond the visible prefix.
         "body_text_sha256": record.get("body_text_sha256") or sha256_text(body),
-        "attachments_sha256": record.get("attachments_sha256") or sha256_text(json_text(record.get("attachments", []))),
+        "attachments_sha256": record.get("attachments_sha256") or sha256_text(
+            json_text(_attachments_fingerprint_value(record.get("attachments", [])))
+        ),
         "kind": record.get("kind"), "buyer": record.get("buyer"), "equipment": record.get("equipment"),
         "facts": record.get("facts"), "inferences": record.get("inferences"),
         "published_at": record.get("published_at"), "notice_number": record.get("notice_number"),
@@ -796,7 +810,7 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
                 document = document_map.get((record_id, document_id.strip()))
                 if document is None:
                     raise AIError(f"evidence document is not trusted (document_id={document_id})")
-                source_text = str(document.get("text") or "")
+                page_match: int | None = None
                 if isinstance(page, bool) or (page is not None and not isinstance(page, int)):
                     raise AIError("invalid evidence page")
                 if isinstance(page, int):
@@ -807,8 +821,28 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
                             break
                     if page_text is None:
                         raise AIError("evidence page is not trusted")
-                    source_text = page_text
-                matched_quote = source_quote(quote, source_text) if isinstance(quote, str) else None
+                    matched_quote = source_quote(quote, page_text) if isinstance(quote, str) else None
+                    page_match = page
+                else:
+                    # Page is optional in the model contract.  Derive the
+                    # first matching page from the server-read page texts so
+                    # clients can render a stable citation without trusting a
+                    # model-supplied page number.
+                    matched_quote = None
+                    for page_value in document.get("page_texts", []) if isinstance(document.get("page_texts"), list) else []:
+                        if not isinstance(page_value, dict):
+                            continue
+                        try:
+                            candidate_page = max(1, int(page_value.get("page") or 1))
+                        except (TypeError, ValueError):
+                            continue
+                        candidate_quote = source_quote(quote, str(page_value.get("text") or "")) if isinstance(quote, str) else None
+                        if candidate_quote is not None:
+                            matched_quote = candidate_quote
+                            page_match = candidate_page
+                            break
+                    if matched_quote is None:
+                        matched_quote = source_quote(quote, str(document.get("text") or "")) if isinstance(quote, str) else None
             else:
                 matched_quote = source_quote(quote, str(record.get("body_text") or "")) if record and isinstance(quote, str) else None
             if matched_quote is None:
@@ -816,8 +850,14 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
             clean_item = {"record_id": record_id, "quote": matched_quote}
             if document_id is not None:
                 clean_item["document_id"] = str(document_id).strip()
-                if isinstance(page, int):
-                    clean_item["page"] = page
+                # These values are always copied from the trusted server
+                # snapshot.  Any same-named fields supplied by the model are
+                # ignored, so a stale/historical citation remains auditable.
+                clean_item["document_name"] = str(document.get("name") or "")
+                clean_item["source_url"] = str(document.get("url") or "")
+                clean_item["document_sha256"] = str(document.get("sha256") or "")
+                if page_match is not None:
+                    clean_item["page"] = page_match
             clean_evidence.append(clean_item)
         normalized_reasons.append({"text": reason["text"].strip(), "evidence": clean_evidence})
     if decision in {"recommend", "consider"}:

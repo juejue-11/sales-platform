@@ -9,6 +9,7 @@ import pytest
 
 import backend.service as service_module
 from backend.ai import AIError, PiSDKProvider, validate_judgment
+from backend.briefing import build_briefing
 from backend.service import ScreeningService
 
 
@@ -70,6 +71,8 @@ def test_refresh_persists_documents_without_replacing_source_body_or_calling_ai(
         procurement = result["procurement"]
         assert procurement["status"] == "complete"
         assert procurement["items"][0]["name"] == "普碳中板"
+        assert procurement["scope_summary"] == "共1项物料，包括普碳中板；各项规格、材质和数量见明细。"
+        assert "4mm" not in procurement["scope_summary"]
         assert procurement["delivery_location"] == "本溪市"
         assert "三日内供完" in procurement["delivery_period"]
         assert procurement["documents"][0]["id"] == "doc-material-174"
@@ -82,6 +85,19 @@ def test_refresh_persists_documents_without_replacing_source_body_or_calling_ai(
         assert service.db.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
     finally:
         service.close()
+
+
+def test_briefing_does_not_promote_attachment_filename_and_uses_parsed_facts():
+    record = _record()
+    source_only = build_briefing(record)
+    assert source_only["scope_excerpt"] == ""
+    facts = {"items": [{"name": "普碳中板"}], "scope_summary": "普碳中板（4mm / Q235B）（共143项）",
+             "delivery_period": "按通知供货量三日内供完", "delivery_location": "本溪市"}
+    enriched = build_briefing(record, procurement=facts)
+    assert "普碳中板" in enriched["scope_excerpt"]
+    assert "物料清单附件.pdf" not in enriched["scope_excerpt"]
+    assert "三日内供完" in enriched["delivery_excerpt"]
+    assert "本溪市" in enriched["delivery_excerpt"]
 
 
 def test_unparsed_document_never_claims_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -158,14 +174,21 @@ def test_refresh_keeps_only_latest_document_version_and_ignores_refresh_times(tm
 def test_document_evidence_requires_server_document_and_exact_quote():
     project = {"records": [{"id": 174, "body_text": "正文只说详见附件。"}]}
     document = {"id": "doc-material-174", "record_id": 174, "text": "普碳中板；4mm；Q235B；5.0t",
-                "page_texts": [{"page": 1, "text": "普碳中板；4mm；Q235B；5.0t"}]}
+                "name": "物料清单附件.pdf", "url": "https://example.test/material-list.pdf", "sha256": "server-hash",
+                "page_texts": [{"page": 1, "text": "其他内容"},
+                                {"page": 7, "text": "普碳中板；4mm；Q235B；5.0t"}]}
     payload = {"decision": "consider", "summary": "核对附件明细", "demand_summary": "附件列出钢材",
                "reasons": [{"text": "附件有明细", "evidence": [{"record_id": 174,
-                              "document_id": "doc-material-174", "page": 1,
+                              "document_id": "doc-material-174",
                               "quote": "普碳中板；4mm；Q235B；5.0t"}]}],
                "unknowns": [], "next_actions": [], "options": []}
     result = validate_judgment(payload, project, "test", "fp", document_sources=[document])
-    assert result["reasons"][0]["evidence"][0]["document_id"] == "doc-material-174"
+    evidence = result["reasons"][0]["evidence"][0]
+    assert evidence["document_id"] == "doc-material-174"
+    assert evidence["document_name"] == "物料清单附件.pdf"
+    assert evidence["source_url"] == "https://example.test/material-list.pdf"
+    assert evidence["document_sha256"] == "server-hash"
+    assert evidence["page"] == 7
     forged = json.loads(json.dumps(payload, ensure_ascii=False))
     forged["reasons"][0]["evidence"][0]["document_id"] = "doc-forged"
     with pytest.raises(AIError, match="document is not trusted"):
@@ -204,6 +227,59 @@ def test_agent_fetch_is_part_of_same_job_fingerprint_and_does_not_requeue(tmp_pa
         assert service.summary(174)["ai_status"] == "succeeded"
         assert service.project_detail(174)["judgment"]["stale"] is False
         assert service.db.execute("SELECT count(*) FROM jobs WHERE project_id=174").fetchone()[0] == 1
+    finally:
+        service.close()
+
+
+def test_source_change_during_agent_document_fetch_stales_old_snapshot(tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch(record):
+        started.set()
+        await release.wait()
+        return [{"id": "doc-concurrent", "record_id": record["id"], "name": "清单.pdf", "status": "parsed",
+                 "sha256": "concurrent-hash", "text": "钢板 5t 本溪市", "items": [{
+                     "name": "钢板", "quantity": "5", "unit": "t", "specification": "4mm", "material": "Q235B",
+                     "delivery_period": "三日内供完", "delivery_location": "本溪市", "source_document_id": "doc-concurrent",
+                     "record_id": 174, "page": 1, "quote": "钢板 5t 本溪市",
+                 }]}]
+
+    class Agent:
+        async def analyze(self, *, tool_callback, **kwargs):
+            data = await tool_callback({"record_id": 174})
+            assert data["documents"][0]["id"] == "doc-concurrent"
+            return {"content": json.dumps({"decision": "verify", "summary": "核对附件", "demand_summary": "有钢材明细",
+                                             "reasons": [{"text": "附件列明钢板", "evidence": [{
+                                                 "record_id": 174, "document_id": "doc-concurrent",
+                                                 "quote": "钢板 5t 本溪市"}]}], "unknowns": [], "next_actions": [],
+                                             "options": []}, ensure_ascii=False),
+                    "usage": {"model_calls": 1, "tool_calls": 1, "input_tokens": 1, "output_tokens": 1}}
+
+    service = _service(tmp_path, monkeypatch, fetch)
+    service.provider = Agent()
+    try:
+        service.update_settings({"business": {"capabilities": "测试能力"},
+                                 "ai": {"base_url": "https://mock.local/v1", "model": "mock", "enabled": True,
+                                        "api_key": "secret-value"}})
+        job_id = service.db.execute("SELECT id FROM jobs WHERE project_id=174 ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+        async def scenario():
+            running = asyncio.create_task(service.run_job(int(job_id)))
+            await asyncio.wait_for(started.wait(), timeout=2)
+            changed = _record()
+            changed["body_text"] = "正文在附件抓取期间发生变化。"
+            service.source_path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+            await service.import_file()
+            release.set()
+            await running
+
+        asyncio.run(scenario())
+        detail = service.project_detail(174)
+        assert detail["judgment"]["stale"] is True
+        assert detail["judgment"]["reasons"][0]["evidence"][0]["document_id"] == "doc-concurrent"
+        assert detail["ai_decision"] is None
     finally:
         service.close()
 
@@ -250,3 +326,40 @@ def test_protocol2_fetch_tool_round_trip_and_protocol1_is_selected_without_callb
     result = asyncio.run(scenario())
     assert result.content == '{"decision":"verify"}'
     assert calls == [{"record_id": 174}]
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required for the duplex protocol test")
+def test_protocol2_tool_failure_uses_runner_safe_enum(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = tmp_path / "duplex-failure.cjs"
+    runner.write_text(
+        """
+        const readline = require('readline');
+        const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
+        const rl = readline.createInterface({input: process.stdin});
+        let first = true;
+        rl.on('line', line => {
+          const value = JSON.parse(line);
+          if (first) {
+            first = false;
+            emit({type:'tool_request', id:'bad-record', tool:'fetch_project_documents', arguments:{record_id:999}});
+          } else {
+            if (value.type !== 'tool_response' || value.ok !== false || value.error !== 'record_not_in_project') process.exit(8);
+            emit({type:'result', engine:'pi_sdk', content:'{"decision":"verify"}', usage:{model_calls:1,tool_calls:1,input_tokens:1,output_tokens:1}});
+            rl.close();
+          }
+        });
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SCREENING_AGENT_RUNNER", str(runner))
+    monkeypatch.setenv("SCREENING_NODE_PATH", NODE or "")
+
+    async def callback(_arguments):
+        raise AIError("工具无权限")
+
+    async def scenario():
+        return await PiSDKProvider().analyze(base_url="https://mock.local/v1", model="mock", api_key="secret",
+                                             messages=[{"role": "user", "content": "x"}], context={},
+                                             tool_callback=callback)
+
+    assert asyncio.run(scenario()).content == '{"decision":"verify"}'

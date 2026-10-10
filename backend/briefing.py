@@ -245,7 +245,17 @@ def _scope_has_content(label: str, section: str, *, is_news: bool) -> bool:
         return False
     if "详见招标文件" in content and not (_has_quantity(content) or any(cue in content for cue in _SCOPE_FACT_CUES)):
         return False
+    if "详见附件" in content and not _has_quantity(content) and not any(
+            cue in content for cue in ("设备", "货物", "物资", "标的", "采购项目", "采购设备")):
+        # “详见附件《物料清单附件.pdf》” identifies a source file, not the
+        # materials in that file. Parsed attachment facts are applied below.
+        return False
     return _has_quantity(content) or any(cue in content for cue in _SCOPE_FACT_CUES)
+
+
+def _attachment_only_scope(text: str) -> bool:
+    return "详见附件" in text and not _has_quantity(text) and not any(
+        cue in text for cue in ("设备", "货物", "物资", "标的", "采购项目", "采购设备"))
 
 
 def _select_scope(text: str, *, is_news: bool) -> str:
@@ -259,6 +269,8 @@ def _select_scope(text: str, *, is_news: bool) -> str:
     sentences = _sentence_candidates(text)
     scored: list[tuple[int, str]] = []
     for sentence in sentences:
+        if _attachment_only_scope(sentence):
+            continue
         score = 0
         if _has_quantity(sentence):
             score += 35
@@ -393,7 +405,27 @@ def _select_contact(text: str) -> str:
     return ""
 
 
-def build_briefing(record: Mapping[str, Any] | None) -> dict[str, Any]:
+def _apply_procurement_facts(result: dict[str, Any], procurement: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(procurement, Mapping):
+        return result
+    items = procurement.get("items")
+    scope = str(procurement.get("scope_summary") or "").strip()
+    if isinstance(items, list) and items and scope:
+        result["scope_excerpt"] = _clip(scope, 450)
+    period = str(procurement.get("delivery_period") or "").strip()
+    location = str(procurement.get("delivery_location") or "").strip()
+    delivery_parts = []
+    if period:
+        delivery_parts.append(f"交期：{period}")
+    if location:
+        delivery_parts.append(f"交地：{location}")
+    if delivery_parts:
+        result["delivery_excerpt"] = _clip("；".join(delivery_parts), 240)
+    return result
+
+
+def build_briefing(record: Mapping[str, Any] | None,
+                   procurement: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Build bounded source excerpts for one latest record."""
 
     if not isinstance(record, Mapping):
@@ -407,14 +439,14 @@ def build_briefing(record: Mapping[str, Any] | None) -> dict[str, Any]:
     result = empty_briefing(record_id, original_url)
     text = normalize_source_text(record.get("body_text"))
     if not text:
-        return result
+        return _apply_procurement_facts(result, procurement)
     is_news = str(record.get("kind") or "").strip().lower() == "news"
     result["scope_excerpt"] = _select_scope(text, is_news=is_news)
     if not is_news:
         result["delivery_excerpt"] = _select_delivery(text)
         result["qualification_excerpt"] = _select_qualification(text)
     result["contact_excerpt"] = _select_contact(text)
-    return result
+    return _apply_procurement_facts(result, procurement)
 
 
 # Public aliases keep the small module convenient for focused unit tests and
