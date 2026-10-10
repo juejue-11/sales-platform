@@ -129,6 +129,12 @@ to a redacted `RPC_ERROR`. A pending request is rejected on every bridge
 failure so the child cannot wait indefinitely. Protocol 2 also retains the
 request deadline for unanswered tool calls.
 
+The bridge stores a terminal read/protocol failure even if it happens while the
+SDK session is still being created. When the session later installs its abort
+callback, that callback is notified immediately; a subsequent tool request is
+rejected immediately as well. This covers host EOF or an unknown response ID
+before the first model response without falling back to the full model timeout.
+
 The protocol 2 system suffix requires a fetch before judging when the body
 mentions an attachment/tender document or lacks procurement scope, specs, or
 delivery facts. It requires an explicit evidence gap when fetching or parsing
