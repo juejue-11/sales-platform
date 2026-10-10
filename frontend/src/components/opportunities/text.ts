@@ -145,6 +145,11 @@ export function procurementFacts(
   if (deliveryFact && facts.length < 2) facts.push(deliveryFact)
 
   if (facts.length < 2) {
+    const deliveryLocation = sourceFact(deliveryText, /(?:交货地点|交付地点|交货地|交付地)\s*[:：]?\s*[^。；;\n]{1,42}/, '地点')
+    if (deliveryLocation) facts.push(deliveryLocation)
+  }
+
+  if (facts.length < 2) {
     const hasTableHeader = /(?:设备名称及数量见下表|规格型号\s*单位\s*数量|包号\s*设备)/.test(scopeText)
     const specFact = !hasTableHeader && sourceFact(scopeText, /(?:额定负载\s*[:：]?\s*[^。；;\n]{1,32}|(?:规格型号|型号)\s*[:：]?\s*[A-Za-z0-9][^。；;\n]{1,32}|(?:功率|B\s*=|V\s*=|kW|MPa)\s*[:：=]?\s*[^。；;\n]{1,32})/, '规格')
     if (specFact) facts.push(specFact)

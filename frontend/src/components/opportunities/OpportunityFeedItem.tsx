@@ -17,6 +17,11 @@ function deadlineValue(value: string | null): string {
   return value ? formatDate(value, true) : '截止日期未提供'
 }
 
+function uniformItemDelivery(items: NonNullable<ProjectSummary['procurement']>['items'], field: 'delivery_period' | 'delivery_location'): string {
+  const values = Array.from(new Set(items.map((item) => item[field]?.trim()).filter(Boolean)))
+  return values.length === 1 ? values[0] : ''
+}
+
 /**
  * A catalogue teaser. The Link is the card so pointer, keyboard, and
  * ctrl-click navigation all have the same destination.
@@ -24,13 +29,22 @@ function deadlineValue(value: string | null): string {
 export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProps) {
   const briefing = project.briefing
   const procurement = project.procurement
+  const hasParsedItems = Boolean(procurement?.items?.length)
   const title = compactOpportunityTitle(project.title) || '未命名项目'
   const scopeText = procurement?.scope_summary || briefing?.scope_excerpt
-  const deliveryText = procurement?.delivery_period || procurement?.delivery_location || briefing?.delivery_excerpt
+  const deliveryPeriod = procurement?.delivery_period || (procurement?.items ? uniformItemDelivery(procurement.items, 'delivery_period') : '')
+  const deliveryLocation = procurement?.delivery_location || (procurement?.items ? uniformItemDelivery(procurement.items, 'delivery_location') : '')
+  const deliveryText = deliveryPeriod || deliveryLocation || briefing?.delivery_excerpt
+  const deliveryFactText = hasParsedItems
+    ? [
+        deliveryPeriod && `交货期：${deliveryPeriod}`,
+        deliveryLocation && `交货地点：${deliveryLocation}`,
+      ].filter(Boolean).join('；')
+    : deliveryText
   const teaser = procurementTeaser(scopeText, project.title)
     || procurementTeaser(deliveryText, project.title)
     || '采购范围尚未从正文或附件核对，进入详情查看来源。'
-  const facts = procurementFacts(scopeText, deliveryText, project.equipment)
+  const facts = procurementFacts(scopeText, deliveryFactText, hasParsedItems ? [] : project.equipment)
 
   return (
     <Link

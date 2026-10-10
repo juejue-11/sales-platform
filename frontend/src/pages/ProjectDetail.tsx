@@ -297,7 +297,7 @@ export function ProjectDetailPage() {
           </section>
           <nav className="detail-rail-section detail-contents-nav" aria-label="页面内容">
             <h2 className="detail-rail-heading">本页内容</h2>
-            <a href="#procurement-briefing-heading">采购资料</a>
+            <a href="#procurement-briefing-heading">采购信息</a>
             <a href="#ai-judgment">AI研判</a>
             <a href="#decision">方案与决定</a>
             <a href="#history">历史与关联</a>
@@ -364,26 +364,85 @@ const procurementDocumentStatusMeta: Record<ProcurementDocument['status'], { lab
   unreadable: { label: '无法读取', color: 'error' },
 }
 
+const procurementErrorMessages: Record<string, string> = {
+  source_unreachable: '来源链接不可达，请核对公告链接',
+  fetch_failed: '附件下载失败，请核对原文件',
+  auth_required: '附件需要登录后获取',
+  unsupported: '暂不支持解析此附件',
+  unreadable: '附件无法读取，请核对原文件',
+  parse_failed: '附件解析失败，请核对原文件',
+  empty: '附件内容为空，无法提取',
+  timeout: '附件获取超时，请稍后重试',
+}
+
+type ProcurementMissingField = 'scope' | 'delivery' | 'items' | 'qualification' | 'contact'
+
 function procurementValue(value: string | null | undefined): string {
   return normalizeOpportunityText(value) || ''
 }
 
-function procurementMissingValue(procurement: ProcurementData | null | undefined, value: string | null | undefined): string {
+function procurementDocumentError(value: string | null | undefined): string {
+  const raw = procurementValue(value)
+  if (!raw) return ''
+  const normalized = raw.toLowerCase()
+  const matchedCode = Object.keys(procurementErrorMessages).find((code) => normalized === code || normalized.includes(code))
+  if (matchedCode) return procurementErrorMessages[matchedCode]
+  return '获取或解析失败，请核对原文件'
+}
+
+function procurementPageLabel(pages: number | null): string {
+  return pages != null && pages > 0 ? `${pages} 页` : '页数未提取'
+}
+
+function originalNotStated(procurement: ProcurementData, field?: ProcurementMissingField): boolean {
+  const aliases: Record<ProcurementMissingField, string[]> = {
+    scope: ['scope', '范围', '采购范围'],
+    delivery: ['delivery', '交付', '交货'],
+    items: ['item', 'material', '物料', '明细'],
+    qualification: ['qualification', '资格'],
+    contact: ['contact', '联系方式'],
+  }
+  return procurement.missing_fields.some((missing) => {
+    const value = procurementValue(missing).toLowerCase()
+    if (!/(?:原文未写|原文未说明|原文未提供|not[_ -]?stated|not[_ -]?specified|original[_ -]?missing)/i.test(value)) return false
+    if (!field) return true
+    return aliases[field].some((alias) => value.includes(alias.toLowerCase())) || /original[_ -]?(?:missing|not[_ -]?stated|not[_ -]?specified)|原文未/.test(value)
+  })
+}
+
+function procurementMissingValue(procurement: ProcurementData | null | undefined, value: string | null | undefined, field?: ProcurementMissingField): string {
   if (procurementValue(value)) return procurementValue(value)
   if (!procurement || procurement.status === 'not_checked') return '未检查附件'
   const statuses = procurement.documents.map((document) => document.status)
   if (statuses.includes('auth_required')) return '需登录'
-  if (statuses.includes('failed') || statuses.includes('unreadable')) return '解析失败'
-  if (statuses.includes('unsupported')) return '暂不支持解析'
-  return procurement.status === 'unavailable' ? '资料不可用（原因未提供）' : '原文未写'
+  if (statuses.includes('unsupported')) return '待核对附件'
+  if (statuses.includes('failed') || statuses.includes('unreadable') || procurement.status === 'unavailable') {
+    const documentError = procurement.documents.find((document) => document.error)?.error
+    return procurementDocumentError(documentError) || '获取或解析失败，请核对原文件'
+  }
+  if (originalNotStated(procurement, field)) return '原文未写'
+  return '尚未提取到对应字段'
 }
 
 function procurementDocumentFor(item: ProcurementItem, documents: ProcurementDocument[]): ProcurementDocument | undefined {
   return documents.find((document) => String(document.id) === String(item.source_document_id))
 }
 
+function uniformProcurementField(items: ProcurementItem[], field: 'delivery_period' | 'delivery_location'): string {
+  const values = Array.from(new Set(items.map((item) => procurementValue(item[field])).filter(Boolean)))
+  return values.length === 1 ? values[0] : ''
+}
+
 function procurementSourceHref(item: ProcurementItem, document: ProcurementDocument | undefined, records: ProjectDetailData['records']): string {
-  if (document?.url) return document.url
+  const baseHref = document?.url || (() => {
+    const record = records.find((candidate) => candidate.id === item.record_id)
+    return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
+  })()
+  if (item.page > 0 && baseHref) {
+    const hashIndex = baseHref.indexOf('#')
+    return `${hashIndex >= 0 ? baseHref.slice(0, hashIndex) : baseHref}#page=${item.page}`
+  }
+  if (baseHref) return baseHref
   const record = records.find((candidate) => candidate.id === item.record_id)
   return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
 }
@@ -423,13 +482,17 @@ function ProcurementBriefing({
   const statusMeta = procurementStatusMeta[status]
   const parsedScope = cleanScopeExcerpt(procurement?.scope_summary, title)
   const scope = parsedScope || cleanScopeExcerpt(briefing?.scope_excerpt, title)
-  const deliveryPeriod = procurementValue(procurement?.delivery_period)
-  const deliveryLocation = procurementValue(procurement?.delivery_location)
-  const delivery = [deliveryPeriod, deliveryLocation].filter(Boolean).join('；') || procurementValue(briefing?.delivery_excerpt)
-  const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
-  const contact = procurementValue(briefing?.contact_excerpt)
   const items = procurement?.items ?? []
   const documents = procurement?.documents ?? []
+  const itemDeliveryPeriod = uniformProcurementField(items, 'delivery_period')
+  const itemDeliveryLocation = uniformProcurementField(items, 'delivery_location')
+  const deliveryPeriod = procurementValue(procurement?.delivery_period) || itemDeliveryPeriod
+  const deliveryLocation = procurementValue(procurement?.delivery_location) || itemDeliveryLocation
+  const delivery = [deliveryPeriod, deliveryLocation].filter(Boolean).join('；') || procurementValue(briefing?.delivery_excerpt)
+  const uniformDelivery = Boolean(items.length && itemDeliveryPeriod && itemDeliveryLocation && items.every((item) => procurementValue(item.delivery_period) === itemDeliveryPeriod && procurementValue(item.delivery_location) === itemDeliveryLocation))
+  const itemMissing = procurementMissingValue(procurement, '', 'items')
+  const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
+  const contact = procurementValue(briefing?.contact_excerpt)
   const [itemSearch, setItemSearch] = useState('')
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLocaleLowerCase()
@@ -440,24 +503,24 @@ function ProcurementBriefing({
   const columns = useMemo(() => [
     {
       title: '名称', key: 'name', width: 160,
-      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-item-name">{procurementValue(item.name) || '原文未写'}</span>,
+      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-item-name">{procurementValue(item.name) || itemMissing}</span>,
     },
     {
       title: '规格', key: 'specification', width: 170,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.specification) || '原文未写'}</span>,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.specification) || itemMissing}</span>,
     },
     {
       title: '材质', key: 'material', width: 120,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.material) || '原文未写'}</span>,
+      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.material) || itemMissing}</span>,
     },
     {
       title: '数量 / 单位', key: 'quantity', width: 115,
-      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-quantity">{procurementValue(item.quantity) || '原文未写'}{procurementValue(item.unit) ? ` ${item.unit}` : ''}</span>,
+      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-quantity">{procurementValue(item.quantity) || itemMissing}{procurementValue(item.unit) ? ` ${item.unit}` : ''}</span>,
     },
-    {
+    ...(uniformDelivery ? [] : [{
       title: '交付', key: 'delivery', width: 210,
-      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>{procurementValue(item.delivery_location) || '原文未写'}</span><span>{procurementValue(item.delivery_period) || '原文未写'}</span></div>,
-    },
+      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>{procurementValue(item.delivery_location) || itemMissing}</span><span>{procurementValue(item.delivery_period) || itemMissing}</span></div>,
+    }]),
     {
       title: '来源', key: 'source', width: 190,
       render: (_value: unknown, item: ProcurementItem) => {
@@ -465,14 +528,14 @@ function ProcurementBriefing({
         return <ProcurementSource item={item} document={document} href={procurementSourceHref(item, document, records)} />
       },
     },
-  ], [documents, records])
+  ], [documents, itemMissing, records, uniformDelivery])
   const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
 
   return (
     <section className="detail-briefing detail-procurement" aria-labelledby="procurement-briefing-heading">
       <div className="detail-briefing-heading-row">
         <div className="detail-briefing-heading">
-          <div className="detail-procurement-title-line"><h2 id="procurement-briefing-heading">采购资料</h2><Tag color={statusMeta.label === '资料已核对' ? 'success' : status === 'unavailable' ? 'error' : 'warning'}>{statusMeta.label}</Tag></div>
+          <div className="detail-procurement-title-line"><h2 id="procurement-briefing-heading">采购信息</h2><Tag color={statusMeta.label === '资料已核对' ? 'success' : status === 'unavailable' ? 'error' : 'warning'}>{statusMeta.label}</Tag></div>
           <span className="detail-briefing-note" role="note">范围与交付优先 · 明细按来源核对</span>
         </div>
         <div className="detail-briefing-source detail-procurement-actions">
@@ -498,24 +561,24 @@ function ProcurementBriefing({
 
       <section className="detail-procurement-items" aria-labelledby="procurement-items-heading">
         <div className="detail-procurement-section-heading">
-          <div><h3 id="procurement-items-heading">物料明细</h3><Text type="secondary">{items.length ? `${items.length} 项；不同单位不合并` : procurementMissingValue(procurement, '')}</Text></div>
+          <div><h3 id="procurement-items-heading">物料明细</h3><Text type="secondary">{items.length ? `${items.length} 项；不同单位不合并${uniformDelivery ? ' · 统一交付已收在上方摘要' : ''}` : itemMissing}</Text></div>
           {items.length > 0 && <Input className="detail-procurement-search" allowClear prefix={<SearchOutlined />} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="搜索名称、规格、材质或编号" aria-label="搜索物料明细" />}
         </div>
-        {items.length > 0 ? <div className="detail-procurement-table-wrap"><Table<ProcurementItem> size="small" rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`} columns={columns} dataSource={filteredItems} scroll={{ x: 965 }} pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 项` }} locale={{ emptyText: '当前筛选没有匹配的物料' }} /></div> : <div className="detail-procurement-empty">采购附件尚未形成可展示的物料行。</div>}
+        {items.length > 0 ? <div className={`detail-procurement-table-wrap${uniformDelivery ? ' detail-procurement-table-wrap-compact' : ''}`}><Table<ProcurementItem> size="small" rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`} columns={columns} dataSource={filteredItems} scroll={{ x: uniformDelivery ? 755 : 965 }} pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 项` }} locale={{ emptyText: '当前筛选没有匹配的物料' }} /></div> : <div className="detail-procurement-empty">采购附件尚未形成可展示的物料行。</div>}
       </section>
 
       <section className="detail-procurement-documents" aria-labelledby="procurement-documents-heading">
         <div className="detail-procurement-section-heading"><div><h3 id="procurement-documents-heading">附件与来源</h3><Text type="secondary">附件名、页码和链接用于回到原文核对</Text></div><Text type="secondary">{documents.length ? `${documents.length} 份资料` : procurementMissingValue(procurement, '')}</Text></div>
-        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{document.pages != null ? `${document.pages} 页` : '页数未提取'} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{document.error && <div className="detail-procurement-document-error">{document.error}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">尚未检查附件；点击“补充采购资料”开始核对。</div>}
+        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; const documentError = procurementDocumentError(document.error); return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{procurementPageLabel(document.pages)} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{documentError && <div className="detail-procurement-document-error">{documentError}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">尚未检查附件；点击“补充采购资料”开始核对。</div>}
       </section>
 
       <details className="detail-briefing-qualifications">
-        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : '原文未写或尚未检查'}</span></summary>
-        <p className="detail-briefing-qualification-body">{qualification || '原文未写；如资格要求在未解析附件中，请先补充采购资料。'}</p>
+        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : procurementMissingValue(procurement, '', 'qualification')}</span></summary>
+        <p className="detail-briefing-qualification-body">{qualification || procurementMissingValue(procurement, '', 'qualification')}</p>
       </details>
       <article className="detail-briefing-contact">
         <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text></div>
-        <p>{contact || '原文未写'}</p>
+        <p>{contact || procurementMissingValue(procurement, '', 'contact')}</p>
       </article>
     </section>
   )
