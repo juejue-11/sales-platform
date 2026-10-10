@@ -44,11 +44,13 @@ def bounded_context_body(value: Any) -> str:
     return body
 
 _PROGRESS_STAGES = {"started", "model", "tool_start", "tool_end", "completed"}
-_TRUSTED_TOOLS = {"read_project_records", "read_company_capability", "read_related_records"}
+_TRUSTED_TOOLS = {"read_project_records", "read_company_capability", "read_related_records",
+                  "fetch_project_documents"}
 _TRUSTED_TOOL_LABELS = {
     "read_project_records": "读取项目资料",
     "read_company_capability": "读取公司能力",
     "read_related_records": "读取关联资料",
+    "fetch_project_documents": "读取采购附件",
 }
 _ERROR_CODES = {
     "INVALID_INPUT", "MODEL_CONFIG", "MODEL_ERROR", "NO_FINAL",
@@ -56,6 +58,7 @@ _ERROR_CODES = {
     # Keep compatibility with older runner builds while still rejecting
     # arbitrary provider/model text from the error event.
     "INVALID_REQUEST", "CONFIG_ERROR", "RUNTIME_ERROR",
+    "TOOL_INVALID", "TOOL_FORBIDDEN", "TOOL_UNAVAILABLE", "TOOL_ERROR",
 }
 _PROGRESS_LABELS = {
     "started": "智能体已启动",
@@ -188,6 +191,19 @@ def _safe_error_code(code: Any) -> str:
         return "RUNTIME_ERROR"
     clean = re.sub(r"[^A-Za-z0-9_]", "", code).upper()[:64]
     return clean if clean in _ERROR_CODES else "RUNTIME_ERROR"
+
+
+def _safe_tool_error(exc: BaseException) -> str:
+    """Map a server tool failure to a non-sensitive protocol enum."""
+    if isinstance(exc, AIError):
+        text = str(exc)
+        if "无权限" in text:
+            return "TOOL_FORBIDDEN"
+        if "参数" in text:
+            return "TOOL_INVALID"
+        if "未就绪" in text or "不可用" in text:
+            return "TOOL_UNAVAILABLE"
+    return "TOOL_ERROR"
 
 
 def sanitize_ai_error(exc: BaseException, *, default: str = "AI request failed",
@@ -371,15 +387,17 @@ class PiSDKProvider:
                       messages: list[dict[str, str]], context: dict[str, Any],
                       limits: dict[str, Any] | None = None,
                       on_event: Callable[[dict[str, Any]], Any] | None = None,
-                      callback: Callable[[dict[str, Any]], Any] | None = None) -> PiSDKResult:
+                      callback: Callable[[dict[str, Any]], Any] | None = None,
+                      tool_callback: Callable[[dict[str, Any]], Any] | None = None) -> PiSDKResult:
         if not base_url or not model or not api_key:
             raise AIError("AI is not configured")
         node, runner = resolve_sdk_runtime()
         if node is None or runner is None:
             raise AIError("Pi SDK运行时未就绪，请安装Node.js 22.19+并构建agent-runtime/dist/runner.js")
         effective_callback = on_event or callback
+        protocol = 2 if tool_callback is not None else 1
         request = {
-            "protocol": 1,
+            "protocol": protocol,
             "config": {"base_url": base_url, "model": model, "api_key": api_key},
             "messages": messages,
             "context": context,
@@ -397,6 +415,7 @@ class PiSDKProvider:
         total_output = 0
         result: PiSDKResult | None = None
         seen_result = False
+        seen_tool_requests: set[str] = set()
         timeout_seconds = self._normalized_limits(limits)["timeout_ms"] / 1000.0
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
@@ -434,11 +453,12 @@ class PiSDKProvider:
                 await await_with_deadline(process.stdin.drain())
             except (BrokenPipeError, ConnectionError) as exc:
                 raise AIError("Pi SDK进程管道不可用") from exc
-            process.stdin.close()
-            try:
-                await await_with_deadline(process.stdin.wait_closed())
-            except (AttributeError, ConnectionError, BrokenPipeError):
-                pass
+            if protocol == 1:
+                process.stdin.close()
+                try:
+                    await await_with_deadline(process.stdin.wait_closed())
+                except (AttributeError, ConnectionError, BrokenPipeError):
+                    pass
 
             while True:
                 remaining = deadline - loop.time()
@@ -474,6 +494,46 @@ class PiSDKProvider:
                         continue
                     else:
                         raise AIError("Pi SDK进度协议无效")
+                elif event_type == "tool_request":
+                    if protocol != 2 or tool_callback is None:
+                        raise AIError("Pi SDK工具协议无效")
+                    request_id = event.get("id")
+                    if not isinstance(request_id, str) or not request_id or len(request_id) > 128 or request_id in seen_tool_requests:
+                        raise AIError("Pi SDK工具协议无效")
+                    if event.get("tool") != "fetch_project_documents":
+                        raise AIError("Pi SDK工具协议无效")
+                    arguments = event.get("arguments", {})
+                    if not isinstance(arguments, dict) or any(key != "record_id" for key in arguments):
+                        raise AIError("Pi SDK工具协议无效")
+                    record_id = arguments.get("record_id")
+                    if record_id is not None and (isinstance(record_id, bool) or not isinstance(record_id, int)):
+                        raise AIError("Pi SDK工具协议无效")
+                    seen_tool_requests.add(request_id)
+                    try:
+                        response_data = tool_callback(arguments)
+                        if hasattr(response_data, "__await__"):
+                            response_data = await await_with_deadline(response_data)
+                        if not isinstance(response_data, dict):
+                            raise AIError("工具返回无效")
+                        response = {"type": "tool_response", "id": request_id, "ok": True, "data": response_data}
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        response = {"type": "tool_response", "id": request_id, "ok": False,
+                                    "error": _safe_tool_error(exc)}
+                    try:
+                        encoded_response = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    except (TypeError, ValueError) as exc:
+                        raise AIError("Pi SDK工具返回协议无效") from exc
+                    if len(encoded_response) > self.max_input_bytes:
+                        raise AIError("Pi SDK工具返回超过大小限制")
+                    if process.stdin is None or process.stdin.is_closing():
+                        raise AIError("Pi SDK进程管道不可用")
+                    try:
+                        process.stdin.write(encoded_response + b"\n")
+                        await await_with_deadline(process.stdin.drain())
+                    except (BrokenPipeError, ConnectionError) as exc:
+                        raise AIError("Pi SDK进程管道不可用") from exc
                 elif event_type == "error":
                     code = _safe_error_code(event.get("code"))
                     raise AIError(f"Pi SDK运行失败（{code}）")
@@ -498,9 +558,21 @@ class PiSDKProvider:
                             raise AIError("Pi SDK结果协议无效")
                         usage[key] = min(candidate, 2_000_000_000)
                     result = PiSDKResult(content=event["content"].strip(), usage=usage)
+                    if protocol == 2 and process.stdin is not None and not process.stdin.is_closing():
+                        # Do not wait for stdout EOF before closing: a duplex
+                        # runner may emit result and then await request-stream
+                        # EOF before terminating.
+                        process.stdin.close()
                 else:
                     raise AIError("Pi SDK输出协议无效")
 
+            if protocol == 2 and process.stdin is not None and not process.stdin.is_closing():
+                # A protocol 2 runner may wait for EOF after emitting result.
+                process.stdin.close()
+                try:
+                    await await_with_deadline(process.stdin.wait_closed())
+                except (AttributeError, ConnectionError, BrokenPipeError):
+                    pass
             try:
                 return_code = await await_with_deadline(process.wait())
             except AIError:
@@ -550,6 +622,7 @@ def _record_fingerprint(record: dict[str, Any]) -> dict[str, Any]:
         # The protocol body is bounded, so the full source hash is part of the
         # input identity to catch changes beyond the visible prefix.
         "body_text_sha256": record.get("body_text_sha256") or sha256_text(body),
+        "attachments_sha256": record.get("attachments_sha256") or sha256_text(json_text(record.get("attachments", []))),
         "kind": record.get("kind"), "buyer": record.get("buyer"), "equipment": record.get("equipment"),
         "facts": record.get("facts"), "inferences": record.get("inferences"),
         "published_at": record.get("published_at"), "notice_number": record.get("notice_number"),
@@ -576,14 +649,15 @@ def input_fingerprint(project: dict[str, Any], capability_card: dict[str, Any],
             "records": [_record_fingerprint(record) for record in project_value.get("records", [])
                         if isinstance(record, dict)],
         })
-    return sha256_text(json_text({"records": relevant, "capability": capability_card, "related": related}))
+    return sha256_text(json_text({"records": relevant, "capability": capability_card, "related": related,
+                                  "procurement_fingerprint": project.get("procurement_fingerprint")}))
 
 
 def build_messages(project: dict[str, Any], capability_card: dict[str, Any],
                    related_context: list[dict[str, Any]] | None = None) -> list[dict[str, str]]:
     kind = project.get("kind") or "tender"
-    system = """你是销售机会判断助手。你只能依据输入的项目正文和公司能力卡回答，不得编造产品、型号、价格、交期、资质或采购事实。必须只返回一个 JSON 对象，不要 Markdown。字段固定为：
-decision（recommend|consider|verify|not_recommended）、summary、demand_summary、reasons（数组，每项含 text 和 evidence 数组；每条 evidence 必须含存在的 record_id 和正文原文 quote）、unknowns（字符串数组）、next_actions（字符串数组）、options（0 到 3 项；每项含 id、title、description、suitable_for、tradeoffs 字符串数组、unknowns 字符串数组、next_action）。理由要用通俗语言。quote 必须从对应 record_id 的 body_text 连续逐字复制，保留原文用字、标点和空格；不能改写、拼接不相邻句子，不能引用标题、facts、公司能力卡或另一条记录代替正文。优先选简短且完整的原文片段；原文不存在的信息只能列为待核实，不得作为证据。若输入是新闻或矿业权动态，只能输出核实方向，不能把推测写成采购事实，decision 应为 verify，options 可以为空。若资料不足，使用 verify/consider 并明确待核实内容。"""
+    system = """你是销售机会判断助手。你只能依据输入的项目正文、服务器已解析的采购附件事实和公司能力卡回答，不得编造产品、型号、价格、交期、资质或采购事实。必须只返回一个 JSON 对象，不要 Markdown。字段固定为：
+decision（recommend|consider|verify|not_recommended）、summary、demand_summary、reasons（数组，每项含 text 和 evidence 数组；每条 evidence 必须含存在的 record_id 和正文原文 quote；附件证据还必须含服务器返回的 document_id）、unknowns（字符串数组）、next_actions（字符串数组）、options（0 到 3 项；每项含 id、title、description、suitable_for、tradeoffs 字符串数组、unknowns 字符串数组、next_action）。理由要用通俗语言。正文 quote 必须从对应 record_id 的 body_text 连续逐字复制，附件 quote 必须从对应 document_id 的服务器已读取 text 或 page_texts 连续逐字复制；不能改写、拼接不相邻句子，不能引用标题、facts、公司能力卡或另一条记录代替原文。没有服务器返回的 document_id 不得引用附件；优先选简短且完整的原文片段；原文不存在的信息只能列为待核实，不得作为证据。若输入是新闻或矿业权动态，只能输出核实方向，不能把推测写成采购事实，decision 应为 verify，options 可以为空。若资料不足，使用 verify/consider 并明确待核实内容。"""
     records = []
     for record in project.get("records", []):
         # Keep source text available for evidence while bounding a pathological
@@ -600,6 +674,8 @@ decision（recommend|consider|verify|not_recommended）、summary、demand_summa
                      "records": records},
         "company_capability_card": capability_card,
     }
+    if isinstance(project.get("procurement"), dict):
+        value["project"]["procurement"] = project["procurement"]
     if related_context:
         # Related snapshots are supplied only when the database has an
         # explicit record reference or active human/project link.  They are
@@ -615,6 +691,7 @@ def correction_messages(messages: list[dict[str, str]], error: AIError) -> list[
         f"上一次输出未通过程序校验：{error}。请根据前面的同一份资料重新生成完整 JSON，"
         "不要解释错误，不要使用 Markdown。检查所有字段类型与 JSON 引号、逗号。"
         "每条 evidence 的 record_id 必须存在；quote 必须连续逐字复制该记录的 body_text，"
+        "附件证据还必须带服务器返回的 document_id，并从该文档 text/page_texts 连续逐字复制 quote；"
         "不得概括、拼接或替换原文。删去无法找到原文支持的理由；"
         "依据不足时使用 verify 并写清待核实事项，不得编造证据。"
     )}]
@@ -634,7 +711,8 @@ def extract_content(response: dict[str, Any]) -> str:
 
 def validate_judgment(payload: Any, project: dict[str, Any], model: str,
                       fingerprint: str, related_records: list[dict[str, Any]] | None = None,
-                      forbidden_values: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+                      forbidden_values: list[str] | tuple[str, ...] = (),
+                      document_sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Validate model output before it can enter the judgments table."""
     if isinstance(payload, str):
         try:
@@ -679,6 +757,17 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
             record_map[int(record["id"])] = record
         except (TypeError, ValueError):
             continue
+    document_map: dict[tuple[int, str], dict[str, Any]] = {}
+    for document in document_sources or []:
+        if not isinstance(document, dict):
+            continue
+        try:
+            source_record_id = int(document.get("record_id"))
+        except (TypeError, ValueError):
+            continue
+        document_id = document.get("id")
+        if isinstance(document_id, str) and document_id:
+            document_map[(source_record_id, document_id)] = document
     reasons = payload.get("reasons", [])
     if not isinstance(reasons, list):
         raise AIError("invalid reasons")
@@ -699,10 +788,37 @@ def validate_judgment(payload: Any, project: dict[str, Any], model: str,
                 raise AIError("invalid evidence record_id") from exc
             record = record_map.get(record_id)
             quote = item.get("quote")
-            matched_quote = source_quote(quote, str(record.get("body_text") or "")) if record and isinstance(quote, str) else None
+            document_id = item.get("document_id")
+            page = item.get("page")
+            if document_id is not None:
+                if not isinstance(document_id, str) or not document_id.strip():
+                    raise AIError("invalid evidence document_id")
+                document = document_map.get((record_id, document_id.strip()))
+                if document is None:
+                    raise AIError(f"evidence document is not trusted (document_id={document_id})")
+                source_text = str(document.get("text") or "")
+                if isinstance(page, bool) or (page is not None and not isinstance(page, int)):
+                    raise AIError("invalid evidence page")
+                if isinstance(page, int):
+                    page_text = None
+                    for page_value in document.get("page_texts", []) if isinstance(document.get("page_texts"), list) else []:
+                        if isinstance(page_value, dict) and page_value.get("page") == page:
+                            page_text = str(page_value.get("text") or "")
+                            break
+                    if page_text is None:
+                        raise AIError("evidence page is not trusted")
+                    source_text = page_text
+                matched_quote = source_quote(quote, source_text) if isinstance(quote, str) else None
+            else:
+                matched_quote = source_quote(quote, str(record.get("body_text") or "")) if record and isinstance(quote, str) else None
             if matched_quote is None:
                 raise AIError(f"evidence quote does not match source record (record_id={record_id})")
-            clean_evidence.append({"record_id": record_id, "quote": matched_quote})
+            clean_item = {"record_id": record_id, "quote": matched_quote}
+            if document_id is not None:
+                clean_item["document_id"] = str(document_id).strip()
+                if isinstance(page, int):
+                    clean_item["page"] = page
+            clean_evidence.append(clean_item)
         normalized_reasons.append({"text": reason["text"].strip(), "evidence": clean_evidence})
     if decision in {"recommend", "consider"}:
         if not normalized_reasons or not any(item["evidence"] for item in normalized_reasons):

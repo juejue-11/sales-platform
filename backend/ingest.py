@@ -33,6 +33,31 @@ def _normal_record(raw: dict[str, Any], line_number: int) -> dict[str, Any]:
         value = raw.get(field)
         if value is not None and not isinstance(value, list):
             raise ImportErrorDetail(f"line {line_number}: {field} must be an array or null")
+    attachments_value = raw.get("attachments")
+    if attachments_value is not None and not isinstance(attachments_value, list):
+        raise ImportErrorDetail(f"line {line_number}: attachments must be an array or null")
+    attachments: list[dict[str, Any]] = []
+    for attachment in attachments_value or []:
+        if not isinstance(attachment, dict):
+            raise ImportErrorDetail(f"line {line_number}: attachments items must be objects")
+        # Keep the collector's attachment metadata in source_payload_json. It
+        # is intentionally not flattened into records: parsed documents have
+        # their own durable table and never replace source正文.
+        value = dict(attachment)
+        for key in ("name", "url", "status", "sha256", "mime_type", "archive_path", "fetched_at", "error"):
+            if key in value and value[key] is not None:
+                value[key] = clean_text(value[key])[:2000]
+        if "byte_size" in value:
+            try:
+                value["byte_size"] = max(0, int(value["byte_size"] or 0))
+            except (TypeError, ValueError):
+                value["byte_size"] = 0
+        if "pages" in value:
+            try:
+                value["pages"] = max(0, int(value["pages"] or 0))
+            except (TypeError, ValueError):
+                value["pages"] = 0
+        attachments.append(value)
     try:
         current_version = max(1, int(raw.get("current_version") or 1))
     except (TypeError, ValueError) as exc:
@@ -71,6 +96,7 @@ def _normal_record(raw: dict[str, Any], line_number: int) -> dict[str, Any]:
         "parse_status": clean_text(raw.get("parse_status")) or "ok",
         "parse_error": clean_text(raw.get("parse_error")),
         "body_text": str(raw.get("body_text") or ""),
+        "attachments": attachments,
     }
     for key in ("possible_duplicate_of", "duplicate_of", "related_record_id"):
         value = result[key]
@@ -120,6 +146,7 @@ def _content_signature(record: dict[str, Any]) -> str:
     values["equipment_json"] = record.get("equipment", [])
     values["facts_json"] = record.get("facts", [])
     values["inferences_json"] = record.get("inferences", [])
+    values["attachments"] = _attachments_signature(record.get("attachments", []))
     values["body_text"] = re.sub(r"\s+", " ", str(values.get("body_text") or "")).strip()
     return sha256_text(json_text(values))
 
@@ -136,8 +163,26 @@ def _db_signature(row: sqlite3.Row) -> str:
             values[key] = json.loads(values[key] or "[]")
         except (TypeError, json.JSONDecodeError):
             pass
+    try:
+        payload = json.loads(row["source_payload_json"] or "{}")
+        values["attachments"] = _attachments_signature(payload.get("attachments", []) if isinstance(payload, dict) else [])
+    except (TypeError, json.JSONDecodeError):
+        values["attachments"] = []
     values["body_text"] = re.sub(r"\s+", " ", str(values.get("body_text") or "")).strip()
     return sha256_text(json_text(values))
+
+
+def _attachments_signature(value: Any) -> list[dict[str, Any]]:
+    """Keep semantic collector attachment changes, excluding observation times."""
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        result.append({key: item_value for key, item_value in item.items()
+                       if key not in {"fetched_at", "updated_at"}})
+    return result
 
 
 def _insert_version(db: sqlite3.Connection, record: dict[str, Any], version: int, changed_kind: str) -> None:

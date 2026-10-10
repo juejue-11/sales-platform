@@ -105,6 +105,12 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
         result = app.state.service.queue_project(project_id, force=body.force, schedule=True)
         return result
 
+    @app.post("/api/projects/{project_id}/documents/refresh")
+    async def refresh_project_documents(project_id: int) -> dict[str, Any]:
+        # This route only reads public source attachments and persists parsed
+        # procurement facts. It deliberately does not enqueue or invoke AI.
+        return await app.state.service.refresh_project_documents(project_id)
+
     @app.post("/api/projects/{project_id}/decision")
     async def decision(project_id: int, body: DecisionRequest) -> dict[str, Any]:
         return app.state.service.save_decision(project_id, body.model_dump())
