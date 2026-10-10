@@ -19,9 +19,11 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL_VERSION = 1;
+const DUPLEX_PROTOCOL_VERSION = 2;
 const PROVIDER_ID = "sales-screening-runtime";
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
+const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 64;
 const MAX_CONTENT_CHARS = 1_000_000;
 const DEFAULT_LIMITS = {
@@ -34,8 +36,28 @@ const TOOL_NAMES = [
   "read_project_records",
   "read_company_capability",
   "read_related_records",
+  "fetch_project_documents",
 ] as const;
 const TOOL_NAME_SET = new Set<string>(TOOL_NAMES);
+const RPC_ERROR_CODES = new Set([
+  "invalid_request",
+  "record_not_in_project",
+  "not_configured",
+  "not_found",
+  "unsupported",
+  "auth_required",
+  "failed",
+  "network_error",
+  "parse_failed",
+  "unreadable",
+  "timeout",
+  "cancelled",
+  "internal",
+]);
+const DUPLEX_SYSTEM_INSTRUCTION =
+  "当正文提到附件、招标文件，或采购范围/规格/交付资料不足时，必须先调用 fetch_project_documents 再作判断。" +
+  "只能使用当前项目记录的 record_id；不得索要或传入 URL、本地路径、请求头或凭据。" +
+  "工具失败或资料未解析时，必须明确列为资料缺口并使用 verify/待核实，不得编造；投标截止时间不是交付时间。";
 
 type JsonObject = Record<string, unknown>;
 type ToolName = (typeof TOOL_NAMES)[number];
@@ -65,7 +87,7 @@ export interface RuntimeLimits {
 }
 
 export interface RuntimeRequest {
-  protocol: 1;
+  protocol: 1 | 2;
   config: RuntimeConfig;
   messages: RuntimeMessage[];
   context: RuntimeContext;
@@ -105,6 +127,7 @@ interface ErrorEvent {
     | "TIMEOUT"
     | "TURN_LIMIT"
     | "TOOL_LIMIT"
+    | "RPC_ERROR"
     | "NO_FINAL"
     | "INTERNAL";
   message: string;
@@ -164,7 +187,7 @@ function normalizeRecordList(value: unknown, field: string): JsonObject[] {
 
 function parseRequest(value: unknown): RuntimeRequest {
   const input = asObject(value, "request");
-  if (input.protocol !== PROTOCOL_VERSION) {
+  if (input.protocol !== PROTOCOL_VERSION && input.protocol !== DUPLEX_PROTOCOL_VERSION) {
     throw new ProtocolError("unsupported protocol");
   }
 
@@ -214,7 +237,7 @@ function parseRequest(value: unknown): RuntimeRequest {
   const relatedProjects = normalizeRecordList(context.related_projects, "context.related_projects");
 
   return {
-    protocol: PROTOCOL_VERSION,
+    protocol: input.protocol as 1 | 2,
     config: { base_url: baseUrl, model, api_key: apiKey },
     messages,
     context: {
@@ -237,6 +260,194 @@ class LimitError extends Error {
   constructor(public readonly kind: "turn" | "tool" | "timeout" | "output") {
     super(kind);
     this.name = "LimitError";
+  }
+}
+
+class RpcError extends Error {
+  constructor(message = "RPC bridge failed") {
+    super(message);
+    this.name = "RpcError";
+  }
+}
+
+interface ByteStream extends AsyncIterable<Buffer | string> {
+  pause?: () => void;
+  destroy?: () => void;
+}
+
+/**
+ * Read newline-delimited protocol frames without waiting for EOF. Protocol 1
+ * still uses readRemaining(), while protocol 2 keeps this reader alive for
+ * host responses to tool_request frames.
+ */
+class JsonLineReader {
+  private readonly iterator: AsyncIterator<Buffer | string>;
+  private buffer = Buffer.alloc(0);
+  private ended = false;
+  private closed = false;
+
+  constructor(private readonly stream: ByteStream) {
+    this.iterator = stream[Symbol.asyncIterator]();
+  }
+
+  async readLine(maxBytes: number): Promise<string | null> {
+    while (true) {
+      const newline = this.buffer.indexOf(0x0a);
+      if (newline >= 0) {
+        const line = this.buffer.subarray(0, newline);
+        this.buffer = this.buffer.subarray(newline + 1);
+        if (line.length > maxBytes) throw new ProtocolError("input too large");
+        return line.toString("utf8").replace(/\r$/u, "");
+      }
+      if (this.buffer.length > maxBytes) throw new ProtocolError("input too large");
+      if (this.ended || this.closed) {
+        if (this.buffer.length === 0) return null;
+        const line = this.buffer;
+        this.buffer = Buffer.alloc(0);
+        if (line.length > maxBytes) throw new ProtocolError("input too large");
+        return line.toString("utf8").replace(/\r$/u, "");
+      }
+      const next = await this.iterator.next();
+      if (next.done) {
+        this.ended = true;
+        continue;
+      }
+      const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(String(next.value));
+      if (chunk.length > 0) this.buffer = Buffer.concat([this.buffer, chunk]);
+    }
+  }
+
+  async readRemaining(maxBytes: number): Promise<string> {
+    const chunks: Buffer[] = [];
+    let total = this.buffer.length;
+    if (this.buffer.length > 0) {
+      chunks.push(this.buffer);
+      this.buffer = Buffer.alloc(0);
+    }
+    while (!this.ended && !this.closed) {
+      const next = await this.iterator.next();
+      if (next.done) {
+        this.ended = true;
+        break;
+      }
+      const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(String(next.value));
+      total += chunk.length;
+      if (total > maxBytes) throw new ProtocolError("input too large");
+      if (chunk.length > 0) chunks.push(chunk);
+    }
+    if (total > maxBytes) throw new ProtocolError("input too large");
+    return Buffer.concat(chunks).toString("utf8");
+  }
+
+  close(): void {
+    this.closed = true;
+    this.buffer = Buffer.alloc(0);
+    this.stream.pause?.();
+    this.stream.destroy?.();
+  }
+}
+
+interface HostToolBridge {
+  request(tool: "fetch_project_documents", argumentsValue: { record_id?: number }): Promise<JsonObject>;
+  setAbort?(onFailure: (error: RpcError) => void): void;
+  close(): void;
+}
+
+interface PendingRpc {
+  resolve: (value: JsonObject) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+class DuplexRpc implements HostToolBridge {
+  private nextId = 0;
+  private closed = false;
+  private onFailure: ((error: RpcError) => void) | undefined;
+  private readonly pending = new Map<string, PendingRpc>();
+  private readonly readerTask: Promise<void>;
+
+  constructor(
+    private readonly reader: JsonLineReader,
+    private readonly writeLine: (value: unknown) => void,
+    private readonly deadline: number,
+  ) {
+    this.readerTask = this.consumeResponses();
+    void this.readerTask.catch(() => {});
+  }
+
+  request(tool: "fetch_project_documents", argumentsValue: { record_id?: number }): Promise<JsonObject> {
+    if (this.closed) return Promise.reject(new RpcError("RPC bridge is closed"));
+    const id = `rpc-${++this.nextId}`;
+    const remaining = this.deadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new LimitError("timeout"));
+    this.writeLine({ type: "tool_request", id, tool, arguments: argumentsValue });
+    return new Promise<JsonObject>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new LimitError("timeout"));
+      }, remaining);
+      this.pending.set(id, { resolve, reject, timer });
+    });
+  }
+
+  setAbort(onFailure: (error: RpcError) => void): void {
+    this.onFailure = onFailure;
+  }
+
+  private async consumeResponses(): Promise<void> {
+    try {
+      while (!this.closed) {
+        const line = await this.reader.readLine(MAX_RPC_RESPONSE_BYTES);
+        if (line === null) throw new RpcError("RPC bridge closed");
+        if (!line.trim()) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          throw new RpcError("invalid RPC response");
+        }
+        if (!isObject(parsed) || parsed.type !== "tool_response" || typeof parsed.id !== "string") {
+          throw new RpcError("unexpected RPC response");
+        }
+        const pending = this.pending.get(parsed.id);
+        if (!pending) throw new RpcError("unknown RPC response id");
+        if (parsed.ok === true) {
+          if (!isObject(parsed.data)) throw new RpcError("invalid RPC response data");
+          this.pending.delete(parsed.id);
+          clearTimeout(pending.timer);
+          pending.resolve(parsed.data);
+          continue;
+        }
+        if (parsed.ok !== false || typeof parsed.error !== "string" || !RPC_ERROR_CODES.has(parsed.error)) {
+          throw new RpcError("invalid RPC response error");
+        }
+        this.pending.delete(parsed.id);
+        clearTimeout(pending.timer);
+        pending.resolve({ documents: [], procurement: {}, error: parsed.error });
+      }
+    } catch (error) {
+      const failure = error instanceof RpcError ? error : new RpcError();
+      for (const [id, pending] of this.pending) {
+        this.pending.delete(id);
+        clearTimeout(pending.timer);
+        pending.reject(failure);
+      }
+      if (!this.closed) {
+        this.onFailure?.(failure);
+        throw failure;
+      }
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(new RpcError("RPC bridge closed"));
+    }
+    this.reader.close();
   }
 }
 
@@ -295,7 +506,11 @@ function normalizeRecords(project: JsonObject): JsonObject[] {
   return Array.isArray(records) ? records.filter(isObject) : [];
 }
 
-function makeTools(context: RuntimeContext, reserveToolCall: () => boolean): ToolDefinition[] {
+function makeTools(
+  context: RuntimeContext,
+  reserveToolCall: () => boolean,
+  rpc: HostToolBridge | undefined,
+): ToolDefinition[] {
   const readProjectRecords = defineTool({
     name: "read_project_records",
     label: "读取项目记录",
@@ -363,7 +578,40 @@ function makeTools(context: RuntimeContext, reserveToolCall: () => boolean): Too
     },
   });
 
-  return [readProjectRecords, readCompanyCapability, readRelatedRecords];
+  const fetchProjectDocuments = defineTool({
+    name: "fetch_project_documents",
+    label: "读取公告公开资料",
+    description:
+      "当正文提到附件、招标文件，或采购范围、规格、交付资料不足时，读取当前项目公告公开资料。" +
+      "只能按当前项目记录的 record_id 请求；不要传 URL、本地路径、请求头或凭据。" +
+      "失败或未解析时必须写明资料缺口，不能编造，也不能把投标截止时间当成交付时间。",
+    promptSnippet: "按当前项目记录读取公告公开资料",
+    parameters: Type.Object({
+      record_id: Type.Optional(Type.Number()),
+    }),
+    execute: async (_toolCallId, params) => {
+      if (!reserveToolCall()) throw new LimitError("tool");
+      if (!rpc) {
+        return textResult({ documents: [], procurement: {}, error: "unsupported" }, "rpc.fetch_project_documents");
+      }
+      const recordId = typeof params.record_id === "number" && Number.isInteger(params.record_id)
+        ? params.record_id
+        : undefined;
+      const records = normalizeRecords(context.project);
+      if (recordId !== undefined && !records.some((record) => valueId(record.record_id ?? record.id) === String(recordId))) {
+        return textResult(
+          { documents: [], procurement: {}, error: "record_not_in_project" },
+          "context.project.records",
+        );
+      }
+      const data = await rpc.request("fetch_project_documents", recordId === undefined ? {} : { record_id: recordId });
+      return textResult(data, "rpc.fetch_project_documents");
+    },
+  });
+
+  return rpc
+    ? [readProjectRecords, readCompanyCapability, readRelatedRecords, fetchProjectDocuments]
+    : [readProjectRecords, readCompanyCapability, readRelatedRecords];
 }
 
 function emptyResourceLoader(systemPrompt: string): ResourceLoader {
@@ -456,6 +704,9 @@ function normalizeError(error: unknown): ErrorEvent {
     if (error.kind === "output") return { type: "error", code: "MODEL_ERROR", message: "The model request failed." };
     return { type: "error", code: "TOOL_LIMIT", message: "The tool call limit was exceeded." };
   }
+  if (error instanceof RpcError) {
+    return { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." };
+  }
   if (error instanceof Error && error.message === "NO_FINAL") {
     return { type: "error", code: "NO_FINAL", message: "The model did not return a final answer." };
   }
@@ -468,7 +719,14 @@ function normalizeError(error: unknown): ErrorEvent {
   return { type: "error", code: "INTERNAL", message: "The agent runtime failed." };
 }
 
-export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeEvent) => void): Promise<ResultEvent> {
+export async function runRequest(
+  request: RuntimeRequest,
+  emit: (event: RuntimeEvent) => void,
+  rpc?: HostToolBridge,
+): Promise<ResultEvent> {
+  if (request.protocol === DUPLEX_PROTOCOL_VERSION && !rpc) {
+    throw new ProtocolError("protocol 2 requires host bridge");
+  }
   emit(progress("started", "启动销售分析"));
   const usage: RuntimeUsage = { model_calls: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0 };
   const modelRuntime = await ModelRuntime.create({
@@ -495,8 +753,12 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     compaction: { enabled: false },
     retry: { enabled: false },
   });
-  const resourceLoader = emptyResourceLoader(request.messages[0].content);
+  const systemPrompt = request.protocol === DUPLEX_PROTOCOL_VERSION
+    ? `${request.messages[0].content}\n\n${DUPLEX_SYSTEM_INSTRUCTION}`
+    : request.messages[0].content;
+  const resourceLoader = emptyResourceLoader(systemPrompt);
   let limitError: LimitError | undefined;
+  let rpcError: RpcError | undefined;
   let abortSession: (() => void) | undefined;
   const reserveToolCall = (): boolean => {
     if (usage.tool_calls >= request.limits.max_tool_calls) {
@@ -507,7 +769,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     usage.tool_calls += 1;
     return true;
   };
-  const tools = makeTools(request.context, reserveToolCall);
+  const tools = makeTools(request.context, reserveToolCall, request.protocol === DUPLEX_PROTOCOL_VERSION ? rpc : undefined);
   const { session } = await createAgentSession({
     cwd: "sales-screening-agent",
     agentDir: "sales-screening-agent",
@@ -518,7 +780,7 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     sessionManager,
     resourceLoader,
     noTools: "all",
-    tools: [...TOOL_NAMES],
+    tools: tools.map((tool) => tool.name),
     excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"],
     customTools: tools,
   });
@@ -526,6 +788,10 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
   abortSession = () => {
     void session.abort();
   };
+  rpc?.setAbort?.((error) => {
+    rpcError ??= error;
+    abortSession?.();
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lastRunAssistant: AssistantMessage | undefined;
   let outputBytes = 0;
@@ -580,6 +846,8 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
     return { type: "result", engine: "pi_sdk", content, usage };
   } catch (error) {
     if (limitError) throw limitError;
+    if (rpcError) throw rpcError;
+    if (error instanceof RpcError) throw error;
     throw new Error(error instanceof Error ? "MODEL_ERROR" : "MODEL_ERROR");
   } finally {
     if (timer) clearTimeout(timer);
@@ -588,36 +856,61 @@ export async function runRequest(request: RuntimeRequest, emit: (event: RuntimeE
   }
 }
 
-function emitLine(event: RuntimeEvent): void {
+function emitLine(event: unknown): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
-async function readStdin(): Promise<string> {
-  let total = 0;
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    total += buffer.length;
-    if (total > MAX_INPUT_BYTES) throw new ProtocolError("input too large");
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
+async function readInitialRequest(): Promise<{ reader: JsonLineReader; parsed: unknown }> {
+  const reader = new JsonLineReader(process.stdin);
+  const firstLine = await reader.readLine(MAX_INPUT_BYTES);
+  if (firstLine === null) throw new ProtocolError("invalid json");
 
-export async function main(): Promise<void> {
+  let firstParsed: unknown;
   try {
-    const raw = await readStdin();
-    let parsed: unknown;
+    firstParsed = JSON.parse(firstLine);
+  } catch {
+    firstParsed = undefined;
+  }
+  // Protocol 2 is explicitly framed: the initial request is one JSON line and
+  // stdin remains open for tool_response frames. Protocol 1 falls through to
+  // the old EOF-delimited request path, including pretty-printed JSON.
+  if (isObject(firstParsed) && firstParsed.protocol === DUPLEX_PROTOCOL_VERSION) {
+    return { reader, parsed: firstParsed };
+  }
+  const firstBytes = Buffer.byteLength(firstLine, "utf8");
+  const remaining = await reader.readRemaining(Math.max(0, MAX_INPUT_BYTES - firstBytes - 1));
+  const raw = remaining ? `${firstLine}\n${remaining}` : firstLine;
+  let parsed = firstParsed;
+  if (parsed === undefined) {
     try {
       parsed = JSON.parse(raw);
     } catch {
       throw new ProtocolError("invalid json");
     }
-    const request = parseRequest(parsed);
-    const result = await runRequest(request, emitLine);
+  }
+  if (isObject(parsed) && parsed.protocol === DUPLEX_PROTOCOL_VERSION) {
+    throw new ProtocolError("protocol 2 request must be one JSON line");
+  }
+  return { reader, parsed };
+}
+
+export async function main(): Promise<void> {
+  let reader: JsonLineReader | undefined;
+  let rpc: DuplexRpc | undefined;
+  try {
+    const initial = await readInitialRequest();
+    reader = initial.reader;
+    const request = parseRequest(initial.parsed);
+    if (request.protocol === DUPLEX_PROTOCOL_VERSION) {
+      rpc = new DuplexRpc(reader, emitLine, Date.now() + request.limits.timeout_ms);
+    }
+    const result = await runRequest(request, emitLine, rpc);
     emitLine(result);
   } catch (error) {
     emitLine(normalizeError(error));
+  } finally {
+    rpc?.close();
+    reader?.close();
   }
 }
 

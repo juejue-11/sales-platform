@@ -94,6 +94,55 @@ async function runRunner(input: Record<string, unknown>): Promise<{ lines: Recor
   };
 }
 
+async function runDuplexRunner(
+  input: Record<string, unknown>,
+  onToolRequest: (frame: Record<string, unknown>, child: ReturnType<typeof spawn>) => void,
+  timeoutMs = 5_000,
+): Promise<{ lines: Record<string, unknown>[]; stderr: string }> {
+  const child = spawn(process.execPath, [runnerPath], {
+    cwd: here,
+    env: { ...process.env, OPENAI_API_KEY: "ambient-should-not-be-used" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  const lines: Record<string, unknown>[] = [];
+  let pending = "";
+  child.stdin.on("error", () => {});
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout.push(Buffer.from(chunk));
+    pending += Buffer.from(chunk).toString("utf8");
+    while (true) {
+      const newline = pending.indexOf("\n");
+      if (newline < 0) break;
+      const raw = pending.slice(0, newline).replace(/\r$/u, "");
+      pending = pending.slice(newline + 1);
+      if (!raw.trim()) continue;
+      const frame = JSON.parse(raw) as Record<string, unknown>;
+      lines.push(frame);
+      if (frame.type === "tool_request") onToolRequest(frame, child);
+    }
+  });
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(Buffer.from(chunk)));
+  child.stdin.write(`${JSON.stringify(input)}\n`);
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`duplex runner timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      assert.equal(code, 0, `runner exited with ${code}; stderr=${Buffer.concat(stderr).toString("utf8")}`);
+      if (pending.trim()) lines.push(JSON.parse(pending) as Record<string, unknown>);
+      resolve({ lines, stderr: Buffer.concat(stderr).toString("utf8") });
+    });
+  });
+}
+
 function requestFor(baseUrl: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     protocol: 1,
@@ -109,6 +158,49 @@ function requestFor(baseUrl: string, overrides: Record<string, unknown> = {}): R
     },
     limits: { max_turns: 6, max_tool_calls: 12, timeout_ms: 10_000, max_output_tokens: 512 },
     ...overrides,
+  };
+}
+
+function duplexRequestFor(baseUrl: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return requestFor(baseUrl, {
+    protocol: 2,
+    context: {
+      project: {
+        id: 7,
+        title: "储能项目",
+        records: [{ id: 7, body_text: "采购范围见附件，交付信息待核实。", original_url: "https://notice.example/7" }],
+      },
+      company_capability_card: { capabilities: ["储能系统集成"] },
+      related_projects: [],
+    },
+    limits: { max_turns: 6, max_tool_calls: 12, timeout_ms: 2_000, max_output_tokens: 512 },
+    ...overrides,
+  });
+}
+
+function assistantFetchToolCallChunk(recordId: number): Record<string, unknown> {
+  return {
+    id: "chatcmpl-fetch-documents",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "screening-test-model",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "call-fetch-documents",
+              type: "function",
+              function: { name: "fetch_project_documents", arguments: JSON.stringify({ record_id: recordId }) },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
   };
 }
 
@@ -328,6 +420,191 @@ test("deadline aborts a hanging provider without exposing its secret", async () 
     assert.deepEqual(result.lines.at(-1), { type: "error", code: "TIMEOUT", message: "The runtime deadline was exceeded." });
     assert.equal(fake.requests.length, 1);
     assert.ok(!JSON.stringify(result.lines).includes("request-key"));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 fetches trusted public documents through the duplex tool bridge", async () => {
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      const tools = body.tools as Array<{ function: { name: string } }>;
+      assert.deepEqual(tools.map((tool) => tool.function.name), [
+        "read_project_records",
+        "read_company_capability",
+        "read_related_records",
+        "fetch_project_documents",
+      ]);
+      const system = String((body.messages as Array<Record<string, unknown>>)[0]?.content);
+      assert.match(system, /fetch_project_documents/u);
+      assert.match(system, /投标截止时间不是交付时间/u);
+      streamResponse(response, [
+        assistantFetchToolCallChunk(7),
+        { id: "chatcmpl-fetch-documents", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } },
+      ]);
+      return;
+    }
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const toolMessage = messages.find((message) => message.role === "tool");
+    assert.ok(toolMessage);
+    assert.match(String(toolMessage?.content), /doc-1/u);
+    assert.match(String(toolMessage?.content), /采购破碎机/u);
+    streamResponse(response, [
+      { id: "chatcmpl-fetch-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify","summary":"附件已读取","demand_summary":"采购破碎机","reasons":[{"text":"附件有采购事实","evidence":[{"record_id":7,"document_id":"doc-1","quote":"采购破碎机"}]}],"unknowns":[],"next_actions":[],"options":[]}' }, finish_reason: null }] },
+      { id: "chatcmpl-fetch-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } },
+    ]);
+  });
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), (frame, child) => {
+      hostCalls += 1;
+      assert.equal(frame.tool, "fetch_project_documents");
+      assert.deepEqual(frame.arguments, { record_id: 7 });
+      child.stdin?.write(JSON.stringify({
+        type: "tool_response",
+        id: frame.id,
+        ok: true,
+        data: {
+          documents: [{
+            id: "doc-1", record_id: 7, name: "采购附件.pdf", url: "https://notice.example/doc-1.pdf",
+            status: "parsed", pages: 1, sha256: "hash-doc-1", fetched_at: "2026-10-10T00:00:00+08:00",
+            mime_type: "application/pdf", byte_size: 123, text: "采购破碎机", page_texts: [{ page: 1, text: "采购破碎机" }],
+            items: [{ name: "破碎机", spec: "标准型", material: "钢", quantity: "2", unit: "台", delivery: "合同签订后 30 日", source_document_id: "doc-1", page: 1, quote: "采购破碎机" }],
+          }],
+          procurement: { items: [{ name: "破碎机", quantity: "2", unit: "台", source_document_id: "doc-1", page: 1, quote: "采购破碎机" }] },
+        },
+      }) + "\n");
+    });
+    assert.equal(hostCalls, 1);
+    assert.equal(fake.requests.length, 2);
+    assert.equal(result.lines.at(-1)?.type, "result");
+    assert.ok(result.lines.some((line) => line.type === "progress" && line.stage === "tool_start" && line.tool === "fetch_project_documents"));
+    assert.ok(result.lines.some((line) => line.type === "progress" && line.stage === "tool_end" && line.tool === "fetch_project_documents"));
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 returns a safe document failure to the model", async () => {
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [
+        assistantFetchToolCallChunk(7),
+        { id: "chatcmpl-fetch-failure", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ]);
+      return;
+    }
+    const toolMessage = (body.messages as Array<Record<string, unknown>>).find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /auth_required/u);
+    streamResponse(response, [
+      { id: "chatcmpl-fetch-failure-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify","summary":"资料不可访问","demand_summary":"待核实","reasons":[],"unknowns":["附件需要公开访问"],"next_actions":["请人工核实"],"options":[]}' }, finish_reason: null }] },
+      { id: "chatcmpl-fetch-failure-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 4, total_tokens: 6 } },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), (frame, child) => {
+      child.stdin?.write(JSON.stringify({ type: "tool_response", id: frame.id, ok: false, error: "auth_required" }) + "\n");
+    });
+    assert.equal(result.lines.at(-1)?.type, "result");
+    assert.equal(fake.requests.length, 2);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 rejects a record id outside the current project without an RPC request", async () => {
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [
+        assistantFetchToolCallChunk(999),
+        { id: "chatcmpl-fetch-unknown-record", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ]);
+      return;
+    }
+    const toolMessage = (body.messages as Array<Record<string, unknown>>).find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /record_not_in_project/u);
+    streamResponse(response, [
+      { id: "chatcmpl-fetch-unknown-record-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify","summary":"资料不足","demand_summary":"待核实","reasons":[],"unknowns":["记录不属于当前项目"],"next_actions":[],"options":[]}' }, finish_reason: null }] },
+      { id: "chatcmpl-fetch-unknown-record-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 4, total_tokens: 6 } },
+    ]);
+  });
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), () => { hostCalls += 1; });
+    assert.equal(hostCalls, 0);
+    assert.equal(fake.requests.length, 2);
+    assert.equal(result.lines.at(-1)?.type, "result");
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 rejects an unknown host response safely", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      assistantFetchToolCallChunk(7),
+      { id: "chatcmpl-fetch-unknown-response", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), (frame, child) => {
+      child.stdin?.write(JSON.stringify({ type: "tool_response", id: frame.id, ok: false, error: "provider leaked arbitrary text" }) + "\n");
+    });
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
+    assert.equal(fake.requests.length, 1);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 rejects a host response for an unknown request id", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      assistantFetchToolCallChunk(7),
+      { id: "chatcmpl-fetch-unknown-id", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), (_frame, child) => {
+      child.stdin?.write(JSON.stringify({
+        type: "tool_response", id: "rpc-unknown", ok: true,
+        data: { documents: [], procurement: {} },
+      }) + "\n");
+    });
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
+    assert.equal(fake.requests.length, 1);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 exits on host EOF while a tool response is pending", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      assistantFetchToolCallChunk(7),
+      { id: "chatcmpl-fetch-eof", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), (_frame, child) => child.stdin?.end());
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "RPC_ERROR", message: "The tool bridge failed." });
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("protocol 2 times out when the host does not answer a tool request", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      assistantFetchToolCallChunk(7),
+      { id: "chatcmpl-fetch-timeout", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url, {
+      limits: { max_turns: 6, max_tool_calls: 12, timeout_ms: 150, max_output_tokens: 512 },
+    }), () => {}, 3_000);
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "TIMEOUT", message: "The runtime deadline was exceeded." });
   } finally {
     await new Promise<void>((resolve) => fake.server.close(() => resolve()));
   }
