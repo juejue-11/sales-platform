@@ -541,6 +541,10 @@
   min-width: 965px;
 }
 
+.detail-procurement-table-wrap-compact .ant-table {
+  min-width: 755px;
+}
+
 .detail-procurement-table-wrap .ant-table-thead > tr > th {
   color: var(--detail-muted);
   font-size: 12px;
