@@ -30,7 +30,7 @@ class Provider(BaseHTTPRequestHandler):
         assert request.get('stream') is True, 'SDK must exercise real SSE transport'
         assert self.headers.get('Authorization') == f'Bearer {SECRET}'
         tool_names = [tool['function']['name'] for tool in request.get('tools', [])]
-        assert set(tool_names) == {'read_project_records', 'read_company_capability', 'read_related_records'}, tool_names
+        assert set(tool_names) == {'read_project_records', 'read_company_capability', 'read_related_records', 'fetch_project_documents'}, tool_names
         messages = request['messages']
         REQUESTS.append({'tool_names': tool_names, 'tool_results': sum(m['role'] == 'tool' for m in messages)})
         content = None
@@ -38,10 +38,22 @@ class Provider(BaseHTTPRequestHandler):
         if not any(m['role'] == 'tool' for m in messages):
             # The SDK, not a replacement fake Agent, must execute these calls.
             calls = [{'index': index, 'id': f'call_{index}', 'type': 'function', 'function': {'name': name, 'arguments': '{}'}}
-                     for index, name in enumerate(tool_names)]
+                     for index, name in enumerate(name for name in tool_names if name != 'fetch_project_documents')]
         else:
             assert any(RELATED in json.dumps(m, ensure_ascii=False) for m in messages if m['role'] == 'tool'), 'Related source never reached model'
-            context = next((json.loads(m['content']) for m in messages if m['role'] == 'user' and isinstance(m.get('content'), str) and m['content'].startswith('{')), {})
+            context = {}
+            for m in messages:
+                if m['role'] != 'user':
+                    continue
+                raw = m.get('content', '')
+                if isinstance(raw, list):
+                    raw = '\n'.join(part.get('text','') for part in raw if isinstance(part,dict))
+                if isinstance(raw,str) and raw.startswith('{'):
+                    try:
+                        context = json.JSONDecoder().raw_decode(raw)[0]
+                        break
+                    except ValueError:
+                        pass
             is_news = context.get('project', {}).get('kind') == 'news'
             content = json.dumps({
                 'decision': 'verify' if is_news else 'consider', 'summary': '隔离验收：先核对适配，再比较推进方向。',
@@ -125,6 +137,8 @@ def main():
             assert run['usage']['model_calls'] >= 2 and run['usage']['tool_calls'] >= 3, run
             assert {s.get('tool') for s in run['steps'] if s['stage'] == 'tool_end'} >= {'read_project_records', 'read_company_capability', 'read_related_records'}
             assert len(project['judgment']['options']) == 2
+            news = wait_for(lambda: (p if (p := client.get('/api/projects/9102').json()).get('judgment') else None))
+            assert news['judgment']['decision'] == 'verify'
             assert SECRET not in json.dumps(project) and SECRET not in client.get('/api/settings').text
             choice = dict(status='following', owner='Pi验收负责人', next_action='取得技术清单', note='独立SDK验收',
                           selected_option_id='direct', judgment_id=project['judgment']['id'])
