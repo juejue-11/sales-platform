@@ -21,6 +21,14 @@ MAX_PAGES = 80
 MAX_TEXT = 240_000
 MAX_ITEMS = 1000
 _EXTENSIONS = (".pdf", ".doc", ".docx", ".xlsx", ".xls")
+_COLUMN_NAMES = {
+    "物料名称": "name", "材料名称": "name", "货物名称": "name", "商品名称": "name", "名称": "name",
+    "规格型号": "specification", "规格": "specification", "型号": "specification",
+    "材质": "material", "采购数量": "quantity", "数量": "quantity", "需求数量": "quantity",
+    "计量单位": "unit", "单位": "unit", "交货期": "delivery_period", "交货时间": "delivery_period",
+    "交付时间": "delivery_period", "交货地/交货港": "delivery_location", "交货地点": "delivery_location",
+    "交付地点": "delivery_location", "物料编码": "code", "质量标准": "standard", "备注": "note",
+}
 
 
 class DocumentError(ValueError):
@@ -117,23 +125,23 @@ def _pdf(raw: bytes, document: dict) -> None:
             for table in page.extract_tables():
                 for raw_row in table:
                     row = [_cell(value) for value in raw_row]
-                    if "物料名称" in row and "采购数量" in row:
+                    meanings = {_COLUMN_NAMES.get(cell) for cell in row}
+                    if "name" in meanings and "quantity" in meanings:
                         headers = row
                         continue
                     if not headers or len(row) != len(headers):
                         continue
                     values = dict(zip(headers, row))
-                    if not values.get("物料名称") or not values.get("序", "").isdigit():
+                    facts = {_COLUMN_NAMES[key]: value for key, value in values.items() if key in _COLUMN_NAMES}
+                    sequence = values.get("序") or values.get("序号")
+                    if not facts.get("name") or (sequence and not sequence.isdigit()):
                         continue
                     quote = "；".join(f"{key}：{value}" for key, value in values.items() if value)
                     row_texts.append(quote)
                     items.append({
-                        "name": values.get("物料名称", ""), "specification": values.get("规格型号", ""),
-                        "material": values.get("材质", ""), "quantity": values.get("采购数量", ""),
-                        "unit": values.get("计量单位", ""), "delivery_period": values.get("交货期", ""),
-                        "delivery_location": values.get("交货地/交货港", ""),
-                        "code": values.get("物料编码", ""), "standard": values.get("质量标准", ""),
-                        "note": values.get("备注", ""), "source_document_id": document["id"],
+                        **{key: facts.get(key, "") for key in ("name", "specification", "material", "quantity", "unit",
+                                                               "delivery_period", "delivery_location", "code", "standard", "note")},
+                        "source_document_id": document["id"],
                         "record_id": document["record_id"], "page": number, "quote": quote,
                     })
                     if len(items) > MAX_ITEMS:
