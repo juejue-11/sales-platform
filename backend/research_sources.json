@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "budgets": {
+    "max_calls": 24,
+    "max_download_bytes": 12582912,
+    "max_chars": 160000,
+    "max_results": 20,
+    "max_redirects": 4
+  },
+  "sources": [
+    {
+      "id": "ccteg_materials",
+      "name": "中国煤科电子采购平台",
+      "base_url": "https://cg.ccteg.cn",
+      "allowed_hosts": ["cg.ccteg.cn"],
+      "search": {
+        "adapter": "html_search",
+        "url": "https://cg.ccteg.cn/cms/search.htm",
+        "query_field": "kwd",
+        "limit_field": "pageSize",
+        "offset_field": "pageNo",
+        "params": {
+          "channelIds": "204,212,213,214,215,216,217,218,219,220,221,229,230,231,233,234,235,237,238,239,241,242,243",
+          "pageNo": "{page_number}"
+        }
+      },
+      "list_url": "https://cg.ccteg.cn/cms/channel/ywgg1hw/index.htm"
+    },
+    {
+      "id": "angang",
+      "name": "鞍钢智慧招投标平台",
+      "base_url": "https://bid.ansteel.cn",
+      "allowed_hosts": ["bid.ansteel.cn"],
+      "search": {
+        "adapter": "post_json_list",
+        "url": "https://bid.ansteel.cn/inteligentsearch/rest/esinteligentsearch/getFullTextDataNew",
+        "query_field": "wd",
+        "limit_field": "rn",
+        "offset_field": "pn",
+        "body": {
+          "token": "",
+          "pn": "{offset}",
+          "rn": "{limit}",
+          "sdt": "{published_after}",
+          "edt": "{published_before}",
+          "wd": "{query}",
+          "inc_wd": "",
+          "exc_wd": "",
+          "fields": "title",
+          "cnum": "001",
+          "sort": "{\"webdate\":\"0\"}",
+          "ssort": "title",
+          "cl": 2000,
+          "terminal": "",
+          "condition": [],
+          "time": [],
+          "highlights": "",
+          "statistics": null,
+          "unionCondition": null,
+          "accuracy": "",
+          "noParticiple": "1",
+          "searchRange": null,
+          "isBusiness": "1"
+        },
+        "items_path": "result.records"
+      },
+      "list_url": "https://bid.ansteel.cn/zbjjxx/bidding_purchase.html"
+    },
+    {
+      "id": "jisco",
+      "name": "酒钢公共交易平台",
+      "base_url": "https://eps.jiugangbid.com",
+      "allowed_hosts": ["eps.jiugangbid.com"],
+      "search": {
+        "adapter": "list_scan",
+        "url": "https://eps.jiugangbid.com/",
+        "query_field": "keyword",
+        "limit_field": "pageSize",
+        "offset_field": "offset"
+      },
+      "list_url": "https://eps.jiugangbid.com/"
+    }
+  ]
+}

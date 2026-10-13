@@ -20,11 +20,37 @@ class PublicDocumentTests(unittest.TestCase):
                 asyncio.run(validate_public_url("https://bid.example/f.pdf", "https://bid.example/n"))
 
     def test_unparsed_and_auth_are_explicit(self):
-        doc = parse_document(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1old doc', record_id=174, url="https://bid.example/f.doc")
+        doc = parse_document(b'unknown file', record_id=174, url="https://bid.example/f.xls")
         self.assertEqual(doc["status"], "unsupported")
         self.assertEqual(doc["items"], [])
         doc = parse_document(b'<html>login</html>', record_id=174, url="https://bid.example/f.pdf")
         self.assertEqual(doc["status"], "auth_required")
+
+    def test_legacy_doc_is_automatically_converted_and_keeps_original_provenance(self):
+        import hashlib
+        raw = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1old doc'
+        def read_pdf(content, document):
+            self.assertEqual(content, b'%PDF-converted')
+            document.update(status='parsed', pages=2, text='采购方案正文',
+                            page_texts=[{'page': 1, 'text': '采购方案正文'}])
+        with patch('backend.public_documents.convert_legacy_word', return_value=b'%PDF-converted') as convert, \
+                patch('backend.public_documents._pdf', side_effect=read_pdf):
+            doc = parse_document(raw, record_id=174, url='https://bid.example/f.doc',
+                                 mime_type='application/msword')
+        convert.assert_called_once_with(raw)
+        self.assertEqual(doc['status'], 'parsed')
+        self.assertEqual(doc['text'], '采购方案正文')
+        self.assertEqual(doc['pages'], 2)
+        self.assertEqual(doc['sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(doc['mime_type'], 'application/msword')
+
+    def test_doc_conversion_failure_has_specific_reason(self):
+        from backend.legacy_word import WordConversionError
+        with patch('backend.public_documents.convert_legacy_word', side_effect=WordConversionError('conversion_timeout')):
+            doc = parse_document(b'old doc', record_id=174, url='https://bid.example/f.doc')
+        self.assertEqual(doc['status'], 'unreadable')
+        self.assertEqual(doc['error'], 'conversion_timeout')
+        self.assertEqual(doc['text'], '')
 
     def test_fake_pdf_does_not_claim_parsed(self):
         doc = parse_document(b'%PDF-broken', record_id=174, url="https://bid.example/f.pdf")

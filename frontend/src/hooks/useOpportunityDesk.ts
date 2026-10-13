@@ -216,7 +216,7 @@ export function useOpportunityDesk() {
 
   const updateFilter = useCallback(<K extends keyof OpportunityQuery>(key: K, value: OpportunityQuery[K]) => {
     const next = { ...query, [key]: value, page: 1 } as OpportunityQuery
-    if (key === 'gate' && typeof value === 'string' && ['excluded', 'expired', 'closed', 'signal', 'duplicate'].includes(value)) next.active_only = false
+    if (key === 'gate' && typeof value === 'string' && ['excluded', 'expired', 'closed', 'duplicate'].includes(value)) next.active_only = false
     applyQuery(next)
   }, [applyQuery, query])
 
@@ -244,7 +244,7 @@ export function useOpportunityDesk() {
   }, [query])
 
   const tabs = useMemo<OpportunityTab[]>(() => [
-    { key: 'current', label: '当前机会', count: count(dashboard, 'gate_counts', 'candidate') + count(dashboard, 'gate_counts', 'review') },
+    { key: 'current', label: '当前机会与线索', count: count(dashboard, 'gate_counts', 'candidate') + count(dashboard, 'gate_counts', 'review') + count(dashboard, 'gate_counts', 'signal') },
     { key: 'all', label: '全部', count: dashboard?.total_projects ?? 0 },
     { key: 'ai', label: 'AI建议', count: count(dashboard, 'ai_decision_counts', 'recommend') },
     { key: 'review', label: '待核实', count: count(dashboard, 'gate_counts', 'review') },
@@ -253,7 +253,7 @@ export function useOpportunityDesk() {
     { key: 'queued', label: '等待分析', count: count(dashboard, 'ai_counts', 'queued') },
   ], [dashboard])
 
-  const activeProjects = projects.filter((project) => project.gate_status === 'candidate' || project.gate_status === 'review')
+  const activeProjects = projects.filter((project) => project.gate_status === 'candidate' || project.gate_status === 'review' || project.gate_status === 'signal')
   const featured = activeProjects
     .filter((project) => isDeadlineWithinDays(project.deadline_at, 7))
     .sort((left, right) => {

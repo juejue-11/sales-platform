@@ -111,6 +111,26 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
         # procurement facts. It deliberately does not enqueue or invoke AI.
         return await app.state.service.refresh_project_documents(project_id)
 
+    @app.get("/api/projects/{project_id}/documents/{document_id:path}/snapshot")
+    async def document_snapshot(project_id: int, document_id: str, sha256: str = "") -> dict[str, Any]:
+        return app.state.service.document_snapshot(project_id, document_id, sha256=sha256)
+
+    @app.get("/api/projects/{project_id}/research/runs")
+    async def research_runs(project_id: int) -> dict[str, Any]:
+        return app.state.service.research_runs(project_id)
+
+    @app.get("/api/projects/{project_id}/research/runs/{run_id}")
+    async def research_run(project_id: int, run_id: int) -> dict[str, Any]:
+        return app.state.service.research_run(project_id, run_id)
+
+    @app.get("/api/projects/{project_id}/research/sources/{source_ref}/versions/{version}")
+    async def research_source(project_id: int, source_ref: str, version: str,
+                              page: int | None = Query(None, ge=1),
+                              offset: int = Query(0, ge=0, le=2_000_000),
+                              limit: int = Query(4000, ge=1, le=8000)) -> dict[str, Any]:
+        return app.state.service.research_source_snapshot(project_id, source_ref, version,
+                                                        page=page, offset=offset, limit=limit)
+
     @app.post("/api/projects/{project_id}/decision")
     async def decision(project_id: int, body: DecisionRequest) -> dict[str, Any]:
         return app.state.service.save_decision(project_id, body.model_dump())

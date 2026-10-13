@@ -102,6 +102,8 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
 .settings-section-nav { display: flex; flex-wrap: wrap; gap: 22px; padding: 0 0 16px; border-bottom: 1px solid #D1DEE0; }
 .settings-section-nav a { color: var(--muted); font-size: 13px; }
 .settings-section-nav a:hover { color: var(--accent); }
+.settings-analysis-goal { margin: 0; }
+.settings-analysis-goal .ant-alert-description { display: flex; flex-direction: column; gap: 4px; }
 .settings-page .ant-form-item-label { padding-bottom: 7px; }
 .settings-page .ant-form-item-label label { color: #39545B; font-size: 13px; }
 .settings-page .ant-form-item { margin-bottom: 20px; }

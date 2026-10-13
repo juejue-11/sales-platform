@@ -470,6 +470,46 @@
   font-size: 12px;
 }
 
+.detail-procurement-attachment-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--detail-line);
+  color: var(--detail-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.detail-procurement-attachment-notice .ant-tag {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 11px;
+  line-height: 20px;
+}
+
+.detail-procurement-attachment-notice > span:last-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.detail-procurement-attachment-notice-restricted {
+  border-left-color: #d6a54a;
+  background: #fffaf0;
+}
+
+.detail-procurement-attachment-notice-failed {
+  border-left-color: #c35b5b;
+  background: #fff7f7;
+}
+
+.detail-procurement-attachment-notice-available {
+  border-left-color: #86b89b;
+  background: #f5fbf7;
+}
+
 .detail-procurement .detail-briefing-heading h2 {
   font-size: 20px;
 }
@@ -671,11 +711,16 @@
   overflow-wrap: anywhere;
 }
 
+.detail-procurement-mobile-quantity,
 .detail-procurement-mobile-spec {
   display: none;
 }
 
 @media (max-width: 767px) {
+  .detail-procurement-mobile-quantity {
+    display: block;
+    font-weight: 600;
+  }
   .detail-procurement-group-table > .ant-table-wrapper > .ant-spin-nested-loading > .ant-spin-container > .ant-table colgroup col {
     width: auto !important;
   }
@@ -764,6 +809,11 @@
 
 .detail-procurement-source-cell a {
   overflow-wrap: anywhere;
+}
+
+.detail-procurement-source-meta {
+  color: var(--detail-muted);
+  font-size: 11px;
 }
 
 .detail-procurement-quote {
@@ -870,6 +920,24 @@
   font-weight: 400;
   line-height: 1.75;
   overflow-wrap: anywhere;
+}
+
+.detail-company-match-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  max-width: 80ch;
+  margin-top: 10px;
+  padding-left: 10px;
+  border-left: 2px solid #cbd5e1;
+  color: var(--detail-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.detail-company-match-note strong {
+  color: var(--detail-ink);
 }
 
 .detail-summary-grid {

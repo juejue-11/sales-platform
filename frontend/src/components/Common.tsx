@@ -1,7 +1,7 @@
 import { ReloadOutlined, WarningOutlined } from '@ant-design/icons'
 import { Button, Empty, Result, Spin, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
-import type { AiDecision, AiStatus, DecisionStatus, GateStatus, ProjectSummary } from '../types'
+import type { AiDecision, AiStatus, AnalysisMeta, CompanyMatchStatus, DecisionStatus, GateStatus, ProjectSummary } from '../types'
 
 const { Text } = Typography
 
@@ -31,6 +31,26 @@ export const aiDecisionLabels: Record<Exclude<AiDecision, null>, string> = {
   consider: '有条件跟进',
   verify: '待核实',
   not_recommended: '不建议',
+}
+
+/** New judgments describe whether a market opportunity merits attention. */
+export const marketAiDecisionLabels: Record<Exclude<AiDecision, null>, string> = {
+  recommend: '建议关注',
+  consider: '有条件关注',
+  verify: '待核实',
+  not_recommended: '不建议关注',
+}
+
+export const companyMatchLabels: Record<CompanyMatchStatus, string> = {
+  not_evaluated: '未评估',
+  partial: '部分评估',
+  assessed: '已评估',
+}
+
+export function companyMatchDescription(status: CompanyMatchStatus): string {
+  if (status === 'partial') return '仅覆盖企业资料能够支持的部分条件，其余仍需核实。'
+  if (status === 'assessed') return '已按现有企业资料对照项目条件；资料为用户自填，不表示资格或供货能力已经核验。'
+  return '企业匹配尚未评估；企业资料可选，项目市场分析可以独立开展。'
 }
 
 export const decisionLabels: Record<DecisionStatus, string> = {
@@ -93,10 +113,24 @@ export function AiStatusTag({ status }: { status: AiStatus }) {
   return <Tag color={color[status]}>{aiStatusLabels[status] ?? status}</Tag>
 }
 
-export function AiDecisionTag({ decision }: { decision: AiDecision }) {
+export function AiDecisionTag({ decision, analysisMeta }: { decision: AiDecision; analysisMeta?: AnalysisMeta | null }) {
   if (!decision) return <Tag>暂无结论</Tag>
   const color: Record<Exclude<AiDecision, null>, string> = { recommend: 'success', consider: 'blue', verify: 'warning', not_recommended: 'default' }
-  return <Tag color={color[decision]}>{aiDecisionLabels[decision]}</Tag>
+  const labels = analysisMeta?.decision_scope === 'market' ? marketAiDecisionLabels : aiDecisionLabels
+  return <Tag color={color[decision]}>{labels[decision]}</Tag>
+}
+
+/** Distinguishes the new market semantic from judgments created before it. */
+export function AnalysisScopeTag({ analysisMeta }: { analysisMeta?: AnalysisMeta | null }) {
+  return analysisMeta?.decision_scope === 'market'
+    ? <Tag color="blue">市场判断</Tag>
+    : <Tag>旧语义</Tag>
+}
+
+export function CompanyMatchTag({ status }: { status?: CompanyMatchStatus | null }) {
+  if (!status) return null
+  const color: Record<CompanyMatchStatus, string> = { not_evaluated: 'default', partial: 'default', assessed: 'default' }
+  return <Tag color={color[status]}>企业匹配：{companyMatchLabels[status]}</Tag>
 }
 
 export function DecisionTag({ status }: { status: DecisionStatus }) {

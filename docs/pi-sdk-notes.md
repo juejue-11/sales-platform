@@ -29,8 +29,8 @@ shows an empty `ResourceLoader` implementation and an in-memory settings manager
 
 The SDK's tools example documents selecting tools with the `tools` option. This
 runtime sets `noTools: "all"`, supplies the three snapshot tools through
-`customTools` for protocol 1 and adds only the host-bridged document tool for
-protocol 2. It also supplies an explicit allowlist/denylist. That is stricter
+`customTools` for protocol 1 and adds the host-bridged document tool and four
+project investigation tools for protocol 2. It also supplies an explicit allowlist/denylist. That is stricter
 than the example because this process must never expose Pi's default `read`,
 `bash`, `edit`, `write`, `grep`, `find`, `ls`, or PowerShell tools.
 [v1.1.0 tools example](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/examples/sdk/05-tools.ts)
@@ -70,12 +70,17 @@ arguments, tool results, model deltas, or secrets. The result keeps the caller's
 first system message as the SDK system prompt, including the platform's required
 output schema. Protocol 1 tool calls are limited to project records, the company
 capability card, and related-record candidates; protocol 2 adds the bounded
-host-bridged public-document fetch. Related projects are explicitly labelled as
+host-bridged public-document fetch and project investigation tools. Related projects are explicitly labelled as
 candidate relations and not proof of the same project. A failed business-tool
 completion adds `is_error: true` to its `tool_end` progress event; successful
 `tool_end` events omit that field. A result is emitted only when the final
-assistant message has SDK stop reason `stop`; length, error, aborted, or tool-use
-termination is returned as a safe model error. Assistant text is capped during
+assistant message has SDK stop reason `stop`; length termination is returned as
+`OUTPUT_TOKEN_LIMIT`, while error, aborted, or tool-use termination is returned
+as a safe model error. The default request budget is 16,384 tokens per model call,
+including reasoning and answer tokens, and the run deadline is five minutes.
+Official DeepSeek endpoints explicitly enable high-effort thinking and preserve
+reasoning content across tool calls. Explicit host budgets up to 65,536 tokens
+are accepted by the runner. Assistant text is capped during
 streaming and at finalization at an independent 256 KiB UTF-8 byte limit, and a
 final response containing the exact configured API key is rejected before it can
 be written to stdout.
@@ -135,11 +140,16 @@ callback, that callback is notified immediately; a subsequent tool request is
 rejected immediately as well. This covers host EOF or an unknown response ID
 before the first model response without falling back to the full model timeout.
 
-The protocol 2 system suffix requires a fetch before judging when the body
-mentions an attachment/tender document or lacks procurement scope, specs, or
-delivery facts. It requires an explicit evidence gap when fetching or parsing
-fails, forbids invented values, and says that a bid deadline is not a delivery
-date. The model-facing tool result is JSON containing `documents` and
+Both protocols carry the default mining-equipment market analysis goal and
+separate customer attention preferences from optional, self-reported company
+material. The company tool reports material availability, which does not prove
+qualification; a company name or a region/keyword preference is not capacity.
+Protocol 2 requests a document only when it materially affects the current
+judgment and is worth reading within the permission and tool budgets. A fetch
+or parse failure limits conclusions that depend on that material, preserves
+known body facts, and requires a specific evidence gap rather than a global
+`verify`. The runtime forbids invented values and treating a bid deadline as a
+delivery date. The model-facing tool result is JSON containing `documents` and
 `procurement`; each document may include `id`, `record_id`, `name`, `url`,
 `status`, `pages`, `sha256`, `fetched_at`, `mime_type`, `byte_size`, `text`,
 `page_texts`, and extracted `items`. The host should retain the complete
@@ -164,3 +174,29 @@ responses. They cover successful trusted material injection, safe fetch
 failure, record-ID isolation, unknown/invalid host responses, host EOF, and
 an unanswered tool timeout. Existing protocol 1 tests continue to exercise the
 EOF-delimited three-tool loop.
+
+## Project investigation
+
+Protocol 2 additionally dispatches `search_project_sources`,
+`read_research_source`, `assess_source_relation`, and `search_research_content`.
+Both sides validate each tool's own argument allowlist; callers supply bounded
+queries and host-generated opaque IDs, never URLs, paths, headers, or credentials.
+The host accepts a named callback argument `tool`; attachment-only callbacks
+remain compatible for `fetch_project_documents`.
+
+Search results are candidates, not citation sources. Reading returns a bounded
+fragment and may discover host-registered document candidates. The host owns
+immutable content versions, job authorization, relationship assessment, and the
+registry of fragments actually returned to this job. Research citations contain
+`source_ref`, `source_version`, `quote`, and an optional `page`. They cannot mix
+record/document IDs or cite unread content. Titles, URLs, timestamps, and snapshot
+links are derived by the host during final validation.
+
+Only cited versions and their verified relationships enter the report dependency
+fingerprint; adding candidates during a job does not invalidate that job. External
+input/configuration changes still preserve the output as stale history. Research
+policy and source configuration are captured at job start. The host persists
+bounded investigation events and unresolved questions separately from SDK steps;
+no chain of thought or raw model output is retained. Failure/cancellation preserves
+the audit record and prior report. Protocol 1 and single-call analysis do not claim
+to have performed external investigation.

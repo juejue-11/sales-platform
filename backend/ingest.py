@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .project_research import merge_project_research
 from .utils import as_list, clean_text, json_text, normalize_timestamp, now_iso, sha256_text
 
 
@@ -20,6 +21,7 @@ class ImportResult:
     updated: int
     unchanged: int
     total: int
+    affected_project_ids: tuple[int, ...] = ()
 
 
 def _normal_record(raw: dict[str, Any], line_number: int) -> dict[str, Any]:
@@ -46,7 +48,7 @@ def _normal_record(raw: dict[str, Any], line_number: int) -> dict[str, Any]:
         value = dict(attachment)
         for key in ("name", "url", "status", "sha256", "mime_type", "archive_path", "fetched_at", "error"):
             if key in value and value[key] is not None:
-                value[key] = clean_text(value[key])[:2000]
+                value[key] = (clean_text(value[key]) or "")[:2000]
         if "byte_size" in value:
             try:
                 value["byte_size"] = max(0, int(value["byte_size"] or 0))
@@ -272,6 +274,7 @@ def _merge_projects(db: sqlite3.Connection, source_id: int, target_id: int) -> i
         db.execute("UPDATE project_gate SET project_id=? WHERE project_id=?", (target_id, source_id))
     db.execute("UPDATE links SET project_id=? WHERE project_id=?", (target_id, source_id))
     db.execute("UPDATE links SET target_project_id=? WHERE target_project_id=?", (target_id, source_id))
+    merge_project_research(db, source_id, target_id)
     db.execute("DELETE FROM projects WHERE id=?", (source_id,))
     # A merge changes the primary record set and any bounded related context.
     # Preserve old judgments as history, but never leave the moved project's
@@ -309,6 +312,7 @@ def import_records(db: sqlite3.Connection, path: Path) -> ImportResult:
     """Read and validate the entire file before entering one SQLite transaction."""
     rows = read_jsonl(path)
     inserted = updated = unchanged = 0
+    affected_record_ids: set[int] = set()
     # The caller records import status. This function itself is atomic: any
     # exception rolls back all record and project changes.
     with db:
@@ -326,12 +330,18 @@ def import_records(db: sqlite3.Connection, path: Path) -> ImportResult:
                 )
                 _insert_version(db, record, record["current_version"], "initial")
                 inserted += 1
+                affected_record_ids.add(int(record["id"]))
             else:
                 old_signature = _db_signature(old)
                 new_signature = _content_signature(record)
                 old_project = _project_for_record(db, int(record["id"]))
                 if old_signature == new_signature:
-                    metadata_changed = (int(record["current_version"] or 1) != int(old["current_version"] or 1) or
+                    # Local history may advance beyond the collector version
+                    # when attachment metadata changes. Compare source versions
+                    # with the previous source payload, not the local counter.
+                    old_payload = json.loads(old["source_payload_json"] or "{}")
+                    old_source_version = old_payload.get("current_version", old["current_version"])
+                    metadata_changed = (int(record["current_version"] or 1) != int(old_source_version or 1) or
                                         record["content_sha256"] != old["content_sha256"] or
                                         record["archive_path"] != old["archive_path"])
                     if metadata_changed:
@@ -351,6 +361,7 @@ def import_records(db: sqlite3.Connection, path: Path) -> ImportResult:
                                     json_text(record), record["id"]))
                 else:
                     version = max(int(old["current_version"] or 1) + 1, int(record["current_version"] or 1))
+                    affected_record_ids.add(int(record["id"]))
                     db.execute(
                         """UPDATE records SET source_id=?,source_name=?,canonical_url=?,original_url=?,kind=?,title=?,project_name=?,
                            published_at=?,buyer=?,notice_number=?,deadline_at=?,company=?,equipment_json=?,facts_json=?,inferences_json=?,
@@ -385,4 +396,7 @@ def import_records(db: sqlite3.Connection, path: Path) -> ImportResult:
         # later in the file. Resolve all relations again once every id exists.
         for record in rows:
             _ensure_project(db, record)
-    return ImportResult(inserted=inserted, updated=updated, unchanged=unchanged, total=len(rows))
+    affected_projects = {_project_for_record(db, record_id) for record_id in affected_record_ids}
+    return ImportResult(inserted=inserted, updated=updated, unchanged=unchanged, total=len(rows),
+                        affected_project_ids=tuple(sorted(project_id for project_id in affected_projects
+                                                          if project_id is not None)))

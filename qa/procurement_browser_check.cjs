@@ -12,6 +12,10 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror',error=>errors.push(error.message));
+    const detailResponse = await page.request.get(base+'/api/projects/174');
+    assert.equal(detailResponse.status(),200);
+    const initialDetail = await detailResponse.json();
+    const hasUnsupportedDocument = initialDetail.procurement.documents.some(document=>document.status==='unsupported');
     const measurements = [];
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
@@ -32,7 +36,8 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
       assert.equal(await section.getByRole('heading',{name:'采购范围',exact:true}).count(),1);
       assert.ok(!text.includes('采购范围明细'));
       assert.ok(text.includes('采购方案.doc'));
-      assert.ok(text.includes('暂不支持解析'));
+      if(hasUnsupportedDocument) assert.ok(text.includes('暂不支持解析'));
+      else assert.ok(text.includes('已解析'));
       assert.ok(!text.includes('未识别'));
       assert.equal(await page.locator('.detail-page .ant-card').count(),0);
       const summaryRows = section.locator('.detail-procurement-group-table > .ant-table-wrapper > .ant-spin-nested-loading > .ant-spin-container > .ant-table tbody > tr.ant-table-row');
@@ -65,11 +70,11 @@ const {chromium} = require(path.join(process.env.USERPROFILE,'.cache/codex-runti
     if(process.argv.includes('--refresh')) {
       const [response] = await Promise.all([
         page.waitForResponse(r=>r.url().endsWith('/api/projects/174/documents/refresh') && r.request().method()==='POST',{timeout:65000}),
-        page.getByRole('button',{name:'更新资料',exact:true}).click(),
+        page.getByRole('button',{name:'更新公开资料',exact:true}).click(),
       ]);
       assert.equal(response.status(),200);
       assert.equal((await response.json()).procurement.items.length,143);
-      await page.getByRole('button',{name:'更新资料',exact:true}).waitFor();
+      await page.getByRole('button',{name:'更新公开资料',exact:true}).waitFor();
     }
     await page.getByRole('textbox',{name:'搜索物料明细'}).fill('H型钢');
     await page.locator('.detail-procurement-table-wrap tbody tr.ant-table-row').first().waitFor();

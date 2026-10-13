@@ -11,6 +11,7 @@ if (-not (Test-Path -LiteralPath $screeningPython)) {
 }
 & $screeningPython -m pip install -r (Join-Path $screeningRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw '后端依赖安装失败。' }
+& (Join-Path $screeningRoot '安装文档转换器.ps1')
 $screeningNodeDirectory = Join-Path $screeningRuntime 'node\bin'
 if (Test-Path -LiteralPath (Join-Path $screeningNodeDirectory 'node.exe')) { $env:PATH = "$screeningNodeDirectory;$env:PATH" }
 $screeningBundledPnpm = Join-Path $screeningRuntime 'bin\fallback\pnpm.cmd'

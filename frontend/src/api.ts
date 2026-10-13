@@ -1,9 +1,11 @@
 import type {
+  AgentRun,
   DashboardData,
   ProcurementData,
   ProjectDetail,
   ProjectSummary,
   ProjectsResponse,
+  ResearchSourceVersionResponse,
   SettingsData,
   StatusData,
 } from './types'
@@ -54,6 +56,23 @@ export const api = {
     return request<ProjectsResponse>(`/projects?${search.toString()}`)
   },
   project: (id: number) => request<ProjectDetail>(`/projects/${id}`),
+  researchRuns: (id: number) => request<{ items: AgentRun[]; total: number }>(`/projects/${id}/research/runs`),
+  researchRun: (id: number, runId: number) => request<AgentRun>(`/projects/${id}/research/runs/${runId}`),
+  researchSourceVersion: (
+    id: number,
+    sourceRef: string,
+    version: string,
+    params: { page?: number; offset?: number; limit?: number } = {},
+  ) => {
+    const search = new URLSearchParams()
+    if (params.page !== undefined) search.set('page', String(params.page))
+    if (params.offset !== undefined) search.set('offset', String(params.offset))
+    if (params.limit !== undefined) search.set('limit', String(params.limit))
+    const query = search.toString()
+    return request<ResearchSourceVersionResponse>(
+      `/projects/${id}/research/sources/${encodeURIComponent(sourceRef)}/versions/${encodeURIComponent(version)}${query ? `?${query}` : ''}`,
+    )
+  },
   refreshDocuments: (id: number) => request<{ procurement: ProcurementData; message: string }>(`/projects/${id}/documents/refresh`, {
     method: 'POST',
     body: JSON.stringify({}),

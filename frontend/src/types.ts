@@ -5,6 +5,14 @@ export type DecisionStatus = 'new' | 'following' | 'verify' | 'closed'
 export type AiEngine = 'pi_sdk' | 'single_call'
 export type AgentRunStatus = 'running' | 'succeeded' | 'failed'
 export type AgentStepStage = 'started' | 'model' | 'tool_start' | 'tool_end' | 'completed'
+export type CompanyMatchStatus = 'not_evaluated' | 'partial' | 'assessed'
+
+/** Semantic metadata for the judgment that is currently being displayed. */
+export interface AnalysisMeta {
+  semantic_version: string
+  decision_scope: 'market'
+  company_match: CompanyMatchStatus
+}
 
 export interface AgentRunStep {
   stage: AgentStepStage
@@ -28,6 +36,127 @@ export interface AgentRunLimits {
   max_output_tokens: number
 }
 
+export type InvestigationStatus = 'not_started' | 'running' | 'completed' | 'limited' | 'failed' | 'not_performed'
+
+export interface InvestigationEvent {
+  at: string
+  tool: string
+  purpose: string
+  query?: string
+  status: string
+  sources: string[]
+  message?: string
+}
+
+export type ResearchSourceKind = 'page' | 'document'
+export type ResearchSourceStatus = 'candidate' | 'read' | 'failed' | 'unsupported' | 'auth_required' | 'unreadable'
+export type ResearchSourceRelation = 'unconfirmed' | 'same_procurement' | 'related_project' | 'buyer_background' | 'unrelated' | 'conflict'
+export type ResearchRelationStatus = 'unconfirmed' | 'verified' | 'rejected'
+
+export interface ResearchSource {
+  source_ref: string
+  source_version?: string
+  title: string
+  url: string
+  published_at?: string | null
+  fetched_at?: string | null
+  kind: ResearchSourceKind
+  status: ResearchSourceStatus
+  relation: ResearchSourceRelation
+  relation_status: ResearchRelationStatus
+  pages?: number
+  parent_source_ref?: string | null
+  error?: string | null
+}
+
+export interface Investigation {
+  policy_version: string
+  status: InvestigationStatus
+  stop_reason?: string
+  events: InvestigationEvent[]
+  sources: ResearchSource[]
+  unresolved: string[]
+}
+
+export interface ResearchSourceVersionResponse {
+  source: ResearchSource
+  text: string
+  page?: number | null
+  offset: number
+  total_chars: number
+  has_more: boolean
+}
+
+/** Evidence attached to a user-facing, Agent-selected report block. */
+export type AgentReportBlockEvidence = Evidence
+
+export interface AgentReportParagraphBlock {
+  type: 'paragraph'
+  text: string
+  evidence: AgentReportBlockEvidence[]
+}
+
+export interface AgentReportListItem {
+  text: string
+  evidence: AgentReportBlockEvidence[]
+}
+
+export interface AgentReportListBlock {
+  type: 'list'
+  items: AgentReportListItem[]
+}
+
+export interface AgentReportTableRow {
+  cells: string[]
+  evidence: AgentReportBlockEvidence[]
+}
+
+export interface AgentReportTableBlock {
+  type: 'table'
+  columns: string[]
+  rows: AgentReportTableRow[]
+}
+
+export type AgentReportBlock = AgentReportParagraphBlock | AgentReportListBlock | AgentReportTableBlock
+
+export interface AgentReportSection {
+  id: string
+  title: string
+  blocks: AgentReportBlock[]
+}
+
+export type AgentOpportunityKind = 'explicit_demand' | 'potential_opportunity'
+
+export interface AgentOpportunity {
+  id: string
+  kind: AgentOpportunityKind
+  title: string
+  description: string
+  basis: string
+  uncertainties: string[]
+  next_actions: string[]
+  evidence: AgentReportBlockEvidence[]
+}
+
+export type AgentReportGapStatus = 'not_stated' | 'not_read' | 'read_failed' | 'not_applicable'
+
+export interface AgentReportGap {
+  id: string
+  description: string
+  status: AgentReportGapStatus
+  impact: string
+  next_action: string
+  worth_researching: boolean
+}
+
+/** The current Agent report is intentionally open-ended: sections and blocks are selected per project. */
+export interface AgentReport {
+  version: 1
+  sections: AgentReportSection[]
+  opportunities: AgentOpportunity[]
+  gaps: AgentReportGap[]
+}
+
 export interface AgentRun {
   id: number
   job_id: number | null
@@ -39,6 +168,8 @@ export interface AgentRun {
   steps: AgentRunStep[]
   usage: AgentRunUsage
   limits: AgentRunLimits
+  /** Optional while older API responses are still in circulation. */
+  investigation?: Investigation | null
 }
 
 export interface Decision {
@@ -63,6 +194,8 @@ export interface ProjectBriefing {
 
 export type ProcurementStatus = 'not_checked' | 'partial' | 'complete' | 'unavailable'
 export type ProcurementDocumentStatus = 'parsed' | 'unsupported' | 'auth_required' | 'failed' | 'unreadable'
+export type ProcurementSourceKind = 'announcement' | 'attachment'
+export type ProcurementAttachmentStatus = 'not_checked' | 'none_public' | 'restricted' | 'available' | 'failed'
 
 export interface ProcurementItem {
   name: string
@@ -75,10 +208,12 @@ export interface ProcurementItem {
   code?: string
   standard?: string
   note?: string
-  source_document_id: number | string
+  /** Announcement sourced rows have no attachment id and use page 0. */
+  source_kind?: ProcurementSourceKind | null
+  source_document_id?: number | string | null
   record_id: number
-  page: number
-  quote: string
+  page?: number | null
+  quote?: string | null
 }
 
 export interface ProcurementDocument {
@@ -104,6 +239,10 @@ export interface ProcurementData {
   missing_fields: string[]
   documents: ProcurementDocument[]
   updated_at: string | null
+  /** Optional while older API responses are still in circulation. */
+  attachment_status?: ProcurementAttachmentStatus | null
+  /** Human-readable access caveat, for example a registration or purchase requirement. */
+  attachment_note?: string | null
 }
 
 export interface ProjectSummary {
@@ -125,14 +264,24 @@ export interface ProjectSummary {
   needs_review: boolean
   decision: Decision
   /** Optional while older API responses are still in circulation. */
+  analysis_meta?: AnalysisMeta | null
+  /** Optional while older API responses are still in circulation. */
   briefing?: ProjectBriefing | null
   /** Optional while older API responses are still in circulation. */
   procurement?: ProcurementData | null
   demand_summary?: string | null
   ai_next_actions?: string[]
+  research_summary?: {
+    status: InvestigationStatus
+    source_count: number
+    stop_reason?: string
+    updated_at?: string
+  }
+  /** Opportunities from the current valid Agent report; legacy summaries may omit this field. */
+  opportunity_signals?: AgentOpportunity[]
 }
 
-export interface Evidence {
+export interface ProcurementEvidence {
   record_id: number
   quote: string
   document_id?: number | string | null
@@ -140,7 +289,23 @@ export interface Evidence {
   document_name?: string | null
   source_url?: string | null
   document_sha256?: string | null
+  /** API URL for the immutable attachment text/page snapshot used by this report. */
+  snapshot_url?: string | null
 }
+
+export interface ResearchEvidence {
+  source_ref: string
+  source_version: string
+  quote: string
+  page?: number | null
+  title: string
+  source_url: string
+  fetched_at: string | null
+  relation: ResearchSourceRelation
+  snapshot_url?: string | null
+}
+
+export type Evidence = ProcurementEvidence | ResearchEvidence
 
 export interface JudgmentReason {
   text: string
@@ -170,6 +335,13 @@ export interface Judgment {
   unknowns: string[]
   next_actions: string[]
   options: JudgmentOption[]
+  /** Missing metadata means the judgment uses the historical semantic. */
+  analysis_meta?: AnalysisMeta | null
+  /** The investigation that supplied this report, kept separate from later runs. */
+  agent_run_id?: number | null
+  investigation?: Investigation | null
+  /** New reports use Agent-selected sections; older judgments keep reasons/unknowns below. */
+  report?: AgentReport | null
 }
 
 export interface ProjectRecord {
@@ -200,6 +372,8 @@ export interface ProjectDetail extends ProjectSummary {
   versions: ProjectVersion[]
   /** Optional while older detail responses are still in circulation. */
   agent_run?: AgentRun | null
+  /** Optional while older detail responses are still in circulation. */
+  research_sources?: ResearchSource[]
 }
 
 export interface DashboardData {
@@ -229,6 +403,11 @@ export interface ProjectsResponse {
 export interface BusinessSettings {
   company_name: string
   scope_description: string
+  /** Customer focus preferences, separate from self-reported company capability material. */
+  customer_role: string
+  equipment_categories: string
+  mineral_types: string
+  demand_focus: string
   target_keywords: string[]
   exclude_keywords: string[]
   supported_products: string
@@ -260,6 +439,12 @@ export interface SettingsData {
   ai: AiSettings
   import: ImportSettings
   version: number
+  /** Read-only analysis policy returned by newer APIs. */
+  analysis?: {
+    goal: string
+    semantic_version: string
+    company_profile_present: boolean
+  }
 }
 
 export interface StatusImport {

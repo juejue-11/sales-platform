@@ -152,6 +152,27 @@ def quote_in_text(quote: str, text: str) -> bool:
     return source_quote(quote, text) is not None
 
 
+def source_quote_hint(quote: str, text: str) -> str | None:
+    """Suggest original text for a layout mismatch, never accept evidence.
+
+    The correction prompt can offer the original punctuation and line breaks
+    back to the model. The eventual quotation still passes ``source_quote``;
+    this lookup cannot make a rewritten or stitched quote valid by itself.
+    """
+    if not isinstance(quote, str) or not isinstance(text, str):
+        return None
+    wanted = ''.join(match.group() for match in re.finditer(r'[\w./:%+-]', quote))
+    matches = list(re.finditer(r'[\w./:%+-]', text))
+    available = ''.join(match.group() for match in matches)
+    if len(wanted) < 8:
+        return None
+    start = available.find(wanted)
+    if start < 0:
+        return None
+    result = text[matches[start].start():matches[start + len(wanted) - 1].end()]
+    return result if len(result) <= 2000 else None
+
+
 def safe_join(root: Path, relative: str) -> Path:
     """Resolve a relative archive path and reject traversal outside root."""
     root = root.resolve()

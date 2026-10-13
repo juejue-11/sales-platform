@@ -10,6 +10,7 @@ import pytest
 import backend.service as service_module
 from backend.ai import AIError, PiSDKProvider, validate_judgment
 from backend.briefing import build_briefing
+from backend.procurement_facts import extract_announcement_facts
 from backend.service import ScreeningService
 
 
@@ -109,8 +110,148 @@ def test_unparsed_document_never_claims_complete(tmp_path: Path, monkeypatch: py
     try:
         procurement = asyncio.run(service.refresh_project_documents(174))["procurement"]
         assert procurement["status"] == "unavailable"
+        assert procurement["attachment_status"] == "failed"
         assert "附件未解析" in procurement["missing_fields"]
         assert procurement["items"] == []
+    finally:
+        service.close()
+
+
+def test_announcement_body_facts_survive_empty_attachment_refresh(tmp_path: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch):
+    body = """煤矿井下压裂泵采购
+三、招标范围：
+2.本项目物资采购范围：煤矿井下压裂泵
+2套。详见招标文件第五章。
+3.交货期：合同签订之日起
+30个日历天。
+4.交货地点：甲方指定地点。
+七、招标文件获取：登录中国煤科电子采购平台，点击购买相应招标文件，审核通过后自行下载招标文件。"""
+
+    async def fetch(_record):
+        return []
+
+    record = _record(166, attachments=[])
+    record["title"] = "【西安研究院】煤矿井下压裂泵采购(GHY-26697)项目公告"
+    record["project_name"] = record["title"]
+    record["body_text"] = body
+    record["attachments"] = []
+    source = tmp_path / "records.jsonl"
+    source.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(service_module, "fetch_record_documents", fetch)
+    service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
+                               archive_root=tmp_path, provider=object())
+    asyncio.run(service.import_file())
+    try:
+        before = service.project_detail(166)["procurement"]
+        assert before["status"] in {"partial", "complete"}
+        assert before["items"]
+        assert before["items"][0]["quantity"] == "2"
+        assert before["delivery_period"] == "合同签订之日起30个日历天"
+        assert before["delivery_location"] == "甲方指定地点"
+
+        after = asyncio.run(service.refresh_project_documents(166))["procurement"]
+        assert after["status"] in {"partial", "complete"}
+        assert after["items"]
+        item = after["items"][0]
+        assert item["name"] == "煤矿井下压裂泵"
+        assert item["quantity"] == "2"
+        assert item["unit"] == "套"
+        assert item["record_id"] == 166
+        assert item["delivery_period"] == after["delivery_period"]
+        assert item["delivery_location"] == after["delivery_location"]
+        assert item["source_kind"] == "announcement"
+        assert item["source_document_id"] == ""
+        assert item["page"] == 0
+        assert item["quote"] in body
+        assert after["delivery_period"] == "合同签订之日起30个日历天"
+        assert after["delivery_location"] == "甲方指定地点"
+        assert after["attachment_status"] == "restricted"
+        assert "登录" in after["attachment_note"]
+        assert "购买" in after["attachment_note"]
+        assert len(after["attachment_note"]) < 300
+        assert "详细规格和材质待核对" in after["scope_summary"]
+        assert "公告正文未列" not in after["scope_summary"]
+    finally:
+        service.close()
+
+
+def test_announcement_extractor_does_not_promote_title_price_or_qualification_counts():
+    title_only = {"id": 1, "title": "煤矿井下压裂泵2套项目公告", "kind": "tender", "body_text": ""}
+    price_and_qualification = {
+        "id": 2, "title": "设备采购公告", "kind": "tender",
+        "body_text": "项目预算200元。资格要求：投标人具有2套设备和3年业绩。",
+    }
+    assert extract_announcement_facts(title_only)["items"] == []
+    assert extract_announcement_facts(price_and_qualification)["items"] == []
+
+
+def test_announcement_extractor_excludes_delivery_warranty_and_copy_counts():
+    delivery_record = {
+        "id": 3,
+        "kind": "tender",
+        "title": "压裂泵采购公告",
+        "body_text": (
+            "一、采购范围：采购压裂泵2台，供货期30个日历天。"
+        ),
+    }
+    delivery_facts = extract_announcement_facts(delivery_record)
+    items = delivery_facts["items"]
+    assert [(item["name"], item["quantity"], item["unit"]) for item in items] == [("压裂泵", "2", "台")]
+    assert delivery_facts["delivery_period"] == "30个日历天"
+
+    excluded_counts = {
+        "id": 4,
+        "kind": "tender",
+        "title": "压裂泵采购公告",
+        "body_text": "一、采购范围：压裂泵2台，质保期2年，投标文件副本2份，包装3包。",
+    }
+    items = extract_announcement_facts(excluded_counts)["items"]
+    assert [(item["name"], item["quantity"], item["unit"]) for item in items] == [("压裂泵", "2", "台")]
+
+
+def test_announcement_extractor_does_not_promote_numbered_scope_heading():
+    record = {"id": 174, "kind": "tender", "body_text":
+              "2.招标范围\n2.1\n项目名称：钢材采购项目。采购范围详见物料清单附件。"}
+    assert extract_announcement_facts(record)["items"] == []
+
+
+def test_announcement_extractor_keeps_total_without_promoting_delivery_batches():
+    record = {"id": 61, "kind": "tender", "body_text":
+              "采购范围：采购遥控平板车6台（第一批供货1台）。"}
+    items = extract_announcement_facts(record)["items"]
+    assert [(item["name"], item["quantity"], item["unit"]) for item in items] == [("遥控平板车", "6", "台")]
+    assert items[0]["quote"] in record["body_text"]
+
+
+@pytest.mark.parametrize("scope", ["需采购2台设备", "本次采购共1个标段", "3.1本次采购共1个采购包",
+                                  "本次设计在采空区施工1个验证孔"])
+def test_announcement_extractor_requires_named_goods(scope):
+    assert extract_announcement_facts({"id": 1, "kind": "tender", "body_text": f"采购范围：{scope}。"})["items"] == []
+
+
+def test_attachment_rows_are_prioritized_and_conflicts_remain_visible(tmp_path: Path,
+                                                                       monkeypatch: pytest.MonkeyPatch):
+    async def fetch(record):
+        return [{"id": "doc-pump", "record_id": record["id"], "name": "清单.pdf", "status": "parsed",
+                 "sha256": "pump-hash", "items": [{"name": "煤矿井下压裂泵", "quantity": "1", "unit": "套",
+                 "specification": "A", "material": "", "delivery_period": "30日",
+                 "delivery_location": "甲方指定地点", "quote": "煤矿井下压裂泵1套", "record_id": record["id"],
+                 "page": 1}]}]
+
+    service = _service(tmp_path, monkeypatch, fetch)
+    try:
+        with service.db:
+            service.db.execute("UPDATE records SET body_text=?, source_payload_json=? WHERE id=174", (
+                "采购范围：煤矿井下压裂泵2套。交货期：合同签订后30日。交货地点：甲方指定地点。",
+                json.dumps({"attachments": [{"name": "清单.pdf", "url": "https://example.test/list.pdf"}],
+                            "source": "test"}, ensure_ascii=False),
+            ))
+        procurement = asyncio.run(service.refresh_project_documents(174))["procurement"]
+        assert [item["source_kind"] for item in procurement["items"]] == ["attachment", "announcement"]
+        assert {item["quantity"] for item in procurement["items"]} == {"1", "2"}
+        assert procurement["status"] == "partial"
+        assert "不一致" in procurement["attachment_note"]
     finally:
         service.close()
 

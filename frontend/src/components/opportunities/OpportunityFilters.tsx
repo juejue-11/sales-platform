@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button, Input, Select } from 'antd'
 import { FilterOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import type { AiDecision } from '../../types'
+import { aiDecisionLabels, marketAiDecisionLabels } from '../Common'
 import type { OpportunityQuery, OpportunityTab, OpportunityTabKey } from '../../hooks/useOpportunityDesk'
 
 interface OpportunityFiltersProps {
@@ -65,11 +67,15 @@ const decisionOptions = [
 
 const aiDecisionOptions = [
   { value: '', label: '全部 AI 建议' },
-  { value: 'recommend', label: '建议跟进' },
-  { value: 'consider', label: '有条件跟进' },
+  { value: 'recommend', label: decisionFilterLabel('recommend') },
+  { value: 'consider', label: decisionFilterLabel('consider') },
   { value: 'verify', label: '待核实' },
-  { value: 'not_recommended', label: '不建议' },
+  { value: 'not_recommended', label: decisionFilterLabel('not_recommended') },
 ]
+
+function decisionFilterLabel(decision: Exclude<AiDecision, null>): string {
+  return `${marketAiDecisionLabels[decision]} / ${aiDecisionLabels[decision]}`
+}
 
 export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advancedOpen, resultCount, refreshTitle, onSelectTab, onSearchChange, onSearch, onUpdateFilter, onReset, onToggleAdvanced, onRefresh }: OpportunityFiltersProps) {
   const [sourceDraft, setSourceDraft] = useState(query.source_id)

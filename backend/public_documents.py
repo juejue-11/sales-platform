@@ -10,10 +10,12 @@ import socket
 import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
+
+from .legacy_word import WordConversionError, convert_legacy_word
 
 MAX_FILES = 4
 MAX_BYTES = 12 * 1024 * 1024
@@ -186,13 +188,54 @@ def parse_document(raw: bytes, *, record_id: int, url: str, name: str = "", mime
             document.update(text=text, status="parsed" if text.strip() else "unreadable")
         elif raw.lstrip().lower().startswith((b"<!doctype html", b"<html")):
             document.update(status="auth_required", error="附件返回网页，可能需要登录或验证")
+        elif unquote(urlsplit(url).path).lower().endswith('.doc') or mime_type == 'application/msword':
+            _pdf(convert_legacy_word(raw), document)
         else:
             document["error"] = "该附件格式暂不能自动解析，需人工核对原文件"
+    except WordConversionError as exc:
+        document.update(status="unreadable", error=str(exc), text="", page_texts=[], items=[])
     except DocumentError as exc:
         document.update(status="failed", error=str(exc), text="", page_texts=[], items=[])
     except Exception:
         document.update(status="unreadable", error="附件无法解析，请核对原文件", text="", page_texts=[], items=[])
     return document
+
+
+def read_archived_documents(record: dict, archive_root: Path) -> list[dict]:
+    """Reuse collector bytes only within this record's archive and exact hash.
+
+    Archive paths and parser text in collector payloads are not authoritative.
+    The saved bytes are checked and parsed by the same reader as online files.
+    Missing or invalid archives simply leave online acquisition available.
+    """
+    record_id = int(record.get("id") or record.get("record_id"))
+    record_root = (archive_root / "archive" / str(record_id)).resolve()
+    if not record_root.is_relative_to(archive_root.resolve()):
+        return []
+    attachments = record.get("attachments", [])
+    documents = []
+    for item in attachments[:MAX_FILES] if isinstance(attachments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        relative = item.get("archive_path")
+        digest = item.get("sha256")
+        if not isinstance(relative, str) or not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+            continue
+        try:
+            path = (archive_root / relative).resolve()
+            if not path.is_relative_to(record_root) or not path.is_file() or path.stat().st_size > MAX_BYTES:
+                continue
+            with path.open("rb") as source:
+                raw = source.read(MAX_BYTES + 1)
+            if len(raw) > MAX_BYTES or hashlib.sha256(raw).hexdigest() != digest.lower():
+                continue
+            value = parse_document(raw, record_id=record_id, url=str(item.get("url") or ""),
+                                   name=str(item.get("name") or ""), mime_type=str(item.get("mime_type") or ""))
+            value["fetched_at"] = str(item.get("fetched_at") or value["fetched_at"])
+            documents.append(value)
+        except (OSError, ValueError):
+            continue
+    return documents
 
 
 async def _download(client: httpx.AsyncClient, url: str, source_url: str) -> tuple[bytes, str]:
@@ -222,7 +265,7 @@ async def fetch_record_documents(record: dict) -> list[dict]:
     source_url = record.get("source_url") or record.get("original_url") or record.get("canonical_url") or ""
     record_id = int(record.get("id") or record.get("record_id"))
     _origin(source_url)
-    async with asyncio.timeout(45), httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
+    async with asyncio.timeout(180), httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
         raw, mime = await _download(client, source_url, source_url)
         if raw.startswith(b"%PDF"):
             return [await asyncio.to_thread(parse_document, raw, record_id=record_id, url=source_url, mime_type=mime)]

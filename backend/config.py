@@ -21,6 +21,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "capabilities": "",
         "solution_examples": "",
         "region_preferences": "",
+        "customer_role": "",
+        "equipment_categories": "",
+        "mineral_types": "",
+        "demand_focus": "",
     },
     "ai": {
         "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),

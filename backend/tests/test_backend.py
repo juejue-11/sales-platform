@@ -58,6 +58,30 @@ def configure_ai(service: ScreeningService):
                              "business": {"capabilities": "测试能力"}})
 
 
+def test_import_does_not_restart_an_unchanged_historical_backlog(tmp_path: Path):
+    records = [row(1), row(2)]
+    for value in records:
+        value["project_key"] = f"distinct-{value['id']}"
+        value["notice_number"] = f"P-{value['id']}"
+    service = make_service(tmp_path, records)
+    try:
+        configure_ai(service)
+        service.db.execute("UPDATE jobs SET status='skipped'")
+        service.db.commit()
+        before = service.db.execute("SELECT count(*) FROM jobs").fetchone()[0]
+        asyncio.run(service.import_file())
+        assert service.db.execute("SELECT count(*) FROM jobs").fetchone()[0] == before
+        new_record = row(3)
+        new_record.update(project_key="distinct-3", notice_number="P-3")
+        service.source_path.write_text('\n'.join(json.dumps(value, ensure_ascii=False)
+                                                for value in [*records, new_record]), encoding="utf-8")
+        asyncio.run(service.import_file())
+        assert [value[0] for value in service.db.execute(
+            "SELECT project_id FROM jobs WHERE status='queued'").fetchall()] == [3]
+    finally:
+        service.close()
+
+
 class SequenceProvider(Provider):
     def __init__(self, first_content):
         super().__init__()
@@ -350,15 +374,17 @@ def test_positive_judgment_without_source_evidence_is_rejected(tmp_path: Path):
     service.close()
 
 
-def test_empty_capability_card_cannot_store_positive_fit_or_options(tmp_path: Path):
+def test_empty_company_material_preserves_evidenced_market_judgment_and_actions(tmp_path: Path):
     service = make_service(tmp_path, [row()])
     service.update_settings({"ai": {"base_url": "https://mock.local/v1", "model": "mock", "enabled": True,
                                      "api_key": "secret-value"}})
     queued = service.queue_project(1)
     asyncio.run(service.run_job(queued["job_id"]))
     judgment = service.project_detail(1)["judgment"]
-    assert judgment["decision"] == "verify"
-    assert judgment["options"] == []
+    assert judgment["decision"] == "consider"
+    assert judgment["options"][0]["id"] == "a"
+    assert judgment["analysis_meta"]["company_match"] == "not_evaluated"
+    assert "公司能力卡为空，需先补充能力资料" not in judgment["unknowns"]
     service.close()
 
 

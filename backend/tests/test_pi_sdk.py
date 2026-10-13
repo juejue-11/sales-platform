@@ -57,6 +57,11 @@ def _runner_source() -> str:
           emit({type: "error", code: "MODEL_ERROR", message: "request-key secret-value"});
           process.exit(0);
         }
+        if (mode === "length") {
+          emit({type: "usage", usage: {model_calls: 5, tool_calls: 7, input_tokens: 1200, output_tokens: 16384}, extra: "secret-value"});
+          emit({type: "error", code: "OUTPUT_TOKEN_LIMIT", message: "secret-value"});
+          process.exit(0);
+        }
         if (mode === "secret") {
           emit({type: "progress", stage: "started", label: "DO_NOT_STORE"});
           emit({type: "result", engine: "pi_sdk", content: JSON.stringify({secret: "secret-value"}),
@@ -163,11 +168,28 @@ def test_pi_sdk_bridge_deadline_covers_child_that_does_not_read_stdin(tmp_path: 
 
 
 def test_pi_sdk_error_codes_are_allowlisted():
+    assert _safe_error_code("OUTPUT_TOKEN_LIMIT") == "OUTPUT_TOKEN_LIMIT"
     assert _safe_error_code("MODEL_ERROR") == "MODEL_ERROR"
     assert _safe_error_code("INVALID_INPUT") == "INVALID_INPUT"
     assert _safe_error_code("MODEL_CONFIG") == "MODEL_CONFIG"
     assert _safe_error_code("INTERNAL") == "INTERNAL"
     assert _safe_error_code("model-key-secret") == "RUNTIME_ERROR"
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required for the subprocess protocol test")
+def test_pi_sdk_length_error_reports_budget_without_provider_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text(_runner_source(), encoding="utf-8")
+    monkeypatch.setenv("SCREENING_AGENT_RUNNER", str(runner))
+    monkeypatch.setenv("SCREENING_NODE_PATH", NODE or "")
+    events = []
+    with pytest.raises(AIError, match="达到token上限") as caught:
+        asyncio.run(PiSDKProvider().analyze(**_bridge_args("length"), on_event=events.append))
+    assert "16384" in str(caught.value)
+    assert "secret-value" not in str(caught.value)
+    assert events == [{"stage": "usage", "usage": {
+        "model_calls": 5, "tool_calls": 7, "input_tokens": 1200, "output_tokens": 16384,
+    }}]
 
 
 def _record(record_id: int, body: str, *, project_key: str, notice_number: str,
@@ -246,8 +268,8 @@ def test_agent_run_persists_safe_activity_and_allows_included_related_citation(
         assert agent_run["status"] == "succeeded"
         assert agent_run["error"] is None
         assert agent_run["usage"] == {"model_calls": 1, "tool_calls": 1, "input_tokens": 20, "output_tokens": 30}
-        assert agent_run["limits"] == {"max_turns": 6, "max_tool_calls": 12, "timeout_ms": 180000,
-                                        "max_output_tokens": 4096}
+        assert agent_run["limits"] == {"max_turns": 6, "max_tool_calls": 12, "timeout_ms": 300000,
+                                        "max_output_tokens": 16384}
         labels = [step["label"] for step in agent_run["steps"]]
         assert labels == ["智能体已启动", "读取项目资料开始", "读取项目资料失败", "方案已通过校验"]
         assert all("secret" not in json.dumps(step, ensure_ascii=False).lower() for step in agent_run["steps"])

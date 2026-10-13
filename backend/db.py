@@ -100,7 +100,12 @@ CREATE TABLE IF NOT EXISTS judgments (
     reasons_json TEXT NOT NULL DEFAULT '[]',
     unknowns_json TEXT NOT NULL DEFAULT '[]',
     next_actions_json TEXT NOT NULL DEFAULT '[]',
-    options_json TEXT NOT NULL DEFAULT '[]'
+    options_json TEXT NOT NULL DEFAULT '[]',
+    analysis_meta_json TEXT,
+    report_json TEXT,
+    agent_run_id INTEGER,
+    research_dependencies_json TEXT NOT NULL DEFAULT '[]',
+    research_policy_version TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_judgments_project ON judgments(project_id, id DESC);
 CREATE TABLE IF NOT EXISTS decisions (
@@ -140,10 +145,85 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     error TEXT,
     steps_json TEXT NOT NULL DEFAULT '[]',
     usage_json TEXT NOT NULL DEFAULT '{}',
-    limits_json TEXT NOT NULL DEFAULT '{}'
+    limits_json TEXT NOT NULL DEFAULT '{}',
+    investigation_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id, id DESC);
+-- Research sources are deliberately separate from collector records.  A
+-- source identity is stable for a URL while every fetched representation is
+-- an immutable version.  Project links and relation assessments are scoped by
+-- both project and job so a research run cannot read another project's work.
+CREATE TABLE IF NOT EXISTS research_sources (
+    source_ref TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL DEFAULT '',
+    canonical_url TEXT NOT NULL,
+    original_url TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    published_at TEXT,
+    kind TEXT NOT NULL DEFAULT 'page',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    parent_source_ref TEXT,
+    config_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_sources_url ON research_sources(canonical_url);
+CREATE INDEX IF NOT EXISTS idx_research_sources_parent ON research_sources(parent_source_ref);
+CREATE TABLE IF NOT EXISTS research_source_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_ref TEXT NOT NULL REFERENCES research_sources(source_ref) ON DELETE CASCADE,
+    version TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    published_at TEXT,
+    fetched_at TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'page',
+    status TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL DEFAULT '',
+    body_text TEXT NOT NULL DEFAULT '',
+    page_texts_json TEXT NOT NULL DEFAULT '[]',
+    scope TEXT NOT NULL DEFAULT 'page',
+    parent_source_ref TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    created_job_id INTEGER,
+    UNIQUE(source_ref, version)
+);
+CREATE INDEX IF NOT EXISTS idx_research_source_versions_ref
+    ON research_source_versions(source_ref, id DESC);
+CREATE TABLE IF NOT EXISTS research_project_sources (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_ref TEXT NOT NULL REFERENCES research_sources(source_ref) ON DELETE CASCADE,
+    latest_version TEXT,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    relation TEXT NOT NULL DEFAULT 'unconfirmed',
+    relation_status TEXT NOT NULL DEFAULT 'unconfirmed',
+    scope TEXT NOT NULL DEFAULT 'candidate',
+    discovered_job_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(project_id, source_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_research_project_sources_project
+    ON research_project_sources(project_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS research_source_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    source_ref TEXT NOT NULL REFERENCES research_sources(source_ref) ON DELETE CASCADE,
+    source_version TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    relation_status TEXT NOT NULL,
+    quote TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT 'page',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_source_relations_project
+    ON research_source_relations(project_id, source_ref, id DESC);
+CREATE INDEX IF NOT EXISTS idx_research_source_relations_job
+    ON research_source_relations(job_id, id DESC);
 -- Procurement documents are kept independently from the collector正文.  A
 -- refresh can therefore add parsed attachment facts without rewriting the
 -- source record or its version history.
@@ -214,11 +294,33 @@ def connect(path: Path) -> sqlite3.Connection:
         db.execute("ALTER TABLE decisions ADD COLUMN judgment_id INTEGER")
     if "judgment_fingerprint" not in decision_columns:
         db.execute("ALTER TABLE decisions ADD COLUMN judgment_fingerprint TEXT")
+    judgment_columns = {row[1] for row in db.execute("PRAGMA table_info(judgments)")}
+    if "analysis_meta_json" not in judgment_columns:
+        # A missing value denotes the original enterprise-fit semantics.
+        db.execute("ALTER TABLE judgments ADD COLUMN analysis_meta_json TEXT")
+    if "agent_run_id" not in judgment_columns:
+        db.execute("ALTER TABLE judgments ADD COLUMN agent_run_id INTEGER")
+    if "research_dependencies_json" not in judgment_columns:
+        db.execute("ALTER TABLE judgments ADD COLUMN research_dependencies_json TEXT NOT NULL DEFAULT '[]'")
+    if "research_policy_version" not in judgment_columns:
+        db.execute("ALTER TABLE judgments ADD COLUMN research_policy_version TEXT")
+    if "report_json" not in judgment_columns:
+        # Older judgments deliberately remain legacy records.  A NULL value
+        # means the judgment was saved before the flexible report protocol.
+        db.execute("ALTER TABLE judgments ADD COLUMN report_json TEXT")
+    agent_run_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_runs)")}
+    if "investigation_json" not in agent_run_columns:
+        db.execute("ALTER TABLE agent_runs ADD COLUMN investigation_json TEXT NOT NULL DEFAULT '{}'")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_judgments_agent_run ON judgments(agent_run_id)")
     document_columns = {row[1] for row in db.execute("PRAGMA table_info(procurement_documents)")}
     if "is_current" not in document_columns:
         # Existing document rows predate version-aware refreshes. Treat them
         # as current once so the first refresh can supersede them safely.
         db.execute("ALTER TABLE procurement_documents ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1")
+    research_source_columns = {row[1] for row in db.execute("PRAGMA table_info(research_sources)")}
+    if research_source_columns and "published_at" not in research_source_columns:
+        db.execute("ALTER TABLE research_sources ADD COLUMN published_at TEXT")
+    db.commit()
     return db
 
 

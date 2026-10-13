@@ -12,38 +12,41 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
                   bounded_context_body, build_messages, correction_messages, extract_content, input_fingerprint,
                   sanitize_ai_error, validate_judgment)
 from .briefing import build_briefing
+from .procurement_facts import extract_announcement_facts
+from .analysis_policy import (ANALYSIS_POLICY_VERSION, DEFAULT_MARKET_GOAL,
+                              analysis_context, current_analysis_meta)
 from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
 from .db import connect
 from .ingest import ImportErrorDetail, ImportResult, import_records
 from .rules import business_sort_key, gate_for_project
+from .project_research import (RESEARCH_POLICY_VERSION, RESEARCH_TOOLS, ResearchSession,
+                               configuration_fingerprint, current_dependencies, list_sources, read_saved_source)
+from .agent_report import iter_report_evidence
+from .document_access import (DocumentAccessError, build_document_view, build_procurement_context,
+                              validate_document_access_arguments)
 from .utils import SHANGHAI, json_text, json_value, now_iso, parse_timestamp, safe_join, sha256_text
 
-try:
-    # The bounded parser is supplied by the root agent.  Keep the backend
-    # importable while that module is being built and make refresh report an
-    # unavailable parser rather than silently claiming that attachments were
-    # checked.
-    from .public_documents import fetch_record_documents
-except ImportError:  # pragma: no cover - exercised in the backend-only worktree
-    fetch_record_documents = None  # type: ignore[assignment]
+from .public_documents import fetch_record_documents, read_archived_documents
 
 
 DEFAULT_AGENT_LIMITS = {
     "max_turns": 6,
     "max_tool_calls": 12,
-    "timeout_ms": 180000,
-    "max_output_tokens": 4096,
+    "timeout_ms": 300000,
+    "max_output_tokens": 16384,
 }
 TRUSTED_AGENT_TOOLS = {"read_project_records", "read_company_capability", "read_related_records",
-                       "fetch_project_documents"}
+                       "fetch_project_documents", *RESEARCH_TOOLS}
 _DOCUMENT_STATUSES = {"parsed", "unsupported", "auth_required", "failed", "unreadable"}
 _PROCUREMENT_FIELDS = ("name", "specification", "material", "quantity", "unit", "delivery_period",
                        "delivery_location", "code", "standard", "note", "source_document_id", "record_id",
-                       "page", "quote")
+                       "page", "quote", "source_kind")
 
 
 class ServiceError(RuntimeError):
@@ -60,12 +63,15 @@ class ConflictError(ServiceError):
 
 class ScreeningService:
     def __init__(self, *, db_path: Path | None = None, source_path: Path | None = None,
-                 archive_root: Path | None = None, provider: AIProvider | None = None) -> None:
+                 archive_root: Path | None = None, provider: AIProvider | None = None,
+                 research_sources_path: Path | None = None, research_client: httpx.AsyncClient | None = None) -> None:
         from .config import database_path
 
         self.db_path = Path(db_path or database_path())
         self.source_path = Path(source_path or env_source_path())
         self.archive_root = Path(archive_root or env_archive_root(self.source_path))
+        self._research_sources_path = research_sources_path
+        self._research_client = research_client
         self.db = connect(self.db_path)
         self._injected_provider = provider is not None
         if provider is not None:
@@ -160,6 +166,17 @@ class ScreeningService:
                                     (key, json_text(value), now_iso()))
             if self.db.execute("SELECT 1 FROM meta WHERE key='settings_version'").fetchone() is None:
                 self.db.execute("INSERT INTO meta(key,value) VALUES ('settings_version','1')")
+            # Preserve old enterprise-fit reports and human choices verbatim.
+            # Policy upgrades invalidate reuse; they do not rewrite decisions
+            # or initiate paid bulk model calls just by opening the database.
+            for judgment in self.db.execute(
+                    "SELECT id,project_id,analysis_meta_json FROM judgments WHERE stale=0").fetchall():
+                if not current_analysis_meta(json_value(judgment["analysis_meta_json"], None)):
+                    self.db.execute("UPDATE judgments SET stale=1 WHERE id=?", (judgment["id"],))
+                    self.db.execute("UPDATE projects SET updated_at=? WHERE id=?",
+                                    (now_iso(), judgment["project_id"]))
+            self.db.execute("INSERT INTO meta(key,value) VALUES ('analysis_policy_version',?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ANALYSIS_POLICY_VERSION,))
 
     def start_background(self) -> None:
         if self._closed:
@@ -293,7 +310,9 @@ class ScreeningService:
         ai["engine"] = self._ai_engine(ai)
         ai["sdk_ready"] = PiSDKProvider.sdk_ready()
         version = int(self._get_meta("settings_version") or 1)
-        return {"business": business, "ai": ai, "import": import_settings, "version": version}
+        return {"business": business, "ai": ai, "import": import_settings, "version": version,
+                "analysis": {"goal": DEFAULT_MARKET_GOAL, "semantic_version": ANALYSIS_POLICY_VERSION,
+                             "company_profile_present": analysis_context(business)["company_profile_present"]}}
 
     def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -424,13 +443,16 @@ class ScreeningService:
             for key in ("name", "specification", "material", "quantity", "unit", "delivery_period",
                         "delivery_location", "code", "standard", "note", "source_document_id", "quote"):
                 item[key] = str(item.get(key) or "")[:20_000]
+            # Parsed rows are always attachment facts, even when an older
+            # parser payload omitted the optional discriminator.
+            item["source_kind"] = "attachment"
             # The server document is the authority for provenance; never let
             # a parser payload point an item at an unrelated document id.
             item["source_document_id"] = document_id
-            try:
-                item["record_id"] = int(item.get("record_id") or record_id)
-            except (TypeError, ValueError):
-                item["record_id"] = record_id
+            # The fetched document's record is the only trusted record
+            # provenance.  A parser row cannot redirect evidence to another
+            # record through a user-controlled ``record_id`` field.
+            item["record_id"] = int(record_id)
             try:
                 item["page"] = max(1, int(item.get("page") or 1))
             except (TypeError, ValueError):
@@ -498,38 +520,109 @@ class ScreeningService:
             "status": value.get("status"), "scope_summary": value.get("scope_summary"),
             "items": value.get("items", []), "delivery_period": value.get("delivery_period"),
             "delivery_location": value.get("delivery_location"), "missing_fields": value.get("missing_fields", []),
+            "scope_quote": value.get("scope_quote"), "attachment_status": value.get("attachment_status"),
+            "attachment_note": value.get("attachment_note"),
             "documents": documents,
         }))
 
+    @staticmethod
+    def _compact_attachment_note(quote: str, *, auth_required: bool = False) -> str:
+        """Keep access evidence readable while grounding it in the body."""
+        compact = re.sub(r"\s+", " ", str(quote or "")).strip()
+        actions = (("注册", "注册"), ("登录", "登录"), ("登陆", "登录"),
+                   ("购买", "购买"), ("审核", "审核"))
+        found = list(dict.fromkeys(label for token, label in actions if token in compact))
+        if found:
+            return "公告说明：招标文件需" + "、".join(found) + "后下载，请核对公告中的获取条件。"
+        elif auth_required:
+            return "附件服务返回需要登录或授权。"
+        return "公告说明文件获取受限，请核对公告中的获取条件。"
+
+    @staticmethod
+    def _attachment_access_state(record_rows: list[sqlite3.Row], documents: list[dict[str, Any]],
+                                 refresh: sqlite3.Row | None,
+                                 restriction_quotes: list[str]) -> tuple[str, str]:
+        """Classify attachment availability from observed evidence only.
+
+        A missing public attachment is a normal ``none_public`` outcome.  It
+        becomes ``restricted`` only when the body or a fetch result contains a
+        concrete access constraint; parser/network failures remain ``failed``.
+        """
+
+        source_attachment_count = 0
+        payload_statuses: list[str] = []
+        for row in record_rows:
+            payload = json_value(row["source_payload_json"], {})
+            attachments = payload.get("attachments", []) if isinstance(payload, dict) else []
+            if not isinstance(attachments, list):
+                continue
+            source_attachment_count += len(attachments)
+            for raw in attachments:
+                if isinstance(raw, dict):
+                    payload_statuses.append(str(raw.get("status") or "").strip().lower())
+
+        refresh_status = str(refresh["status"] or "").strip().lower() if refresh is not None else ""
+        refresh_message = str(refresh["message"] or "").strip() if refresh is not None else ""
+        if refresh_status == "failed":
+            return "failed", f"附件刷新失败：{refresh_message or '未提供错误原因'}"
+
+        document_statuses = [str(document.get("status") or "").strip().lower() for document in documents]
+        if "parsed" in document_statuses:
+            if any(status in {"failed", "unreadable", "unsupported"} for status in document_statuses):
+                return "available", "部分附件已解析，另有附件解析失败。"
+            return "available", ""
+        if "auth_required" in document_statuses or "auth_required" in payload_statuses:
+            note = ScreeningService._compact_attachment_note(
+                restriction_quotes[0] if restriction_quotes else "", auth_required=True,
+            )
+            return "restricted", note
+        if any(status in {"failed", "unreadable", "unsupported"} for status in document_statuses + payload_statuses):
+            return "failed", "附件存在实际获取或解析失败。"
+
+        if restriction_quotes:
+            return "restricted", ScreeningService._compact_attachment_note(restriction_quotes[0])
+        if refresh is not None:
+            if source_attachment_count:
+                return "none_public", "本次刷新未发现可公开解析的附件。"
+            return "none_public", "本次刷新未发现公开附件。"
+        return "not_checked", ""
+
     def _procurement_for_project(self, project_id: int) -> dict[str, Any]:
         record_rows = self.db.execute(
-            "SELECT r.id,r.source_payload_json FROM records r JOIN project_records pr ON pr.record_id=r.id "
+            "SELECT r.id,r.kind,r.body_text,r.source_payload_json FROM records r JOIN project_records pr ON pr.record_id=r.id "
             "WHERE pr.project_id=? ORDER BY r.id", (project_id,)
         ).fetchall()
         record_ids = [int(row["id"]) for row in record_rows]
         documents = self._document_sources_for_records(record_ids)
         refresh = self.db.execute("SELECT * FROM procurement_refreshes WHERE project_id=?", (project_id,)).fetchone()
-        source_attachment_count = 0
+
+        body_facts: list[dict[str, Any]] = []
+        restriction_quotes: list[str] = []
         for row in record_rows:
-            payload = json_value(row["source_payload_json"], {})
-            if isinstance(payload, dict) and isinstance(payload.get("attachments"), list):
-                source_attachment_count += len(payload["attachments"])
+            fact = extract_announcement_facts({
+                "id": int(row["id"]), "kind": row["kind"], "body_text": row["body_text"] or "",
+            })
+            body_facts.append(fact)
+            quote = str(fact.get("restriction_quote") or "").strip()
+            if quote and quote not in restriction_quotes:
+                restriction_quotes.append(quote)
 
         public_documents = [self._document_public_metadata(document) for document in documents]
         parsed_documents = [document for document in documents if document.get("status") == "parsed"]
         unresolved_documents = [document for document in documents if document.get("status") != "parsed"]
-        items: list[dict[str, Any]] = []
+        attachment_items: list[dict[str, Any]] = []
         seen_items: set[tuple[Any, ...]] = set()
         for document in parsed_documents:
             for raw_item in document.get("items", []):
                 if not isinstance(raw_item, dict):
                     continue
                 item = {key: raw_item.get(key, "") for key in _PROCUREMENT_FIELDS}
-                item["source_document_id"] = str(item.get("source_document_id") or document["id"])
-                try:
-                    item["record_id"] = int(item.get("record_id") or document["record_id"])
-                except (TypeError, ValueError):
-                    item["record_id"] = int(document["record_id"])
+                item["source_kind"] = "attachment"
+                item["source_document_id"] = str(document["id"])
+                # The server row is authoritative for both record and
+                # document provenance.  Parser payloads cannot point outside
+                # the current record or silently reassign an evidence row.
+                item["record_id"] = int(document["record_id"])
                 try:
                     item["page"] = max(1, int(item.get("page") or 1))
                 except (TypeError, ValueError):
@@ -538,7 +631,60 @@ class ScreeningService:
                 if key in seen_items:
                     continue
                 seen_items.add(key)
+                attachment_items.append(item)
+
+        # Parsed attachment rows are authoritative for matching details.  A
+        # same-name/same-quantity announcement summary is retained only as
+        # provenance, not counted a second time.  If values differ, preserve
+        # both rows and mark the conflict rather than silently overwriting one.
+        items: list[dict[str, Any]] = list(attachment_items)
+        body_seen: set[tuple[str, str, str]] = set()
+        conflicts: list[str] = []
+        for fact in body_facts:
+            for raw_item in fact.get("items", []) if isinstance(fact.get("items"), list) else []:
+                if not isinstance(raw_item, dict):
+                    continue
+                item = {key: raw_item.get(key, "") for key in _PROCUREMENT_FIELDS}
+                item["source_kind"] = "announcement"
+                item["source_document_id"] = ""
+                item["page"] = 0
+                try:
+                    item["record_id"] = int(item.get("record_id") or 0)
+                except (TypeError, ValueError):
+                    item["record_id"] = 0
+                identity = (str(item.get("name") or "").strip(), str(item.get("quantity") or "").strip(),
+                            str(item.get("unit") or "").strip())
+                if identity in body_seen:
+                    continue
+                body_seen.add(identity)
+                same_name = [candidate for candidate in attachment_items
+                             if str(candidate.get("name") or "").strip() == identity[0]]
+                same_values = [candidate for candidate in same_name
+                               if str(candidate.get("quantity") or "").strip() == identity[1]
+                               and str(candidate.get("unit") or "").strip() == identity[2]]
+                if same_values:
+                    continue
+                if same_name:
+                    conflict = (f"正文与附件明细的{identity[0]}数量或单位不一致，"
+                                "已保留双方来源。")
+                    conflicts.append(conflict)
+                    for candidate in same_name:
+                        old_note = str(candidate.get("note") or "").strip()
+                        candidate["note"] = f"{old_note}；{conflict}".strip("；")
+                    old_note = str(item.get("note") or "").strip()
+                    item["note"] = f"{old_note}；{conflict}".strip("；")
                 items.append(item)
+
+        body_periods = [str(fact.get("delivery_period") or "").strip() for fact in body_facts
+                        if str(fact.get("delivery_period") or "").strip()]
+        body_locations = [str(fact.get("delivery_location") or "").strip() for fact in body_facts
+                         if str(fact.get("delivery_location") or "").strip()]
+        attachment_status, attachment_note = self._attachment_access_state(
+            record_rows, documents, refresh, restriction_quotes,
+        )
+        if conflicts:
+            conflict_note = "；".join(dict.fromkeys(conflicts))
+            attachment_note = f"{attachment_note}；{conflict_note}".strip("；")
 
         # Keep the scope useful as a category summary.  A material list often
         # has many rows with the same name but different specifications; using
@@ -550,16 +696,46 @@ class ScreeningService:
             if name and name not in names:
                 names.append(name)
         if names:
-            preview = "、".join(names[:8])
+            preview_names = names[:8]
+            has_announcement = any(item.get("source_kind") == "announcement" for item in items)
+            if has_announcement:
+                # Announcement summaries carry the evidenced quantity so the
+                # list/briefing view remains useful when no public attachment
+                # is available.  Attachment-only summaries retain the
+                # established category wording.
+                quantified: list[str] = []
+                for name in preview_names:
+                    values = list(dict.fromkeys(
+                        f"{str(item.get('quantity') or '').strip()}{str(item.get('unit') or '').strip()}"
+                        for item in items if str(item.get("name") or "").strip() == name
+                        and str(item.get("quantity") or "").strip() and str(item.get("unit") or "").strip()
+                    ))
+                    quantified.append(f"{name}（{'、'.join(values)}）" if values else name)
+                preview = "、".join(quantified)
+            else:
+                preview = "、".join(preview_names)
             suffix = "等" if len(names) > 8 else ""
-            scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；各项规格、材质和数量见明细。"
+            if has_announcement and any(
+                    item.get("source_kind") == "announcement"
+                    and not str(item.get("specification") or "").strip()
+                    and not str(item.get("material") or "").strip()
+                    for item in items):
+                scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；详细规格和材质待核对原文或招标文件。"
+            else:
+                scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；各项规格、材质和数量见明细。"
         elif items:
             scope_summary = f"共{len(items)}项物料；各项规格、材质和数量见明细。"
         else:
             scope_summary = ""
 
-        periods = list(dict.fromkeys(str(item.get("delivery_period") or "").strip() for item in items if str(item.get("delivery_period") or "").strip()))
-        locations = list(dict.fromkeys(str(item.get("delivery_location") or "").strip() for item in items if str(item.get("delivery_location") or "").strip()))
+        periods = list(dict.fromkeys(
+            [str(item.get("delivery_period") or "").strip() for item in attachment_items
+             if str(item.get("delivery_period") or "").strip()] + body_periods
+        ))
+        locations = list(dict.fromkeys(
+            [str(item.get("delivery_location") or "").strip() for item in attachment_items
+             if str(item.get("delivery_location") or "").strip()] + body_locations
+        ))
         missing: list[str] = []
         if not items:
             missing.append("明细")
@@ -572,12 +748,24 @@ class ScreeningService:
             missing.append("交期")
         if not locations:
             missing.append("交地")
-        if unresolved_documents or (source_attachment_count and not documents):
+        if unresolved_documents:
             missing.append("附件未解析")
+        if attachment_status == "failed" and not unresolved_documents:
+            missing.append("附件未解析")
+        if attachment_status == "restricted" and not unresolved_documents:
+            missing.append("附件受限")
         missing = list(dict.fromkeys(missing))
 
         attempted = refresh is not None
-        if not documents:
+        has_body_facts = bool(items and any(item.get("source_kind") == "announcement" for item in items)
+                              or body_periods or body_locations)
+        if has_body_facts:
+            # Body facts are useful even when no document is public.  A
+            # failed/restricted attachment only limits completeness; it must
+            # never erase an evidenced announcement fact.
+            status = ("complete" if not missing and not conflicts
+                      and attachment_status not in {"failed", "restricted"} else "partial")
+        elif not documents:
             status = "unavailable" if attempted else "not_checked"
         elif not parsed_documents:
             status = "unavailable"
@@ -589,18 +777,22 @@ class ScreeningService:
         if refresh and refresh["attempted_at"]:
             updated_values.append(str(refresh["attempted_at"]))
         updated_at = max(updated_values) if updated_values else None
+        scope_quotes = [str(fact.get("scope_quote") or "").strip() for fact in body_facts
+                        if str(fact.get("scope_quote") or "").strip()]
         return {
             "status": status, "scope_summary": scope_summary, "items": items,
             "delivery_period": "；".join(periods)[:4000], "delivery_location": "；".join(locations)[:4000],
             "missing_fields": missing, "documents": public_documents, "updated_at": updated_at,
+            "attachment_status": attachment_status, "attachment_note": attachment_note,
+            "scope_quote": scope_quotes[0] if scope_quotes else "",
         }
 
-    async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]], *,
+                                        preloaded: dict[int, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
         """Fetch and persist attachment documents without invoking an AI provider."""
-        if fetch_record_documents is None:
-            raise ServiceError("采购附件解析模块未就绪")
         before = self._procurement_for_project(project_id)
         target_record_ids = [int(record["id"]) for record in records]
+        previous = self._document_sources_for_records(target_record_ids)
         fetched: list[dict[str, Any]] = []
         for record in records:
             record_id = int(record["id"])
@@ -613,7 +805,8 @@ class ScreeningService:
                 "attachments": record.get("attachments") if isinstance(record.get("attachments"), list) else [],
             }
             try:
-                result = await fetch_record_documents(request_record)
+                result = (preloaded[record_id] if preloaded is not None and record_id in preloaded
+                          else await fetch_record_documents(request_record))
                 if not isinstance(result, list):
                     raise ValueError("invalid_document_result")
             except Exception as exc:
@@ -638,8 +831,23 @@ class ScreeningService:
                 # empty result therefore also reflects attachment deletion.
                 self.db.execute(f"UPDATE procurement_documents SET is_current=0 WHERE record_id IN ({placeholders})",
                                 tuple(target_record_ids))
+            # An observed read failure is different from an observed removal.
+            # Retain the last successful bytes alongside the failed attempt;
+            # the aggregate stays partial and shows both timestamps/statuses.
+            for saved in previous:
+                failed = [value for value in fetched if value["record_id"] == saved["record_id"]
+                          and value["status"] != "parsed"
+                          and (value["url"] == saved["url"] or value["id"].startswith("fetch-"))]
+                replaced = any(value["record_id"] == saved["record_id"] and value["status"] == "parsed"
+                               and value["url"] == saved["url"] for value in fetched)
+                if saved["status"] == "parsed" and failed and not replaced:
+                    self.db.execute("UPDATE procurement_documents SET is_current=1 WHERE id=?", (saved["id"],))
             for document in fetched:
-                existing = self.db.execute("SELECT sha256 FROM procurement_documents WHERE id=?", (document["id"],)).fetchone()
+                existing = self.db.execute("SELECT sha256,status FROM procurement_documents WHERE id=?", (document["id"],)).fetchone()
+                if existing and existing["status"] == "parsed" and document["status"] != "parsed":
+                    attempt_key = ":".join(document[key] for key in ("id", "status", "error", "sha256"))
+                    document["id"] = f"attempt-{sha256_text(attempt_key)[:32]}"
+                    document["fetched_at"] = document["fetched_at"] or now_iso()
                 if existing and existing["sha256"] and document["sha256"] and existing["sha256"] != document["sha256"]:
                     old_id = document["id"]
                     document["id"] = f"{old_id}-{document['sha256'][:16]}"
@@ -690,13 +898,28 @@ class ScreeningService:
             message = str(exc)
         return {"procurement": procurement, "message": message}
 
-    async def _agent_fetch_documents(self, project_id: int, arguments: Any) -> dict[str, Any]:
-        if not isinstance(arguments, dict) or any(key != "record_id" for key in arguments):
-            raise AIError("工具参数无效")
-        value = arguments.get("record_id")
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
-            raise AIError("工具参数无效")
-        records = self._records_for_project(project_id)
+    def document_snapshot(self, project_id: int, document_id: str, *, sha256: str = "") -> dict[str, Any]:
+        """Serve the saved version, including superseded files, within its project."""
+        self._project_row(project_id)
+        row = self.db.execute(
+            "SELECT d.* FROM procurement_documents d JOIN project_records pr ON pr.record_id=d.record_id "
+            "WHERE pr.project_id=? AND d.id=?", (project_id, document_id),
+        ).fetchone()
+        if row is None or (sha256 and row["sha256"] != sha256):
+            raise NotFoundError("附件快照不存在或版本不匹配")
+        document = self._document_row_value(row)
+        return {**self._document_public_metadata(document), "text": document["text"],
+                "page_texts": document["page_texts"], "items": document["items"]}
+
+    async def _agent_fetch_documents(self, project_id: int, arguments: Any, *,
+                                     cache: dict[int, list[dict[str, Any]]] | None = None,
+                                     records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        try:
+            request = validate_document_access_arguments(arguments)
+        except DocumentAccessError as exc:
+            raise AIError("工具参数无效") from exc
+        value = request.record_id
+        records = records if records is not None else self._records_for_project(project_id)
         allowed = {int(record["id"]): record for record in records}
         if value is None:
             targets = records
@@ -704,9 +927,32 @@ class ScreeningService:
             targets = [allowed[int(value)]]
         else:
             raise AIError("工具无权限")
-        await self._refresh_record_documents(project_id, targets)
-        documents = self._document_sources_for_records([int(record["id"]) for record in targets])
-        return {"documents": documents, "procurement": self._procurement_for_project(project_id)}
+        cache = cache if cache is not None else {}
+        unread = [record for record in targets if int(record["id"]) not in cache]
+        for record in unread:
+            archived = await asyncio.to_thread(read_archived_documents, record, self.archive_root)
+            # Reuse only a complete set of verified archive files. Otherwise
+            # normal acquisition reports missing/failed files explicitly.
+            attachments = record.get("attachments", [])
+            if (archived and isinstance(attachments, list) and len(archived) == len(attachments)
+                    and all(document["status"] == "parsed" for document in archived)):
+                await self._refresh_record_documents(project_id, [record], preloaded={int(record["id"]): archived})
+                cache[int(record["id"])] = self._document_sources_for_records([int(record["id"])])
+            else:
+                await self._refresh_record_documents(project_id, [record])
+                cache[int(record["id"])] = self._document_sources_for_records([int(record["id"])])
+        documents = [document for record in targets for document in cache[int(record["id"])]]
+        try:
+            view = build_document_view(documents, request)
+        except DocumentAccessError as exc:
+            raise AIError("工具无权限" if exc.code == "record_not_in_project" else "工具参数无效") from exc
+        # A compact summary avoids re-injecting thousands of material rows on
+        # each page read; full procurement detail remains in the API and DB.
+        procurement = self._procurement_for_project(project_id)
+        compact = {key: procurement.get(key) for key in (
+            "status", "scope_summary", "delivery_period", "delivery_location", "attachment_status", "attachment_note",
+        )}
+        return {**view, "procurement": compact}
 
     @staticmethod
     def _analysis_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -749,35 +995,31 @@ class ScreeningService:
         return value
 
     @staticmethod
-    def _replace_job_document_snapshot(current: list[dict[str, Any]], returned: Any,
-                                        target_record_ids: set[int]) -> list[dict[str, Any]]:
-        """Replace only records read by this job's document tool.
-
-        Validation must use the initial snapshot plus this job's own tool
-        responses. A later manual refresh in another request must not make a
-        model citation valid retroactively.
-        """
-        result = []
-        for document in current:
-            if not isinstance(document, dict):
+    def _merge_job_document_reads(current: list[dict[str, Any]], returned: Any,
+                                   target_record_ids: set[int]) -> list[dict[str, Any]]:
+        """Accumulate actual read windows without treating unread text as evidence."""
+        registry = {(document["record_id"], document["id"]): copy.deepcopy(document) for document in current}
+        for document in returned if isinstance(returned, list) else []:
+            if not isinstance(document, dict) or document.get("record_id") not in target_record_ids:
                 continue
-            try:
-                record_id = int(document.get("record_id"))
-            except (TypeError, ValueError):
-                continue
-            if record_id not in target_record_ids:
-                result.append(document)
-        if isinstance(returned, list):
-            for document in returned:
-                if not isinstance(document, dict) or not isinstance(document.get("id"), str):
-                    continue
-                try:
-                    record_id = int(document.get("record_id"))
-                except (TypeError, ValueError):
-                    continue
-                if record_id in target_record_ids:
-                    result.append(copy.deepcopy(document))
-        return result
+            key = (document["record_id"], document.get("id"))
+            saved = registry.get(key)
+            if saved is None or saved.get("sha256") != document.get("sha256"):
+                saved = {**copy.deepcopy(document), "read_fragments": []}
+                registry[key] = saved
+            fragments = document.get("page_texts", [])
+            for fragment in fragments if isinstance(fragments, list) else []:
+                if isinstance(fragment, dict) and fragment.get("text"):
+                    value = {"page": fragment.get("page"), "text": str(fragment["text"])}
+                    if value not in saved["read_fragments"]:
+                        saved["read_fragments"].append(value)
+            # A document-level or DOCX window has no page number; retain its
+            # continuous text as a separate window, never concatenate reads.
+            if document.get("text"):
+                value = {"page": None, "text": str(document["text"])}
+                if value not in saved["read_fragments"]:
+                    saved["read_fragments"].append(value)
+        return list(registry.values())
 
     def _analysis_project_snapshot(self, project_id: int, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         project_row = self._project_row(project_id)
@@ -799,7 +1041,7 @@ class ScreeningService:
             "records": [self._analysis_record(record) for record in records],
             # The aggregate contains only server-parsed facts and document
             # metadata. Full text remains available through the trusted tool.
-            "procurement": procurement,
+            "procurement": build_procurement_context(procurement),
             "procurement_fingerprint": self._procurement_fingerprint(procurement),
             "updated_at": project_row["updated_at"],
         }
@@ -920,8 +1162,10 @@ class ScreeningService:
         related = self._analysis_related_context(project_id, records)
         return {
             "project": self._analysis_project_snapshot(project_id, records),
-            "company_capability_card": copy.deepcopy(capability),
+            **analysis_context(capability),
             "related_projects": copy.deepcopy(related),
+            "research": {"policy_version": RESEARCH_POLICY_VERSION,
+                         "sources": list_sources(self.db, project_id)},
         }, related
 
     def _project_row(self, project_id: int) -> sqlite3.Row:
@@ -981,7 +1225,33 @@ class ScreeningService:
             "status": row["status"] if row["status"] in {"running", "succeeded", "failed"} else "failed",
             "started_at": row["started_at"], "finished_at": row["finished_at"],
             "error": row["error"], "steps": safe_steps, "usage": usage, "limits": limits,
+            "investigation": json_value(row["investigation_json"], {}) or None,
         }
+
+    def research_runs(self, project_id: int) -> dict[str, Any]:
+        project_id = int(self._project_row(project_id)["id"])
+        rows = self.db.execute("SELECT * FROM agent_runs WHERE project_id=? ORDER BY id DESC LIMIT 50",
+                               (project_id,)).fetchall()
+        total = self.db.execute("SELECT COUNT(*) FROM agent_runs WHERE project_id=?", (project_id,)).fetchone()[0]
+        return {"items": [self._agent_run_dict(row) for row in rows], "total": int(total)}
+
+    def research_run(self, project_id: int, run_id: int) -> dict[str, Any]:
+        project_id = int(self._project_row(project_id)["id"])
+        row = self.db.execute("SELECT * FROM agent_runs WHERE project_id=? AND id=?",
+                              (project_id, run_id)).fetchone()
+        value = self._agent_run_dict(row)
+        if value is None:
+            raise NotFoundError("调查运行记录不存在")
+        return value
+
+    def research_source_snapshot(self, project_id: int, source_ref: str, version: str, *,
+                                 page: int | None = None, offset: int = 0, limit: int = 4000) -> dict[str, Any]:
+        project_id = int(self._project_row(project_id)["id"])
+        try:
+            return read_saved_source(self.db, project_id, source_ref, version,
+                                     page=page, offset=offset, limit=limit)
+        except (LookupError, ValueError, PermissionError) as exc:
+            raise NotFoundError("调查来源版本不存在或不属于当前项目") from exc
 
     def _source_data_updated_at(self) -> str | None:
         """Return the collector's update time, rather than this app's import time.
@@ -1093,12 +1363,35 @@ class ScreeningService:
     def _judgment_dict(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
+        metadata = json_value(row["analysis_meta_json"], None)
+        report_value = json_value(row["report_json"], None)
+        report = report_value if isinstance(report_value, dict) else None
+        dependencies = json_value(row["research_dependencies_json"], [])
+        changed_sources = self._research_dependencies_changed(int(row["project_id"]), dependencies)
+        run = None
+        if row["agent_run_id"] is not None:
+            run = self._agent_run_dict(self.db.execute("SELECT * FROM agent_runs WHERE id=? AND project_id=?",
+                                      (row["agent_run_id"], row["project_id"])).fetchone())
+        investigation = run.get("investigation") if run else None
+        changed_configuration = bool(isinstance(investigation, dict)
+                                     and investigation.get("configuration_fingerprint")
+                                     and investigation["configuration_fingerprint"] != configuration_fingerprint(
+                                         self._research_sources_path))
         return {
             "id": int(row["id"]), "created_at": row["created_at"], "model": row["model"],
-            "input_fingerprint": row["input_fingerprint"], "stale": bool(row["stale"]),
+            "input_fingerprint": row["input_fingerprint"],
+            "stale": bool(row["stale"]) or not current_analysis_meta(metadata)
+                     or row["research_policy_version"] != RESEARCH_POLICY_VERSION or changed_sources or changed_configuration,
+            "analysis_meta": metadata if isinstance(metadata, dict) else None,
             "decision": row["decision"], "summary": row["summary"], "demand_summary": row["demand_summary"],
             "reasons": json_value(row["reasons_json"], []), "unknowns": json_value(row["unknowns_json"], []),
             "next_actions": json_value(row["next_actions_json"], []), "options": json_value(row["options_json"], []),
+            "report": report,
+            "agent_run_id": int(row["agent_run_id"]) if row["agent_run_id"] is not None else None,
+            "investigation": run.get("investigation") if run else {
+                "policy_version": RESEARCH_POLICY_VERSION, "status": "not_performed",
+                "stop_reason": "该报告未执行主动补查", "events": [], "sources": [], "unresolved": [],
+            },
         }
 
     def summary(self, project_id: int) -> dict[str, Any]:
@@ -1151,12 +1444,33 @@ class ScreeningService:
         # Keep source-derived briefing fields intact while exposing parsed
         # attachment facts beside them for detail and list clients.
         briefing["procurement"] = procurement
+        equipment_values = sorted({str(x) for r in records for x in r.get("equipment", []) if x})
+        if not equipment_values:
+            # Collector equipment remains authoritative when present.  An
+            # evidenced procurement item is a safe fallback for source rows
+            # whose equipment field was empty; titles are never consulted.
+            equipment_values = sorted({str(item.get("name") or "").strip()
+                                       for item in procurement.get("items", [])
+                                       if isinstance(item, dict) and str(item.get("name") or "").strip()})
         ai_next_actions = active_judgment.get("next_actions") if active_judgment else []
         if not isinstance(ai_next_actions, list):
             ai_next_actions = []
+        opportunity_signals: list[dict[str, Any]] = []
+        if active_judgment and isinstance(active_judgment.get("report"), dict):
+            raw_signals = active_judgment["report"].get("opportunities", [])
+            if isinstance(raw_signals, list):
+                opportunity_signals = [item for item in raw_signals if isinstance(item, dict)]
+        latest_run = self._latest_agent_run(project_id)
+        investigation = json_value(latest_run["investigation_json"], {}) if latest_run else {}
+        research_summary = None
+        if isinstance(investigation, dict) and investigation.get("status"):
+            research_summary = {"status": investigation["status"],
+                                "source_count": len(investigation.get("sources", [])),
+                                "stop_reason": investigation.get("stop_reason"),
+                                "updated_at": latest_run["finished_at"] or latest_run["started_at"]}
         return {
             "id": int(project_id), "title": latest.get("title") or f"项目 {project_id}",
-            "buyer": latest.get("buyer"), "equipment": sorted({str(x) for r in records for x in r.get("equipment", []) if x}),
+            "buyer": latest.get("buyer"), "equipment": equipment_values,
             "kind": latest.get("kind") or "tender", "source_id": latest.get("source_id") or "",
             "record_ids": [int(r["id"]) for r in records], "published_at": published,
             "deadline_at": deadline, "updated_at": project_row["updated_at"], "gate_status": gate,
@@ -1165,6 +1479,9 @@ class ScreeningService:
             "ai_summary": active_judgment["summary"] if active_judgment else None,
             "demand_summary": active_judgment["demand_summary"] if active_judgment else None,
             "ai_next_actions": ai_next_actions,
+            "analysis_meta": active_judgment.get("analysis_meta") if active_judgment else None,
+            "opportunity_signals": opportunity_signals,
+            "research_summary": research_summary,
             "briefing": briefing,
             "procurement": procurement,
             "procurement_fingerprint": self._procurement_fingerprint(procurement),
@@ -1208,7 +1525,7 @@ class ScreeningService:
         return {**summary, "records": records, "judgment": history[0] if history else None,
                 "judgment_history": history, "decision_history": decision_history,
                 "related_projects": [self.summary(pid) for pid in sorted(related_ids)], "versions": version_values,
-                "agent_run": agent_run}
+                "agent_run": agent_run, "research_sources": list_sources(self.db, project_id)}
 
     def _project_for_record_id(self, record_id: int) -> int | None:
         row = self.db.execute("SELECT project_id FROM project_records WHERE record_id=?", (record_id,)).fetchone()
@@ -1231,7 +1548,7 @@ class ScreeningService:
                                  str((item.get("procurement") or {}).get("delivery_location") or "")]).lower()
             if q and q.lower() not in haystack:
                 continue
-            if active_only and item["gate_status"] not in {"candidate", "review"}:
+            if active_only and item["gate_status"] not in {"candidate", "review", "signal"}:
                 continue
             if gate and item["gate_status"] != gate:
                 continue
@@ -1307,7 +1624,7 @@ class ScreeningService:
             with self._db_lock:
                 result = import_records(self.db, self.source_path)
             with self._db_lock, self.db:
-                self._mark_related_context_changes(related_context_before)
+                related_changes = self._mark_related_context_changes(related_context_before)
                 self.db.execute("UPDATE imports SET status='success',inserted=?,updated=?,unchanged=?,total=?,finished_at=? WHERE id=?",
                                 (result.inserted, result.updated, result.unchanged, result.total, now_iso(), import_id))
                 # This timestamp describes the collector's source update.  It
@@ -1325,7 +1642,10 @@ class ScreeningService:
                 self.db.execute("INSERT INTO meta(key,value) VALUES ('source_signature',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                 (json_text(list(self._last_import_signature)),))
             if self._ai_config()["configured"]:
-                self.queue_pending(schedule=False)
+                # A daily incremental import must not rerun an unrelated old
+                # backlog merely because its policy/model result is stale.
+                for project_id in sorted(set(result.affected_project_ids) | set(related_changes)):
+                    self.queue_project(project_id, schedule=False)
             return {"inserted": result.inserted, "updated": result.updated, "unchanged": result.unchanged,
                     "total": result.total, "message": "导入完成"}
         except (ImportErrorDetail, OSError) as exc:
@@ -1358,7 +1678,9 @@ class ScreeningService:
         if gate in {"excluded", "expired", "duplicate", "closed"}:
             return {"job_id": None, "status": "skipped", "message": "该项目当前门槛状态不需要 AI 分析"}
         current = self._latest_judgment(project_id)
-        if current and not bool(current["stale"]) and not force:
+        if (current and not self._judgment_dict(current)["stale"]
+                and current_analysis_meta(json_value(current["analysis_meta_json"], None))
+                and current["research_policy_version"] == RESEARCH_POLICY_VERSION and not force):
             return {"job_id": None, "status": "succeeded", "message": "已有最新判断"}
         queued = self.db.execute("SELECT id,status FROM jobs WHERE project_id=? AND status IN ('queued','running') ORDER BY id DESC LIMIT 1",
                                  (project_id,)).fetchone()
@@ -1387,12 +1709,17 @@ class ScreeningService:
         return count
 
     def _analysis_fingerprint(self, project: dict[str, Any], capability: dict[str, Any], config: dict[str, Any],
-                              related_context: list[dict[str, Any]] | None = None) -> str:
+                              related_context: list[dict[str, Any]] | None = None,
+                              research_dependencies: list[dict[str, Any]] | None = None,
+                              research_configuration: str | None = None) -> str:
         return sha256_text(json_text({
             "input": input_fingerprint(project, capability, related_context),
             "gate_status": project.get("gate_status"), "gate_reasons": project.get("gate_reasons", []),
             "model": config.get("model"), "base_url": config.get("base_url"),
             "enabled": config.get("enabled"), "engine": config.get("engine"),
+            "research_policy": RESEARCH_POLICY_VERSION,
+            "research_configuration": research_configuration or configuration_fingerprint(self._research_sources_path),
+            "research_dependencies": research_dependencies or [],
         }))
 
     def _agent_limits(self) -> dict[str, int]:
@@ -1429,6 +1756,10 @@ class ScreeningService:
                     "read_company_capability": "读取公司能力",
                     "read_related_records": "读取关联资料",
                     "fetch_project_documents": "读取采购附件",
+                    "search_project_sources": "搜索项目资料",
+                    "read_research_source": "读取调查来源",
+                    "assess_source_relation": "核实资料关系",
+                    "search_research_content": "检索资料内容",
                 }
                 name = names[tool]
                 if stage == "tool_start":
@@ -1489,6 +1820,39 @@ class ScreeningService:
         except sqlite3.ProgrammingError:
             return
 
+    def _record_investigation(self, agent_run_id: int, session: ResearchSession, *,
+                              status: str | None = None, stop_reason: str | None = None,
+                              unresolved: list[str] | None = None, configuration: str | None = None) -> None:
+        value = session.investigation(status=status, stop_reason=stop_reason, unresolved=unresolved)
+        value["configuration_fingerprint"] = configuration or configuration_fingerprint(self._research_sources_path)
+        try:
+            with self._db_lock, self.db:
+                self.db.execute("UPDATE agent_runs SET investigation_json=? WHERE id=?",
+                                (json_text(value), agent_run_id))
+        except sqlite3.ProgrammingError:
+            return
+
+    @staticmethod
+    def _cited_research_dependencies(judgment: dict[str, Any], session: ResearchSession | None) -> list[dict[str, Any]]:
+        if session is None:
+            return []
+        cited = {(evidence["source_ref"], evidence["source_version"])
+                 for reason in judgment.get("reasons", []) for evidence in reason.get("evidence", [])
+                 if isinstance(evidence, dict) and "source_ref" in evidence and "source_version" in evidence}
+        cited.update((evidence["source_ref"], evidence["source_version"])
+                     for evidence in iter_report_evidence(judgment.get("report"))
+                     if "source_ref" in evidence and "source_version" in evidence)
+        return sorted((dependency for dependency in session.dependencies()
+                       if (dependency["source_ref"], dependency["source_version"]) in cited),
+                      key=lambda dependency: (dependency["source_ref"], dependency["source_version"]))
+
+    def _research_dependencies_changed(self, project_id: int, dependencies: list[dict[str, Any]]) -> bool:
+        comparisons = current_dependencies(self.db, project_id, dependencies)
+        if len(comparisons) != len(dependencies):
+            return True
+        return any(current.get("changed") or current.get("relation_status") != saved.get("relation_status")
+                   for saved, current in zip(dependencies, comparisons))
+
     async def run_job(self, job_id: int) -> None:
         if job_id in self._active_jobs:
             return
@@ -1497,6 +1861,8 @@ class ScreeningService:
         if current_task is not None:
             self._run_tasks.add(current_task)
         agent_run_id: int | None = None
+        research_session: ResearchSession | None = None
+        research_configuration_snapshot: str | None = None
         try:
             with self._db_lock, self.db:
                 job = self.db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -1529,7 +1895,9 @@ class ScreeningService:
             document_sources = self._document_sources_for_records(
                 [int(record["id"]) for record in records if record.get("id") is not None]
             )
-            fingerprint = self._analysis_fingerprint(project, capability, config, related_context)
+            research_configuration_snapshot = configuration_fingerprint(self._research_sources_path)
+            fingerprint = self._analysis_fingerprint(project, capability, config, related_context,
+                                                     research_configuration=research_configuration_snapshot)
             with self._db_lock, self.db:
                 self.db.execute("UPDATE jobs SET input_fingerprint=?,updated_at=? WHERE id=?", (fingerprint, now_iso(), job_id))
             messages = build_messages(project, capability, related_context)
@@ -1538,18 +1906,39 @@ class ScreeningService:
                 provider = OpenAICompatibleProvider()
             uses_agent = config.get("engine") == "pi_sdk" and callable(getattr(provider, "analyze", None))
             if uses_agent:
+                document_sources = []
+                document_cache: dict[int, list[dict[str, Any]]] = {}
                 agent_run_id = self._new_agent_run(job_id, project_id)
+                research_session = ResearchSession(
+                    self.db, project_id=project_id, job_id=job_id, records=records,
+                    db_lock=self._db_lock, sources_path=self._research_sources_path, client=self._research_client,
+                )
+                self._record_investigation(agent_run_id, research_session, configuration=research_configuration_snapshot)
+                fingerprint_project = copy.deepcopy(project)
 
                 async def on_event(event: dict[str, Any]) -> None:
-                    self._record_agent_event(agent_run_id, event)
+                    if event.get("stage") == "usage":
+                        self._update_agent_usage(agent_run_id, event.get("usage"))
+                    else:
+                        self._record_agent_event(agent_run_id, event)
 
-                async def tool_callback(arguments: dict[str, Any]) -> dict[str, Any]:
+                async def tool_callback(arguments: dict[str, Any], *, tool: str = "fetch_project_documents") -> dict[str, Any]:
                     nonlocal fingerprint, document_sources
-                    value = await self._agent_fetch_documents(project_id, arguments)
+                    if str(config.get("api_key") or "") and config["api_key"] in json_text(arguments):
+                        raise AIError("工具参数包含受限凭据")
+                    if tool in RESEARCH_TOOLS:
+                        try:
+                            return await research_session.execute(tool, arguments)
+                        finally:
+                            self._record_investigation(agent_run_id, research_session,
+                                                       configuration=research_configuration_snapshot)
+                    if tool != "fetch_project_documents":
+                        raise AIError("工具参数无效")
+                    value = await self._agent_fetch_documents(project_id, arguments, cache=document_cache, records=records)
                     requested_record_id = arguments.get("record_id") if isinstance(arguments, dict) else None
                     target_record_ids = ({int(record["id"]) for record in records}
                                          if requested_record_id is None else {int(requested_record_id)})
-                    document_sources = self._replace_job_document_snapshot(
+                    document_sources = self._merge_job_document_reads(
                         document_sources, value.get("documents") if isinstance(value, dict) else None,
                         target_record_ids,
                     )
@@ -1557,12 +1946,13 @@ class ScreeningService:
                     # Keep the original source/capability/config snapshot and
                     # replace only the procurement component. A concurrent
                     # source import is still detected by the final comparison.
-                    fingerprint_project = copy.deepcopy(project)
                     if isinstance(value, dict) and isinstance(value.get("procurement"), dict):
-                        fingerprint_project["procurement"] = value["procurement"]
-                        fingerprint_project["procurement_fingerprint"] = self._procurement_fingerprint(value["procurement"])
+                        procurement_snapshot = self._procurement_for_project(project_id)
+                        fingerprint_project["procurement"] = procurement_snapshot
+                        fingerprint_project["procurement_fingerprint"] = self._procurement_fingerprint(procurement_snapshot)
                     fingerprint = self._analysis_fingerprint(
-                        fingerprint_project, capability, config, related_context
+                        fingerprint_project, capability, config, related_context,
+                        research_configuration=research_configuration_snapshot,
                     )
                     return value
 
@@ -1575,9 +1965,12 @@ class ScreeningService:
                 # Request failures (including credentials, timeouts and rate limits)
                 # are not output errors and must not trigger a correction request.
                 if uses_agent:
+                    runtime_limits = self._agent_limits()
+                    if correction:
+                        runtime_limits = {**runtime_limits, "max_turns": min(runtime_limits["max_turns"], 3)}
                     analyze_kwargs = {
                         "base_url": config["base_url"], "model": config["model"], "api_key": config["api_key"],
-                        "messages": messages, "context": context, "limits": self._agent_limits(), "on_event": on_event,
+                        "messages": messages, "context": context, "limits": runtime_limits, "on_event": on_event,
                     }
                     try:
                         parameters = inspect.signature(provider.analyze).parameters  # type: ignore[attr-defined]
@@ -1608,7 +2001,10 @@ class ScreeningService:
                     judgment = validate_judgment(content, project, config["model"], fingerprint,
                                                  related_records=related_records,
                                                  forbidden_values=[str(config.get("api_key") or "")],
-                                                 document_sources=document_sources)
+                                                 document_sources=document_sources,
+                                                 company_material=capability,
+                                                 research_sources=research_session.evidence_sources() if research_session else [],
+                                                 require_report=isinstance(provider, (PiSDKProvider, OpenAICompatibleProvider)))
                     break
                 except AIError as exc:
                     if correction:
@@ -1618,19 +2014,30 @@ class ScreeningService:
                         # activity feed.  The raw validation error can contain
                         # model text, so only use the trusted stage label.
                         self._record_agent_event(agent_run_id, {"stage": "model"})
-                    messages = correction_messages(messages, exc)
-            capability_has_content = any(str(capability.get(key) or "").strip()
-                                         for key in ("company_name", "scope_description", "supported_products",
-                                                     "capabilities", "solution_examples", "region_preferences"))
-            if not capability_has_content:
-                # A configured model may still summarize the demand, but an
-                # empty capability card cannot support a positive fit claim or
-                # a fabricated supply option.
-                judgment["decision"] = "verify"
-                judgment["options"] = []
-                if "公司能力卡为空，需先补充能力资料" not in judgment["unknowns"]:
-                    judgment["unknowns"].append("公司能力卡为空，需先补充能力资料")
+                    messages = correction_messages(messages, exc, previous_output=content,
+                        available_evidence={
+                            "documents": [{key: document.get(key) for key in
+                                           ("id", "record_id", "name", "read_fragments")}
+                                          for document in document_sources],
+                            "research_sources": research_session.evidence_sources() if research_session else [],
+                        })
             judgment["created_at"] = now_iso()
+            dependencies = self._cited_research_dependencies(judgment, research_session)
+            if uses_agent:
+                # Only cited versions affect the final report identity. Search
+                # candidates and unused reads cannot invalidate the job itself.
+                fingerprint = self._analysis_fingerprint(fingerprint_project, capability, config,
+                                                         related_context, dependencies, research_configuration_snapshot)
+            judgment["input_fingerprint"] = fingerprint
+            if agent_run_id is not None and research_session is not None:
+                investigation = research_session.investigation()
+                has_events = bool(investigation.get("events"))
+                status = "limited" if investigation.get("status") == "limited" else (
+                    "completed" if has_events else "not_performed")
+                self._record_investigation(agent_run_id, research_session, status=status,
+                                           stop_reason=investigation.get("stop_reason") or (
+                                               "补查已结束，未解决事项见下方" if has_events else "本轮依据已有资料分析，未执行主动补查"),
+                                           unresolved=judgment["unknowns"], configuration=research_configuration_snapshot)
             # A file import or settings update may have completed while the
             # provider was awaiting the network. Preserve this result only as a
             # stale audit entry, then enqueue a fresh generation from current
@@ -1640,13 +2047,18 @@ class ScreeningService:
             current_capability = self._section("business")
             current_context, current_related_context = self._analysis_context(project_id, current_capability)
             stale_generation = fingerprint != self._analysis_fingerprint(
-                current_project, current_capability, current_config, current_related_context)
+                current_project, current_capability, current_config, current_related_context,
+                dependencies) or self._research_dependencies_changed(project_id, dependencies)
             with self._db_lock, self.db:
                 self.db.execute("""INSERT INTO judgments(project_id,created_at,model,input_fingerprint,stale,decision,summary,demand_summary,
-                                  reasons_json,unknowns_json,next_actions_json,options_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                  reasons_json,unknowns_json,next_actions_json,options_json,analysis_meta_json,report_json,agent_run_id,
+                                  research_dependencies_json,research_policy_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                                 (project_id, judgment["created_at"], judgment["model"], judgment["input_fingerprint"], int(stale_generation), judgment["decision"],
                                  judgment["summary"], judgment["demand_summary"], json_text(judgment["reasons"]), json_text(judgment["unknowns"]),
-                                 json_text(judgment["next_actions"]), json_text(judgment["options"])))
+                                 json_text(judgment["next_actions"]), json_text(judgment["options"]),
+                                 json_text(judgment["analysis_meta"]),
+                                 json_text(judgment["report"]) if isinstance(judgment.get("report"), dict) else None,
+                                 agent_run_id, json_text(dependencies), RESEARCH_POLICY_VERSION))
                 self.db.execute("UPDATE jobs SET status='succeeded',finished_at=?,updated_at=?,error=NULL WHERE id=?",
                                 (now_iso(), now_iso(), job_id))
             if agent_run_id is not None:
@@ -1658,6 +2070,9 @@ class ScreeningService:
                 self.queue_project(project_id, force=True, schedule=False)
         except asyncio.CancelledError:
             if agent_run_id is not None:
+                if research_session is not None:
+                    self._record_investigation(agent_run_id, research_session, status="limited", stop_reason="任务已取消",
+                                               configuration=research_configuration_snapshot)
                 self._finish_agent_run(agent_run_id, "failed", "任务已取消")
             if not self._closed:
                 try:
@@ -1671,6 +2086,9 @@ class ScreeningService:
             # Do not retain provider response or request data in the database.
             error = sanitize_ai_error(exc, secrets=[str(config.get("api_key") or "")] if isinstance(locals().get("config"), dict) else [])
             if agent_run_id is not None:
+                if research_session is not None:
+                    self._record_investigation(agent_run_id, research_session, status="failed", stop_reason=error,
+                                               configuration=research_configuration_snapshot)
                 self._finish_agent_run(agent_run_id, "failed", error)
             try:
                 with self._db_lock, self.db:
@@ -1679,9 +2097,13 @@ class ScreeningService:
             except sqlite3.ProgrammingError:
                 pass
         finally:
-            self._active_jobs.discard(job_id)
-            if current_task is not None:
-                self._run_tasks.discard(current_task)
+            try:
+                if research_session is not None:
+                    await research_session.close()
+            finally:
+                self._active_jobs.discard(job_id)
+                if current_task is not None:
+                    self._run_tasks.discard(current_task)
 
     def retry_failed(self) -> int:
         if not self._ai_config()["configured"]:
@@ -1704,11 +2126,13 @@ class ScreeningService:
             raise ServiceError("selected_option_id must be a string or null")
         gate, _ = self._gate(self._records_for_project(project_id), project_id)
         judgment = self._latest_judgment(project_id)
-        options = json_value(judgment["options_json"], []) if judgment and not bool(judgment["stale"]) else []
+        judgment_is_current = bool(judgment and not self._judgment_dict(judgment)["stale"] and
+                                   current_analysis_meta(json_value(judgment["analysis_meta_json"], None)))
+        options = json_value(judgment["options_json"], []) if judgment_is_current else []
         if selected is not None:
             if gate in {"expired", "closed", "duplicate", "excluded"}:
                 raise ConflictError("不能选择已过期或不可推进项目的方案")
-            if not judgment or bool(judgment["stale"]):
+            if not judgment_is_current:
                 raise ConflictError("当前判断已过期，请先重新分析")
             requested_judgment_id = payload.get("judgment_id")
             try:
