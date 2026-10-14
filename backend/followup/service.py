@@ -479,6 +479,8 @@ def update_task(
     values = dict(patch)
     if "skip_reason" in values and "skipped_reason" not in values:
         values["skipped_reason"] = values.pop("skip_reason")
+    if "reason" in values and "skipped_reason" not in values:
+        values["skipped_reason"] = values.pop("reason")
     allowed = {"title", "basis", "owner", "due_at", "prerequisites", "materials", "status", "completion_note", "skipped_reason"}
     unknown = set(values) - allowed
     if unknown:
