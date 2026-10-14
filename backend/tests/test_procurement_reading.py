@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from backend.analysis.ai import AIError
 import backend.application.service as service_module
-from backend.application.reading import READING_BATCH_CHARS, invoke_reading
+from backend.application.reading import READING_BATCH_CHARS, _merge_batch_readings, invoke_reading
 from backend.application.service import ScreeningService
 from backend.procurement.reading import build_material, material_version, normalize_reading, segment_text
 
@@ -166,7 +167,7 @@ def test_correction_must_be_explicitly_adopted():
     }]}]}
 
     rejected = normalize_reading(base, material)
-    assert any("correction" in value for value in rejected["unresolved"])
+    assert any("人工纠正" in value for value in rejected["unresolved"])
     base["sections"][0]["requirements"][0]["text"] = "corrected requirement"
     adopted = normalize_reading(base, material)
     assert not any("correction" in value for value in adopted["unresolved"])
@@ -181,7 +182,7 @@ def test_scan_or_unavailable_attachment_forces_partial():
     result = normalize_reading({"summary": "announcement"}, material)
 
     assert result["status"] == "partial"
-    assert any("doc-scan" in value for value in result["unresolved"])
+    assert any("附件资料" in value for value in result["unresolved"])
 
 
 def test_long_material_is_sent_in_bounded_batches_and_coverage_is_host_counted():
@@ -194,7 +195,8 @@ def test_long_material_is_sent_in_bounded_batches_and_coverage_is_host_counted()
         async def read_procurement(self, *, material, **kwargs):
             calls.append(material)
             segment = material["segments"][0]
-            return {"summary": material["batch"]["index"], "demand_type": "confirmed", "category": ["cat" + str(material["batch"]["index"])],
+            return {"version": 1, "summary": str(material["batch"]["index"]), "demand_type": "confirmed",
+                    "category": ["cat" + str(material["batch"]["index"])], "milestones": [],
                     "sections": [{"id": "facts", "title": "facts", "requirements": [{
                         "id": "r" + str(material["batch"]["index"]), "text": segment["text"], "explanation": "",
                         "sources": [{"source_kind": "announcement", "record_id": 11, "quote": segment["text"]}],
@@ -240,7 +242,8 @@ def test_service_fetches_attachment_before_explicit_reading_and_does_not_refetch
 
     class Reader:
         async def read_procurement(self, *, material, **kwargs):
-            return {"summary": "read", "demand_type": "confirmed", "stage": "confirmed"}
+            return {"version": 1, "summary": "read", "demand_type": "confirmed", "stage": "confirmed",
+                    "sections": [], "milestones": []}
 
     monkeypatch.setattr(service_module, "fetch_record_documents", fetch)
     service = ScreeningService(db_path=tmp_path / "db.sqlite3", source_path=source, archive_root=tmp_path,
@@ -257,3 +260,104 @@ def test_service_fetches_attachment_before_explicit_reading_and_does_not_refetch
         assert service.db.execute("SELECT count(*) FROM procurement_readings WHERE project_id=1").fetchone()[0] >= 2
     finally:
         service.close()
+
+
+def test_market_report_shape_is_rejected_by_formal_reading_protocol():
+    record, material = _material_224()
+
+    class Reader:
+        async def read_procurement(self, *, material, **kwargs):
+            return {"decision": "consider", "summary": "market report", "report": {"sections": []}}
+
+    with pytest.raises(AIError, match="version"):
+        asyncio.run(invoke_reading(Reader(), material=material, config={"model": "test"}))
+
+
+def test_batch_merge_uses_global_ids_and_keeps_conflicting_sources():
+    material = {"material_version": "m-test"}
+    values = [
+        {"version": 1, "status": "complete", "summary": "first", "demand_type": "confirmed",
+         "stage": "submission", "sections": [{"id": "facts", "title": "facts", "requirements": [{
+             "id": "same", "text": "first fact", "explanation": "first explanation",
+             "sources": [{"source_kind": "announcement", "record_id": 1, "quote": "first"}],
+         }]}], "milestones": [{"id": "same", "kind": "submission", "label": "submit",
+                                  "at": "2026-10-01T09:00:00+08:00",
+                                  "sources": [{"source_kind": "announcement", "record_id": 1, "quote": "first date"}]}]},
+        {"version": 1, "status": "complete", "summary": "second", "demand_type": "confirmed",
+         "stage": "submission", "sections": [{"id": "facts", "title": "facts", "requirements": [{
+             "id": "same", "text": "second fact", "explanation": "second explanation",
+             "sources": [{"source_kind": "announcement", "record_id": 2, "quote": "second"}],
+         }]}], "milestones": [{"id": "same", "kind": "submission", "label": "submit",
+                                  "at": "2026-10-02T09:00:00+08:00",
+                                  "sources": [{"source_kind": "announcement", "record_id": 2, "quote": "second date"}]}]},
+    ]
+
+    result = _merge_batch_readings(values, material, truncated=False)
+    ids = [section["id"] for section in result["sections"]]
+    ids.extend(requirement["id"] for section in result["sections"] for requirement in section["requirements"])
+    ids.extend(milestone["id"] for milestone in result["milestones"])
+    assert len(ids) == len(set(ids))
+    requirements = result["sections"][0]["requirements"]
+    assert len(requirements) == 2
+    assert {source["record_id"] for item in requirements for source in item["sources"]} == {1, 2}
+    assert len(result["milestones"]) == 2
+    assert {source["record_id"] for item in result["milestones"] for source in item["sources"]} == {1, 2}
+    assert result["conflicts"]
+
+
+def _reading_restart_service(tmp_path: Path) -> ScreeningService:
+    record = {"id": 1, "source_id": "restart", "kind": "tender", "title": "notice",
+              "project_name": "notice", "buyer": "buyer", "body_text": "announcement",
+              "attachments": [], "current_version": 1, "published_at": "2026-10-01", "deadline_at": None}
+    source = tmp_path / "records.jsonl"
+    source.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    service = ScreeningService(db_path=tmp_path / "db.sqlite3", source_path=source,
+                               archive_root=tmp_path, provider=object())
+    asyncio.run(service.import_file())
+    return service
+
+
+def _save_reading_state(service: ScreeningService, status: str) -> None:
+    version = str(service._reading_material(1)["material_version"])
+    service._save_procurement_reading(
+        1, {"version": 1, "status": status, "summary": status, "demand_type": "unknown",
+            "stage": "", "buyer": "", "region": "", "category": [], "sections": [],
+            "milestones": [], "coverage": [], "conflicts": [], "unresolved": []},
+        material_version=version, config={},
+    )
+
+
+def test_restart_does_not_requeue_history_pending_after_new_complete(tmp_path):
+    service = _reading_restart_service(tmp_path)
+    _save_reading_state(service, "pending")
+    _save_reading_state(service, "complete")
+    db_path, source_path = service.db_path, service.source_path
+    service.close()
+
+    reopened = ScreeningService(db_path=db_path, source_path=source_path,
+                                archive_root=tmp_path, provider=object())
+    try:
+        reopened.start_background()
+        assert reopened.db.execute("SELECT count(*) FROM procurement_reading_jobs").fetchone()[0] == 0
+    finally:
+        reopened.close()
+
+
+def test_restart_recovers_only_the_latest_pending_reading(tmp_path):
+    service = _reading_restart_service(tmp_path)
+    _save_reading_state(service, "complete")
+    _save_reading_state(service, "pending")
+    db_path, source_path = service.db_path, service.source_path
+    service.close()
+
+    reopened = ScreeningService(db_path=db_path, source_path=source_path,
+                                archive_root=tmp_path, provider=object())
+    try:
+        reopened.start_background()
+        reopened.start_background()
+        rows = reopened.db.execute(
+            "SELECT project_id,status FROM procurement_reading_jobs ORDER BY id"
+        ).fetchall()
+        assert [(int(row["project_id"]), row["status"]) for row in rows] == [(1, "queued")]
+    finally:
+        reopened.close()

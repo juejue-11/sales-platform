@@ -508,10 +508,10 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
     )
     compact_source_text = re.sub(r"\s+", "", source_text)
     if buyer and re.sub(r"\s+", "", buyer) not in compact_source_text:
-        unresolved.append("buyer metadata is not supported by the announcement or attachment text")
+        unresolved.append("\u91c7\u8d2d\u65b9\u4fe1\u606f\u7f3a\u5c11\u53ef\u5b9a\u4f4d\u7684\u516c\u544a\u6216\u9644\u4ef6\u4f9d\u636e")
         buyer = ""
     if region and re.sub(r"\s+", "", region) not in compact_source_text:
-        unresolved.append("region metadata is not supported by the announcement or attachment text")
+        unresolved.append("\u5730\u533a\u4fe1\u606f\u7f3a\u5c11\u53ef\u5b9a\u4f4d\u7684\u516c\u544a\u6216\u9644\u4ef6\u4f9d\u636e")
         region = ""
     category = [_text(value, 200) for value in raw.get("category", [])[:30]
                 ] if isinstance(raw.get("category"), list) else []
@@ -567,14 +567,15 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
     raw_milestones = raw.get("milestones", [])
     if not isinstance(raw_milestones, list):
         raw_milestones = []
-    seen_milestone_ids: set[str] = set()
     for index, milestone_raw in enumerate(raw_milestones[:100]):
         if not isinstance(milestone_raw, Mapping):
             continue
         milestone_id = _text(milestone_raw.get("id"), 100) or f"milestone-{index + 1}"
-        if milestone_id in seen_milestone_ids:
+        if milestone_id in seen_ids:
             milestone_id = f"{milestone_id}-{index + 1}"
-        seen_milestone_ids.add(milestone_id)
+        while milestone_id in seen_ids:
+            milestone_id = f"{milestone_id}-2"
+        seen_ids.add(milestone_id)
         kind = _text(milestone_raw.get("kind"), 40)
         if kind not in MILESTONE_KINDS:
             kind = "other"
@@ -584,10 +585,10 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
         at = _text(milestone_raw.get("at"), 200)
         dated_sources = [source for source in sources if _valid_iso_date(at, source.get("quote", ""))]
         if sources and not dated_sources:
-            milestone_unresolved.append("milestone.at must be an ISO date supported by the cited quote")
+            milestone_unresolved.append("\u8282\u70b9\u65e5\u671f\u7f3a\u5c11\u4e0e\u5f15\u7528\u7247\u6bb5\u4e00\u81f4\u7684\u6709\u6548\u65e5\u671f")
         sources = dated_sources
         if not sources:
-            milestone_unresolved.append("milestone lacks a locatable announcement or attachment quote")
+            milestone_unresolved.append("\u8282\u70b9\u7f3a\u5c11\u53ef\u5b9a\u4f4d\u7684\u516c\u544a\u6216\u9644\u4ef6\u539f\u6587")
         unresolved.extend(milestone_unresolved)
         if sources:
             milestones.append({"id": milestone_id, "kind": kind, "label": _text(milestone_raw.get("label"), 500),
@@ -626,8 +627,7 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
         source_status = _text(source_coverage.get("status"), 40)
         if source_status not in {"provided", "parsed"}:
             unresolved.append(
-                f"source {source_coverage.get('document_id') or source_coverage.get('record_id') or 'unknown'} "
-                f"was not fully available ({source_status or 'unknown'})"
+                f"\u9644\u4ef6\u8d44\u6599\u672a\u5b8c\u6574\u63d0\u4f9b\uff0c\u5f53\u524d\u9605\u8bfb\u65e0\u6cd5\u8986\u76d6\u5168\u90e8\u5185\u5bb9\uff08\u72b6\u6001\uff1a{source_status or 'unknown'}\uff09"
             )
     # User corrections are never silently discarded. A model may explicitly
     # cite the corrected text, otherwise the item remains unresolved.
@@ -655,7 +655,7 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
                     break
         if correction_text and not adopted:
             unresolved.append(
-                f"human correction {correction.get('id') or requirement_id or 'unnamed'} was not adopted: {correction_text}"
+                f"\u4eba\u5de5\u7ea0\u6b63\u672a\u88ab\u5f53\u524d\u9605\u8bfb\u7ed3\u679c\u91c7\u7eb3\uff0c\u8bf7\u590d\u6838\u7ea0\u6b63\u5185\u5bb9\uff1a{correction_text}"
             )
     
     unresolved = list(dict.fromkeys(value for value in unresolved if value))

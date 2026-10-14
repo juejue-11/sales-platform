@@ -208,19 +208,28 @@ class ScreeningService:
             self.db.execute("UPDATE jobs SET status='queued',updated_at=? WHERE status='running'", (now_iso(),))
             self.db.execute("UPDATE procurement_reading_jobs SET status='queued',updated_at=? WHERE status='running'",
                             (now_iso(),))
+            # Readings are append-only: an old pending revision must not be
+            # resurrected after a later complete/partial/failed revision was
+            # written.  Only the newest row for each project can represent
+            # the durable work that needs recovery after a restart.
             pending_projects = self.db.execute(
-                "SELECT DISTINCT project_id FROM procurement_readings WHERE status='pending'"
+                """SELECT reading.project_id
+                   FROM procurement_readings AS reading
+                  WHERE reading.status='pending'
+                    AND reading.id=(SELECT MAX(latest.id)
+                                      FROM procurement_readings AS latest
+                                     WHERE latest.project_id=reading.project_id)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM procurement_reading_jobs AS active
+                         WHERE active.project_id=reading.project_id
+                           AND active.status IN ('queued','running')
+                    )"""
             ).fetchall()
             for row in pending_projects:
-                active = self.db.execute(
-                    "SELECT 1 FROM procurement_reading_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
-                    (int(row["project_id"]),),
-                ).fetchone()
-                if active is None:
-                    self.db.execute(
-                        "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (?,0,'queued',?,?)",
-                        (int(row["project_id"]), now_iso(), now_iso()),
-                    )
+                self.db.execute(
+                    "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (?,0,'queued',?,?)",
+                    (int(row["project_id"]), now_iso(), now_iso()),
+                )
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = self._spawn(self._worker_loop())
         if self._import_task is None or self._import_task.done():
