@@ -112,7 +112,7 @@ def test_untrusted_date_amount_lot_and_restriction_cannot_become_facts():
                 {"id": "fake-restriction", "text": joint_claim, "explanation": "", "sources": [
                 {"source_kind": "announcement", "record_id": 224, "quote": restriction}]},
         ]}],
-        "milestones": [{"id": "fake-date", "kind": "submission", "label": "submission", 
+        "milestones": [{"id": "fake-date", "kind": "submission", "label": "submission",
                         "at": "2099-01-01T09:00:00+08:00", "sources": [
                             {"source_kind": "announcement", "record_id": 224, "quote": submission}]}],
     }
@@ -162,7 +162,7 @@ def test_correction_must_be_explicitly_adopted():
                               corrections=[correction])
     quote = record["body_text"]
     base = {"sections": [{"id": "facts", "title": "facts", "requirements": [{
-        "id": "r1", "text": "old requirement", "explanation": "", 
+        "id": "r1", "text": "old requirement", "explanation": "",
         "sources": [{"source_kind": "announcement", "record_id": 1, "quote": quote}],
     }]}]}
 

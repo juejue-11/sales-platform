@@ -657,7 +657,7 @@ def normalize_reading(payload: Any, material: Mapping[str, Any], *, status: str 
             unresolved.append(
                 f"\u4eba\u5de5\u7ea0\u6b63\u672a\u88ab\u5f53\u524d\u9605\u8bfb\u7ed3\u679c\u91c7\u7eb3\uff0c\u8bf7\u590d\u6838\u7ea0\u6b63\u5185\u5bb9\uff1a{correction_text}"
             )
-    
+
     unresolved = list(dict.fromkeys(value for value in unresolved if value))
     normalized_status = status if status in READING_STATUSES else "partial"
     if normalized_status == "complete" and unresolved:
