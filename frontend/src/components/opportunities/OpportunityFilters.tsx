@@ -73,6 +73,25 @@ const aiDecisionOptions = [
   { value: 'not_recommended', label: decisionFilterLabel('not_recommended') },
 ]
 
+const stageOptions = [
+  { value: '', label: '全部采购阶段' },
+  { value: 'confirmed', label: '已确认采购' },
+  { value: 'registration', label: '报名 / 注册' },
+  { value: 'document_access', label: '获取文件' },
+  { value: 'question', label: '答疑 / 澄清' },
+  { value: 'submission', label: '提交阶段' },
+  { value: 'bidding', label: '报价 / 投标' },
+  { value: 'opening', label: '开标 / 评审' },
+]
+
+const timeOptions = [
+  { value: '', label: '全部关键时间' },
+  { value: 'today', label: '今天需办理' },
+  { value: '7d', label: '7 天内提交' },
+  { value: '30d', label: '30 天内提交' },
+  { value: 'unknown', label: '提交时间待核对' },
+]
+
 function decisionFilterLabel(decision: Exclude<AiDecision, null>): string {
   return `${marketAiDecisionLabels[decision]} / ${aiDecisionLabels[decision]}`
 }
@@ -103,7 +122,7 @@ export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advanc
           allowClear
           onChange={(event) => onSearchChange(event.target.value)}
           onSearch={onSearch}
-          placeholder="搜索项目标题、采购方、设备"
+          placeholder="搜索采购方、设备 / 服务、项目"
           enterButton={<span>搜索</span>}
           prefix={<SearchOutlined aria-hidden="true" />}
         />
@@ -119,8 +138,14 @@ export function OpportunityFilters({ tabs, activeTab, query, draftSearch, advanc
           <label><span>AI 状态</span><Select value={query.ai_status} onChange={(value: string) => onUpdateFilter('ai_status', value)} options={aiStatusOptions} /></label>
           <label><span>人工状态</span><Select value={query.decision} onChange={(value: string) => onUpdateFilter('decision', value)} options={decisionOptions} /></label>
           <label><span>AI 建议</span><Select value={query.ai_decision} onChange={(value: string) => onUpdateFilter('ai_decision', value)} options={aiDecisionOptions} /></label>
+          <label><span>设备 / 服务</span><Input value={query.category} allowClear placeholder="输入设备或服务" onChange={(event) => onUpdateFilter('category', event.target.value)} /></label>
+          <label><span>地区</span><Input value={query.region} allowClear placeholder="输入省市或地区" onChange={(event) => onUpdateFilter('region', event.target.value)} /></label>
+          <label><span>采购单位</span><Input value={query.buyer} allowClear placeholder="输入采购单位" onChange={(event) => onUpdateFilter('buyer', event.target.value)} /></label>
+          <label><span>采购阶段</span><Select value={query.procurement_stage} onChange={(value: string) => onUpdateFilter('procurement_stage', value)} options={stageOptions} /></label>
+          <label><span>需求类型</span><Select value={query.demand_type} onChange={(value: string) => onUpdateFilter('demand_type', value)} options={[{ value: '', label: '采购与线索' }, { value: 'confirmed', label: '明确采购' }, { value: 'lead', label: '潜在线索' }, { value: 'unknown', label: '类型待核对' }]} /></label>
+          <label><span>关键时间</span><Select value={query.key_time} onChange={(value: string) => onUpdateFilter('key_time', value)} options={timeOptions} /></label>
           <label><span>公告类型</span><Select value={query.kind} onChange={(value: string) => onUpdateFilter('kind', value)} options={kindOptions} /></label>
-          <label><span>排序</span><Select value={query.sort} onChange={(value: OpportunityQuery['sort']) => onUpdateFilter('sort', value)} options={[{ value: 'deadline', label: '按截止时间' }, { value: 'updated', label: '按更新时间' }]} /></label>
+          <label><span>排序</span><Select value={query.sort} onChange={(value: OpportunityQuery['sort']) => onUpdateFilter('sort', value)} options={[{ value: 'deadline', label: '按提交时间' }, { value: 'updated', label: '按更新时间' }]} /></label>
           <label><span>来源 ID</span><Input value={sourceDraft} allowClear placeholder="输入来源 ID 后回车" onChange={(event) => setSourceDraft(event.target.value)} onPressEnter={() => onUpdateFilter('source_id', sourceDraft)} onClear={() => { setSourceDraft(''); onUpdateFilter('source_id', '') }} /></label>
           <Button className="opportunity-clear-button" onClick={onReset}>清除筛选</Button>
         </div>

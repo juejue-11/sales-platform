@@ -291,3 +291,23 @@
     animation-duration: .01ms !important;
   }
 }
+
+/* Procurement desk surface: a quiet catalogue with explicit fact labels. */
+.opportunity-hero { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; padding: 19px 22px; background: #172d48; color: #f6f8fc; }
+.opportunity-eyebrow { color: #aabbd1; font-size: 11px; }
+.opportunity-hero h1 { margin: 6px 0 7px; color: #fff; font-size: 27px; font-weight: 600; letter-spacing: -.035em; }
+.opportunity-hero p { max-width: 74ch; margin: 0; color: #cad7e7; font-size: 13px; line-height: 1.65; }
+.opportunity-hero-note { display: grid; justify-items: end; flex: 0 0 auto; gap: 2px; color: #aabbd1; font-size: 11px; }
+.opportunity-hero-note strong { color: #f0b840; font-size: 26px; font-weight: 600; }
+.opportunity-feed { display: grid; gap: 11px; }
+.opportunity-feed-heading-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 3px 0 1px; }
+.opportunity-feed-heading-row h2 { margin: 0; font-size: 18px; font-weight: 650; }
+.opportunity-feed-heading-row p { display: inline; margin: 0 0 0 10px; color: var(--opportunity-muted); font-size: 12px; }
+.opportunity-feed-heading-row > span { flex: 0 0 auto; color: var(--opportunity-muted); font-size: 12px; }
+.opportunity-feed-card-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 21px; }
+.opportunity-feed-card-tags .ant-tag { margin: 0; line-height: 20px; }
+.opportunity-feed-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; min-height: 50px; margin-top: 9px; }
+.opportunity-feed-facts span { display: grid; align-content: start; gap: 3px; min-width: 0; padding: 6px 7px; color: #334e68; background: #f5f8fc; border: 1px solid #e2e9f1; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.opportunity-feed-facts small { color: #7c8a9c; font-size: 10px; }
+.opportunity-feed-completeness { max-width: 120px; color: #65758a; font-size: 10px; line-height: 1.4; text-align: right; }
+@media (max-width: 760px) { .opportunity-hero { align-items: flex-start; flex-direction: column; padding: 16px; } .opportunity-hero h1 { font-size: 24px; } .opportunity-hero-note { justify-items: start; } .opportunity-feed-heading-row { align-items: flex-start; flex-direction: column; gap: 4px; } .opportunity-feed-heading-row p { display: block; margin: 4px 0 0; } .opportunity-feed-facts { gap: 5px; } .opportunity-feed-completeness { display: none; } }

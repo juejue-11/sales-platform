@@ -10,7 +10,7 @@ import { OperationsPage } from './pages/Operations'
 
 const { Header, Sider, Content } = Layout
 const navigation = [
-  { to: '/', label: '机会池', description: '看需求，选方案', icon: <AppstoreOutlined />, end: true },
+  { to: '/', label: '采购需求', description: '浏览需求与选择跟进', icon: <AppstoreOutlined />, end: true },
   { to: '/operations', label: '处理状态', description: '同步与分析进度', icon: <CloudSyncOutlined />, end: false },
   { to: '/settings', label: '业务配置', description: '能力、规则与模型', icon: <SettingOutlined />, end: false },
 ]
@@ -29,7 +29,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className="brand-block">
       <div className="brand-mark"><DossierMark /></div>
-      {!compact && <div className="brand-copy"><strong>商机研判</strong><span>采购信息工作台</span></div>}
+      {!compact && <div className="brand-copy"><strong>采购工作台</strong><span>阅读、研判与跟进</span></div>}
     </div>
   )
 }
@@ -62,7 +62,7 @@ function Shell() {
     return () => window.removeEventListener('resize', update)
   }, [])
   const isProject = location.pathname.startsWith('/projects/')
-  const currentTitle = isProject ? '项目详情' : navigation.find(item => item.to === location.pathname)?.label ?? '机会池'
+  const currentTitle = isProject ? '采购详情' : navigation.find(item => item.to === location.pathname)?.label ?? '采购需求'
   const today = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   const closeMobileMenu = () => setMobileMenu(false)
   return <Layout className="app-layout">
@@ -76,7 +76,7 @@ function Shell() {
     </Drawer>
     <Layout className={`workspace-layout${location.pathname === '/' ? ' workspace-home' : ''}${isProject ? ' workspace-record' : ''}`}>
       <Header className="app-header">
-        <div className="header-location"><Button className="mobile-menu-button" type="text" icon={<MenuOutlined />} onClick={() => setMobileMenu(true)} aria-label="打开导航" /><span>销售研判</span><span className="header-slash">/</span><strong>{currentTitle}</strong></div>
+        <div className="header-location"><Button className="mobile-menu-button" type="text" icon={<MenuOutlined />} onClick={() => setMobileMenu(true)} aria-label="打开导航" /><span>采购工作台</span><span className="header-slash">/</span><strong>{currentTitle}</strong></div>
         <div className="header-context"><time>{today}</time><span className="internal-badge">内部使用</span></div>
       </Header>
       <Content className="app-content">

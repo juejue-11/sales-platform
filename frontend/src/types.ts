@@ -286,6 +286,136 @@ export interface ProcurementData {
   attachment_note?: string | null
 }
 
+/**
+ * The canonical, versioned procurement reading shared by list cards and the
+ * project detail.  The API deliberately keeps this separate from the older
+ * `procurement` extraction so a stale or failed reading cannot be presented as
+ * a completed business summary.
+ */
+export type ProcurementReadingStatus = 'pending' | 'complete' | 'partial' | 'failed' | 'not_configured'
+export type ProcurementDemandType = 'confirmed' | 'lead' | 'unknown'
+export type ProcurementMilestoneKind = 'document_access' | 'registration' | 'question' | 'submission' | 'opening' | 'other'
+
+export interface ProcurementReadingSource {
+  source_kind: ProcurementSourceKind
+  record_id: number
+  document_id?: number | string
+  page?: number | null
+  quote: string
+  sha256?: string | null
+}
+
+export interface ProcurementReadingRequirement {
+  id: string
+  text: string
+  explanation?: string | null
+  sources: ProcurementReadingSource[]
+  lot?: string | number | null
+  status?: string | null
+}
+
+export interface ProcurementReadingSection {
+  id: string
+  title: string
+  requirements: ProcurementReadingRequirement[]
+}
+
+export interface ProcurementReadingMilestone {
+  id: string
+  kind: ProcurementMilestoneKind
+  label: string
+  at?: string | null
+  sources: ProcurementReadingSource[]
+}
+
+export interface ProcurementReadingCoverage {
+  [key: string]: unknown
+}
+
+export interface ProcurementReading {
+  version: 1
+  material_version: string | number | null
+  status: ProcurementReadingStatus
+  stale: boolean
+  summary: string | null
+  demand_type: ProcurementDemandType
+  stage: string | null
+  buyer: string | null
+  region: string | null
+  category: string[]
+  sections: ProcurementReadingSection[]
+  milestones: ProcurementReadingMilestone[]
+  coverage: ProcurementReadingCoverage[]
+  conflicts: string[]
+  unresolved: string[]
+}
+
+export interface ProcurementReadingCorrection {
+  id: string | number
+  requirement_id: string
+  text: string
+  reason: string
+  created_at: string
+  material_version: string | number | null
+}
+
+export type FollowupStage = 'evaluating' | 'working' | 'submitted' | 'awaiting_result' | 'finished'
+export type FollowupDisposition = 'following' | 'paused' | 'abandoned'
+
+export interface FollowupTask {
+  id: string | number
+  title?: string
+  name?: string
+  description?: string | null
+  status?: string
+  required?: boolean
+  source_kind?: string | null
+  due_at?: string | null
+  owner?: string | null
+  skip_reason?: string | null
+  skipped_reason?: string | null
+  completion_note?: string | null
+  reason?: string | null
+  note?: string | null
+  [key: string]: unknown
+}
+
+export interface FollowupMaterial {
+  id: string | number
+  name?: string
+  title?: string
+  status?: string
+  note?: string | null
+  [key: string]: unknown
+}
+
+export interface FollowupEvent {
+  id?: string | number
+  at?: string
+  type?: string
+  text?: string
+  message?: string
+  [key: string]: unknown
+}
+
+export interface FollowupData {
+  stage: FollowupStage
+  disposition: FollowupDisposition
+  owner: string | null
+  next_action: string | null
+  outcome: string | null
+  submitted_at: string | null
+  submission_channel: string | null
+  receipt: string | null
+  tasks: FollowupTask[]
+  materials: FollowupMaterial[]
+  events: FollowupEvent[]
+  plan: unknown
+  needs_review: boolean
+  is_following?: boolean
+  plan_id?: string | number | null
+}
+
 export interface ProjectSummary {
   id: number
   title: string
@@ -320,6 +450,14 @@ export interface ProjectSummary {
   }
   /** Opportunities from the current valid Agent report; legacy summaries may omit this field. */
   opportunity_signals?: AgentOpportunity[]
+  /** Canonical procurement facets returned by the reading worker. */
+  category?: string[]
+  region?: string | null
+  procurement_stage?: string | null
+  demand_type?: ProcurementDemandType
+  followup_stage?: FollowupStage | null
+  is_following?: boolean
+  procurement_reading?: ProcurementReading | null
 }
 
 export interface ProcurementEvidence {
@@ -415,6 +553,7 @@ export interface ProjectDetail extends ProjectSummary {
   agent_run?: AgentRun | null
   /** Optional while older detail responses are still in circulation. */
   research_sources?: ResearchSource[]
+  followup?: FollowupData | null
 }
 
 export interface DashboardData {

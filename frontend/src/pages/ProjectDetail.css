@@ -883,6 +883,41 @@
   }
 }
 
+/* New procurement reading workspace. Older presentation rules above remain
+   available to the legacy fallback reader while this surface stays compact. */
+.detail-procurement-panel { display: grid; gap: 18px; }
+.detail-history-drawer { border-top: 1px solid #e1e8f0; border-bottom: 1px solid #e1e8f0; }
+.detail-history-content { display: grid; gap: 18px; color: var(--detail-muted, #62748a); font-size: 12px; line-height: 1.7; }
+.detail-history-content > div { display: grid; gap: 8px; }
+.detail-history-content p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.detail-history-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.detail-history-facts div { padding: 9px 10px; background: #f7f9fc; }
+.detail-history-facts dt { color: #7c8a9c; font-size: 11px; }
+.detail-history-facts dd { margin: 3px 0 0; color: #334e68; overflow-wrap: anywhere; }
+.detail-history-list { display: grid; gap: 8px; }
+.detail-history-list > div { padding: 10px 12px; background: #f7f9fc; }
+.detail-history-list .ant-collapse { margin-top: 5px; }
+.detail-related-list { display: grid; gap: 4px; margin: 0; padding-left: 19px; }
+.detail-related-list li { display: flex; gap: 6px; align-items: center; }
+.detail-analysis-overview { display: grid; gap: 14px; padding: 16px; border: 1px solid #e1e8f0; background: #fff; }
+.detail-analysis-overview .detail-summary-header { padding-bottom: 2px; }
+.detail-analysis-overview .detail-summary-conclusion { margin: 0; color: #334e68; font-size: 15px; line-height: 1.75; white-space: pre-wrap; }
+.detail-analysis-card { display: grid; gap: 13px; padding: 16px; border: 1px solid #e1e8f0; }
+.detail-analysis-card .detail-section-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.detail-analysis-card .detail-section-header h2 { margin: 0; color: #193c78; font-size: 17px; }
+.detail-judgment-meta { display: flex; flex-wrap: wrap; gap: 12px; }
+.detail-reason-list { display: grid; gap: 13px; margin: 0; padding-left: 20px; }
+.detail-reason-list li { padding-left: 3px; line-height: 1.6; }
+.detail-evidence-list { display: grid; gap: 6px; margin-top: 7px; }
+.detail-unknown-panel, .detail-next-actions { padding: 12px 14px; border-left: 3px solid #d5a34b; background: #fffaf0; }
+.detail-unknown-panel ul, .detail-next-actions ul { margin: 7px 0 0; padding-left: 19px; color: #6d5b38; font-size: 13px; line-height: 1.75; }
+.detail-agent-activity { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid #e1e8f0; background: #fbfcfe; }
+.detail-agent-activity-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.detail-agent-activity-heading .ant-tag { margin: 0; }
+.detail-agent-step-list { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: #49647f; font-size: 12px; }
+.detail-agent-step-list li { display: flex; justify-content: space-between; gap: 12px; }
+@media (max-width: 760px) { .detail-history-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .detail-agent-step-list li { align-items: flex-start; flex-direction: column; gap: 2px; } }
+
 .detail-procurement-expanded-heading {
   display: flex;
   flex-wrap: wrap;

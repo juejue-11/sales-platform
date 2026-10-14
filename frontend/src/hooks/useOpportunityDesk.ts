@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import type { DashboardData, ProjectSummary } from '../types'
 import { isDeadlineWithinDays } from '../components/opportunities/text'
+import { submissionMilestone } from '../components/procurement/reading'
 
-export type OpportunityTabKey = 'current' | 'all' | 'ai' | 'review' | 'deadline' | 'following' | 'queued'
+export type OpportunityTabKey = 'current' | 'all' | 'procurement' | 'leads' | 'ai' | 'review' | 'deadline' | 'following' | 'queued'
 export type OpportunitySort = 'updated' | 'deadline'
 
 export interface OpportunityQuery {
@@ -13,6 +14,13 @@ export interface OpportunityQuery {
   decision: string
   kind: string
   source_id: string
+  category: string
+  region: string
+  buyer: string
+  procurement_stage: string
+  demand_type: string
+  key_time: string
+  is_following: boolean
   ai_decision: string
   deadline_soon: boolean
   active_only: boolean
@@ -34,6 +42,13 @@ const initialQuery: OpportunityQuery = {
   decision: '',
   kind: '',
   source_id: '',
+  category: '',
+  region: '',
+  buyer: '',
+  procurement_stage: '',
+  demand_type: '',
+  key_time: '',
+  is_following: false,
   ai_decision: '',
   deadline_soon: false,
   active_only: true,
@@ -61,6 +76,13 @@ function isOpportunityQuery(value: unknown): value is OpportunityQuery {
     && typeof candidate.decision === 'string'
     && typeof candidate.kind === 'string'
     && typeof candidate.source_id === 'string'
+    && typeof candidate.category === 'string'
+    && typeof candidate.region === 'string'
+    && typeof candidate.buyer === 'string'
+    && typeof candidate.procurement_stage === 'string'
+    && typeof candidate.demand_type === 'string'
+    && typeof candidate.key_time === 'string'
+    && typeof candidate.is_following === 'boolean'
     && typeof candidate.ai_decision === 'string'
     && typeof candidate.deadline_soon === 'boolean'
     && typeof candidate.active_only === 'boolean'
@@ -122,10 +144,12 @@ function count(data: DashboardData | null, field: 'gate_counts' | 'ai_counts' | 
 function tabQuery(key: OpportunityTabKey): OpportunityQuery {
   const base = { ...initialQuery }
   if (key === 'all') return { ...base, active_only: false, sort: 'updated' }
+  if (key === 'procurement') return { ...base, demand_type: 'confirmed' }
+  if (key === 'leads') return { ...base, demand_type: 'lead' }
   if (key === 'ai') return { ...base, active_only: false, ai_decision: 'recommend', sort: 'updated' }
   if (key === 'review') return { ...base, gate: 'review' }
   if (key === 'deadline') return { ...base, deadline_soon: true, sort: 'deadline' }
-  if (key === 'following') return { ...base, active_only: false, decision: 'following', sort: 'updated' }
+  if (key === 'following') return { ...base, active_only: false, decision: '', is_following: true, sort: 'updated' }
   if (key === 'queued') return { ...base, active_only: false, ai_status: 'queued', sort: 'updated' }
   return base
 }
@@ -134,6 +158,29 @@ function asError(value: unknown): Error {
   if (value instanceof Error) return value
   if (typeof value === 'string') return new Error(value)
   return new Error('请求失败，请稍后重试')
+}
+
+function locallyMatches(project: ProjectSummary, query: OpportunityQuery): boolean {
+  const reading = project.procurement_reading ?? null
+  const categories = [...(project.category ?? []), ...(reading?.category ?? []), ...project.equipment]
+  const searchText = [project.title, project.buyer ?? '', reading?.summary ?? '', ...categories].join(' ').toLocaleLowerCase()
+  if (query.q && !searchText.includes(query.q.toLocaleLowerCase())) return false
+  if (query.category && !categories.some((item) => item.toLocaleLowerCase().includes(query.category.toLocaleLowerCase()))) return false
+  if (query.region && !(project.region ?? reading?.region ?? '').toLocaleLowerCase().includes(query.region.toLocaleLowerCase())) return false
+  if (query.buyer && !(project.buyer ?? reading?.buyer ?? '').toLocaleLowerCase().includes(query.buyer.toLocaleLowerCase())) return false
+  if (query.procurement_stage && (project.procurement_stage ?? reading?.stage ?? '') !== query.procurement_stage) return false
+  if (query.demand_type && (project.demand_type ?? reading?.demand_type ?? 'unknown') !== query.demand_type) return false
+  if (query.is_following && !project.is_following) return false
+  if (query.key_time) {
+    const at = submissionMilestone(reading)?.at
+    if (query.key_time === 'unknown') { if (at) return false } else if (!at) return false
+    else {
+      const days = query.key_time === 'today' ? 1 : query.key_time === '7d' ? 7 : 30
+      const delta = new Date(at).getTime() - Date.now()
+      if (delta < 0 || delta > days * 24 * 60 * 60 * 1000) return false
+    }
+  }
+  return true
 }
 
 export function useOpportunityDesk() {
@@ -177,8 +224,10 @@ export function useOpportunityDesk() {
     try {
       const result = await api.projects({ ...nextQuery })
       if (!disposed.current && sequence === projectsSequence.current) {
-        setProjects(result.items)
-        setTotal(result.total)
+        const visible = result.items.filter((project) => locallyMatches(project, nextQuery))
+        setProjects(visible)
+        const hasLocalFilter = Boolean(nextQuery.q || nextQuery.category || nextQuery.region || nextQuery.buyer || nextQuery.procurement_stage || nextQuery.demand_type || nextQuery.key_time || nextQuery.is_following)
+        setTotal(hasLocalFilter ? visible.length : result.total)
       }
     } catch (error) {
       if (!disposed.current && sequence === projectsSequence.current) setProjectsError(error)
@@ -236,7 +285,7 @@ export function useOpportunityDesk() {
 
   const activeTab = useMemo<OpportunityTabKey | null>(() => {
     const keys = (Object.keys(initialQuery) as Array<keyof OpportunityQuery>).filter((field) => field !== 'page' && field !== 'page_size')
-    const matchingTab = (Object.keys({ current: true, all: true, ai: true, review: true, deadline: true, following: true, queued: true }) as OpportunityTabKey[]).find((key) => {
+    const matchingTab = (Object.keys({ current: true, all: true, procurement: true, leads: true, ai: true, review: true, deadline: true, following: true, queued: true }) as OpportunityTabKey[]).find((key) => {
       const candidate = tabQuery(key)
       return keys.every((field) => query[field] === candidate[field])
     })
@@ -245,6 +294,8 @@ export function useOpportunityDesk() {
 
   const tabs = useMemo<OpportunityTab[]>(() => [
     { key: 'current', label: '当前机会与线索', count: count(dashboard, 'gate_counts', 'candidate') + count(dashboard, 'gate_counts', 'review') + count(dashboard, 'gate_counts', 'signal') },
+    { key: 'procurement', label: '明确采购', count: count(dashboard, 'gate_counts', 'candidate') + count(dashboard, 'gate_counts', 'review') },
+    { key: 'leads', label: '潜在线索', count: count(dashboard, 'gate_counts', 'signal') },
     { key: 'all', label: '全部', count: dashboard?.total_projects ?? 0 },
     { key: 'ai', label: 'AI建议', count: count(dashboard, 'ai_decision_counts', 'recommend') },
     { key: 'review', label: '待核实', count: count(dashboard, 'gate_counts', 'review') },
