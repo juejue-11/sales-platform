@@ -194,4 +194,3 @@ export function ProcurementReadingPanel({ projectId, reading, legacyProcurement,
     </div>
   )
 }
-
