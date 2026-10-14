@@ -14,25 +14,38 @@ from typing import Any
 
 import httpx
 
-from .ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
-                  bounded_context_body, build_messages, correction_messages, extract_content, input_fingerprint,
-                  sanitize_ai_error, validate_judgment)
-from .briefing import build_briefing
-from .procurement_facts import extract_announcement_facts
-from .analysis_policy import (ANALYSIS_POLICY_VERSION, DEFAULT_MARKET_GOAL,
-                              analysis_context, current_analysis_meta)
-from .config import DEFAULT_SETTINGS, env_archive_root, env_source_path
-from .db import connect
+from ..analysis.ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
+                           bounded_context_body, build_messages, correction_messages, extract_content, input_fingerprint,
+                           sanitize_ai_error, validate_judgment)
+from ..analysis.briefing import build_briefing
+from ..analysis.analysis_policy import (ANALYSIS_POLICY_VERSION, DEFAULT_MARKET_GOAL,
+                                        analysis_context, current_analysis_meta)
+from ..core.config import DEFAULT_SETTINGS, env_archive_root, env_source_path
+from ..storage.db import connect
 from .ingest import ImportErrorDetail, ImportResult, import_records
-from .rules import business_sort_key, gate_for_project
-from .project_research import (RESEARCH_POLICY_VERSION, RESEARCH_TOOLS, ResearchSession,
-                               configuration_fingerprint, current_dependencies, list_sources, read_saved_source)
-from .agent_report import iter_report_evidence
-from .document_access import (DocumentAccessError, build_document_view, build_procurement_context,
-                              validate_document_access_arguments)
-from .utils import SHANGHAI, json_text, json_value, now_iso, parse_timestamp, safe_join, sha256_text
+from ..analysis.rules import business_sort_key, gate_for_project
+from ..research.project_research import (RESEARCH_POLICY_VERSION, RESEARCH_TOOLS, ResearchSession,
+                                          configuration_fingerprint, current_dependencies, list_sources, read_saved_source)
+from ..analysis.agent_report import iter_report_evidence
+from ..analysis.provider_finalizer import deepseek_formatter_endpoint, strict_format_report
+from ..documents.document_access import (DocumentAccessError, build_document_view, build_procurement_context,
+                                          validate_document_access_arguments)
+from ..core.utils import SHANGHAI, json_text, json_value, now_iso, parse_timestamp, safe_join, sha256_text
 
-from .public_documents import fetch_record_documents, read_archived_documents
+from ..documents.public_documents import fetch_record_documents, read_archived_documents
+
+from ..procurement import (build_procurement_summary, document_from_row, document_public_metadata,
+                           normalize_document, procurement_fingerprint)
+# Compatibility imports keep the historical ScreeningService private entry
+# points available while their implementations live in the pure model module.
+from ..procurement.model import (
+    DOCUMENT_STATUSES as _DOCUMENT_STATUSES,
+    PROCUREMENT_FIELDS as _PROCUREMENT_FIELDS,
+    attachment_access_state as _attachment_access_state_impl,
+    compact_attachment_note as _compact_attachment_note_impl,
+    document_json as _document_json_impl,
+    safe_document_id as _safe_document_id_impl,
+)
 
 
 DEFAULT_AGENT_LIMITS = {
@@ -43,10 +56,6 @@ DEFAULT_AGENT_LIMITS = {
 }
 TRUSTED_AGENT_TOOLS = {"read_project_records", "read_company_capability", "read_related_records",
                        "fetch_project_documents", *RESEARCH_TOOLS}
-_DOCUMENT_STATUSES = {"parsed", "unsupported", "auth_required", "failed", "unreadable"}
-_PROCUREMENT_FIELDS = ("name", "specification", "material", "quantity", "unit", "delivery_period",
-                       "delivery_location", "code", "standard", "note", "source_document_id", "record_id",
-                       "page", "quote", "source_kind")
 
 
 class ServiceError(RuntimeError):
@@ -62,10 +71,19 @@ class ConflictError(ServiceError):
 
 
 class ScreeningService:
+    _document_json = staticmethod(_document_json_impl)
+    _safe_document_id = staticmethod(_safe_document_id_impl)
+    _normalize_document = staticmethod(normalize_document)
+    _document_row_value = staticmethod(document_from_row)
+    _document_public_metadata = staticmethod(document_public_metadata)
+    _procurement_fingerprint = staticmethod(procurement_fingerprint)
+    _compact_attachment_note = staticmethod(_compact_attachment_note_impl)
+    _attachment_access_state = staticmethod(_attachment_access_state_impl)
+
     def __init__(self, *, db_path: Path | None = None, source_path: Path | None = None,
                  archive_root: Path | None = None, provider: AIProvider | None = None,
                  research_sources_path: Path | None = None, research_client: httpx.AsyncClient | None = None) -> None:
-        from .config import database_path
+        from ..core.config import database_path
 
         self.db_path = Path(db_path or database_path())
         self.source_path = Path(source_path or env_source_path())
@@ -388,100 +406,6 @@ class ScreeningService:
         records = [self._record_dict(row) for row in rows]
         return sorted(records, key=business_sort_key, reverse=True)
 
-    @staticmethod
-    def _document_json(value: Any, default: Any) -> Any:
-        """Decode a persisted document field without trusting its shape."""
-        if isinstance(value, (list, dict)):
-            return value
-        parsed = json_value(value, default)
-        return parsed if isinstance(parsed, type(default)) else default
-
-    @staticmethod
-    def _safe_document_id(record_id: int, raw: dict[str, Any]) -> str:
-        candidate = str(raw.get("id") or "").strip()
-        if candidate and len(candidate) <= 160 and re.fullmatch(r"[A-Za-z0-9_.:/-]+", candidate):
-            return candidate
-        seed = ":".join(str(raw.get(key) or "") for key in ("url", "name", "sha256"))
-        return f"doc-{sha256_text(f'{record_id}:{seed}')[:24]}"
-
-    @classmethod
-    def _normalize_document(cls, raw: Any, record_id: int) -> dict[str, Any] | None:
-        if not isinstance(raw, dict):
-            return None
-        document_id = cls._safe_document_id(record_id, raw)
-        status = str(raw.get("status") or "failed").strip()
-        if status not in _DOCUMENT_STATUSES:
-            status = "failed"
-        try:
-            pages = max(0, int(raw.get("pages") or 0))
-        except (TypeError, ValueError):
-            pages = 0
-        try:
-            byte_size = max(0, int(raw.get("byte_size") or 0))
-        except (TypeError, ValueError):
-            byte_size = 0
-        text = str(raw.get("text") or "")
-        # The parser itself has a lower cap; this protects the DB and tool
-        # response if a future parser returns an unexpectedly large value.
-        text = text[:500_000]
-        page_texts: list[dict[str, Any]] = []
-        for page_value in raw.get("page_texts", []) if isinstance(raw.get("page_texts"), list) else []:
-            if not isinstance(page_value, dict):
-                continue
-            try:
-                page = max(1, int(page_value.get("page") or 1))
-            except (TypeError, ValueError):
-                page = 1
-            page_texts.append({"page": page, "text": str(page_value.get("text") or "")[:200_000]})
-            if len(page_texts) >= 200:
-                break
-        items: list[dict[str, Any]] = []
-        for item_value in raw.get("items", []) if isinstance(raw.get("items"), list) else []:
-            if not isinstance(item_value, dict):
-                continue
-            item = {key: item_value.get(key, "") for key in _PROCUREMENT_FIELDS}
-            for key in ("name", "specification", "material", "quantity", "unit", "delivery_period",
-                        "delivery_location", "code", "standard", "note", "source_document_id", "quote"):
-                item[key] = str(item.get(key) or "")[:20_000]
-            # Parsed rows are always attachment facts, even when an older
-            # parser payload omitted the optional discriminator.
-            item["source_kind"] = "attachment"
-            # The server document is the authority for provenance; never let
-            # a parser payload point an item at an unrelated document id.
-            item["source_document_id"] = document_id
-            # The fetched document's record is the only trusted record
-            # provenance.  A parser row cannot redirect evidence to another
-            # record through a user-controlled ``record_id`` field.
-            item["record_id"] = int(record_id)
-            try:
-                item["page"] = max(1, int(item.get("page") or 1))
-            except (TypeError, ValueError):
-                item["page"] = 1
-            items.append(item)
-            if len(items) >= 2000:
-                break
-        return {
-            "id": document_id, "record_id": int(record_id),
-            "name": str(raw.get("name") or "")[:2000], "url": str(raw.get("url") or "")[:4000],
-            "status": status, "pages": pages, "sha256": str(raw.get("sha256") or "")[:128],
-            "fetched_at": str(raw.get("fetched_at") or "")[:100],
-            "mime_type": str(raw.get("mime_type") or "")[:200], "byte_size": byte_size,
-            "text": text, "page_texts": page_texts, "items": items,
-            "error": str(raw.get("error") or "")[:240],
-        }
-
-    def _document_row_value(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
-            "id": str(row["id"]), "record_id": int(row["record_id"]), "name": row["name"] or "",
-            "url": row["url"] or "", "status": row["status"] if row["status"] in _DOCUMENT_STATUSES else "failed",
-            "pages": int(row["pages"] or 0), "sha256": row["sha256"] or "", "fetched_at": row["fetched_at"],
-            "mime_type": row["mime_type"] or "", "byte_size": int(row["byte_size"] or 0),
-            "text": row["text"] or "", "page_texts": self._document_json(row["page_texts_json"], []),
-            "items": self._document_json(row["items_json"], []), "error": row["error"] or "",
-            "is_current": bool(row["is_current"]),
-            "updated_at": row["updated_at"],
-        }
-
     def _document_sources_for_records(self, record_ids: list[int] | tuple[int, ...] | None = None,
                                       *, current_only: bool = True) -> list[dict[str, Any]]:
         current_clause = " WHERE is_current=1" if current_only else ""
@@ -498,95 +422,6 @@ class ScreeningService:
             ).fetchall()
         return [self._document_row_value(row) for row in rows]
 
-    @staticmethod
-    def _document_public_metadata(document: dict[str, Any]) -> dict[str, Any]:
-        return {key: document.get(key) for key in (
-            "id", "record_id", "name", "url", "status", "pages", "sha256", "fetched_at", "mime_type",
-            "byte_size", "error", "updated_at",
-        )}
-
-    @staticmethod
-    def _procurement_fingerprint(procurement: dict[str, Any] | None) -> str:
-        """Hash semantic procurement facts while ignoring refresh timestamps."""
-        value = procurement if isinstance(procurement, dict) else {}
-        documents = []
-        for document in value.get("documents", []) if isinstance(value.get("documents"), list) else []:
-            if not isinstance(document, dict):
-                continue
-            documents.append({key: document.get(key) for key in (
-                "id", "record_id", "name", "url", "status", "pages", "sha256", "mime_type", "byte_size", "error",
-            )})
-        return sha256_text(json_text({
-            "status": value.get("status"), "scope_summary": value.get("scope_summary"),
-            "items": value.get("items", []), "delivery_period": value.get("delivery_period"),
-            "delivery_location": value.get("delivery_location"), "missing_fields": value.get("missing_fields", []),
-            "scope_quote": value.get("scope_quote"), "attachment_status": value.get("attachment_status"),
-            "attachment_note": value.get("attachment_note"),
-            "documents": documents,
-        }))
-
-    @staticmethod
-    def _compact_attachment_note(quote: str, *, auth_required: bool = False) -> str:
-        """Keep access evidence readable while grounding it in the body."""
-        compact = re.sub(r"\s+", " ", str(quote or "")).strip()
-        actions = (("注册", "注册"), ("登录", "登录"), ("登陆", "登录"),
-                   ("购买", "购买"), ("审核", "审核"))
-        found = list(dict.fromkeys(label for token, label in actions if token in compact))
-        if found:
-            return "公告说明：招标文件需" + "、".join(found) + "后下载，请核对公告中的获取条件。"
-        elif auth_required:
-            return "附件服务返回需要登录或授权。"
-        return "公告说明文件获取受限，请核对公告中的获取条件。"
-
-    @staticmethod
-    def _attachment_access_state(record_rows: list[sqlite3.Row], documents: list[dict[str, Any]],
-                                 refresh: sqlite3.Row | None,
-                                 restriction_quotes: list[str]) -> tuple[str, str]:
-        """Classify attachment availability from observed evidence only.
-
-        A missing public attachment is a normal ``none_public`` outcome.  It
-        becomes ``restricted`` only when the body or a fetch result contains a
-        concrete access constraint; parser/network failures remain ``failed``.
-        """
-
-        source_attachment_count = 0
-        payload_statuses: list[str] = []
-        for row in record_rows:
-            payload = json_value(row["source_payload_json"], {})
-            attachments = payload.get("attachments", []) if isinstance(payload, dict) else []
-            if not isinstance(attachments, list):
-                continue
-            source_attachment_count += len(attachments)
-            for raw in attachments:
-                if isinstance(raw, dict):
-                    payload_statuses.append(str(raw.get("status") or "").strip().lower())
-
-        refresh_status = str(refresh["status"] or "").strip().lower() if refresh is not None else ""
-        refresh_message = str(refresh["message"] or "").strip() if refresh is not None else ""
-        if refresh_status == "failed":
-            return "failed", f"附件刷新失败：{refresh_message or '未提供错误原因'}"
-
-        document_statuses = [str(document.get("status") or "").strip().lower() for document in documents]
-        if "parsed" in document_statuses:
-            if any(status in {"failed", "unreadable", "unsupported"} for status in document_statuses):
-                return "available", "部分附件已解析，另有附件解析失败。"
-            return "available", ""
-        if "auth_required" in document_statuses or "auth_required" in payload_statuses:
-            note = ScreeningService._compact_attachment_note(
-                restriction_quotes[0] if restriction_quotes else "", auth_required=True,
-            )
-            return "restricted", note
-        if any(status in {"failed", "unreadable", "unsupported"} for status in document_statuses + payload_statuses):
-            return "failed", "附件存在实际获取或解析失败。"
-
-        if restriction_quotes:
-            return "restricted", ScreeningService._compact_attachment_note(restriction_quotes[0])
-        if refresh is not None:
-            if source_attachment_count:
-                return "none_public", "本次刷新未发现可公开解析的附件。"
-            return "none_public", "本次刷新未发现公开附件。"
-        return "not_checked", ""
-
     def _procurement_for_project(self, project_id: int) -> dict[str, Any]:
         record_rows = self.db.execute(
             "SELECT r.id,r.kind,r.body_text,r.source_payload_json FROM records r JOIN project_records pr ON pr.record_id=r.id "
@@ -595,197 +430,7 @@ class ScreeningService:
         record_ids = [int(row["id"]) for row in record_rows]
         documents = self._document_sources_for_records(record_ids)
         refresh = self.db.execute("SELECT * FROM procurement_refreshes WHERE project_id=?", (project_id,)).fetchone()
-
-        body_facts: list[dict[str, Any]] = []
-        restriction_quotes: list[str] = []
-        for row in record_rows:
-            fact = extract_announcement_facts({
-                "id": int(row["id"]), "kind": row["kind"], "body_text": row["body_text"] or "",
-            })
-            body_facts.append(fact)
-            quote = str(fact.get("restriction_quote") or "").strip()
-            if quote and quote not in restriction_quotes:
-                restriction_quotes.append(quote)
-
-        public_documents = [self._document_public_metadata(document) for document in documents]
-        parsed_documents = [document for document in documents if document.get("status") == "parsed"]
-        unresolved_documents = [document for document in documents if document.get("status") != "parsed"]
-        attachment_items: list[dict[str, Any]] = []
-        seen_items: set[tuple[Any, ...]] = set()
-        for document in parsed_documents:
-            for raw_item in document.get("items", []):
-                if not isinstance(raw_item, dict):
-                    continue
-                item = {key: raw_item.get(key, "") for key in _PROCUREMENT_FIELDS}
-                item["source_kind"] = "attachment"
-                item["source_document_id"] = str(document["id"])
-                # The server row is authoritative for both record and
-                # document provenance.  Parser payloads cannot point outside
-                # the current record or silently reassign an evidence row.
-                item["record_id"] = int(document["record_id"])
-                try:
-                    item["page"] = max(1, int(item.get("page") or 1))
-                except (TypeError, ValueError):
-                    item["page"] = 1
-                key = (item["source_document_id"], item["page"], item.get("name"), item.get("quote"))
-                if key in seen_items:
-                    continue
-                seen_items.add(key)
-                attachment_items.append(item)
-
-        # Parsed attachment rows are authoritative for matching details.  A
-        # same-name/same-quantity announcement summary is retained only as
-        # provenance, not counted a second time.  If values differ, preserve
-        # both rows and mark the conflict rather than silently overwriting one.
-        items: list[dict[str, Any]] = list(attachment_items)
-        body_seen: set[tuple[str, str, str]] = set()
-        conflicts: list[str] = []
-        for fact in body_facts:
-            for raw_item in fact.get("items", []) if isinstance(fact.get("items"), list) else []:
-                if not isinstance(raw_item, dict):
-                    continue
-                item = {key: raw_item.get(key, "") for key in _PROCUREMENT_FIELDS}
-                item["source_kind"] = "announcement"
-                item["source_document_id"] = ""
-                item["page"] = 0
-                try:
-                    item["record_id"] = int(item.get("record_id") or 0)
-                except (TypeError, ValueError):
-                    item["record_id"] = 0
-                identity = (str(item.get("name") or "").strip(), str(item.get("quantity") or "").strip(),
-                            str(item.get("unit") or "").strip())
-                if identity in body_seen:
-                    continue
-                body_seen.add(identity)
-                same_name = [candidate for candidate in attachment_items
-                             if str(candidate.get("name") or "").strip() == identity[0]]
-                same_values = [candidate for candidate in same_name
-                               if str(candidate.get("quantity") or "").strip() == identity[1]
-                               and str(candidate.get("unit") or "").strip() == identity[2]]
-                if same_values:
-                    continue
-                if same_name:
-                    conflict = (f"正文与附件明细的{identity[0]}数量或单位不一致，"
-                                "已保留双方来源。")
-                    conflicts.append(conflict)
-                    for candidate in same_name:
-                        old_note = str(candidate.get("note") or "").strip()
-                        candidate["note"] = f"{old_note}；{conflict}".strip("；")
-                    old_note = str(item.get("note") or "").strip()
-                    item["note"] = f"{old_note}；{conflict}".strip("；")
-                items.append(item)
-
-        body_periods = [str(fact.get("delivery_period") or "").strip() for fact in body_facts
-                        if str(fact.get("delivery_period") or "").strip()]
-        body_locations = [str(fact.get("delivery_location") or "").strip() for fact in body_facts
-                         if str(fact.get("delivery_location") or "").strip()]
-        attachment_status, attachment_note = self._attachment_access_state(
-            record_rows, documents, refresh, restriction_quotes,
-        )
-        if conflicts:
-            conflict_note = "；".join(dict.fromkeys(conflicts))
-            attachment_note = f"{attachment_note}；{conflict_note}".strip("；")
-
-        # Keep the scope useful as a category summary.  A material list often
-        # has many rows with the same name but different specifications; using
-        # ``name + specification`` here makes the first rows crowd out the
-        # category breadth and can read like a claim about one equipment title.
-        names: list[str] = []
-        for item in items:
-            name = str(item.get("name") or "").strip()
-            if name and name not in names:
-                names.append(name)
-        if names:
-            preview_names = names[:8]
-            has_announcement = any(item.get("source_kind") == "announcement" for item in items)
-            if has_announcement:
-                # Announcement summaries carry the evidenced quantity so the
-                # list/briefing view remains useful when no public attachment
-                # is available.  Attachment-only summaries retain the
-                # established category wording.
-                quantified: list[str] = []
-                for name in preview_names:
-                    values = list(dict.fromkeys(
-                        f"{str(item.get('quantity') or '').strip()}{str(item.get('unit') or '').strip()}"
-                        for item in items if str(item.get("name") or "").strip() == name
-                        and str(item.get("quantity") or "").strip() and str(item.get("unit") or "").strip()
-                    ))
-                    quantified.append(f"{name}（{'、'.join(values)}）" if values else name)
-                preview = "、".join(quantified)
-            else:
-                preview = "、".join(preview_names)
-            suffix = "等" if len(names) > 8 else ""
-            if has_announcement and any(
-                    item.get("source_kind") == "announcement"
-                    and not str(item.get("specification") or "").strip()
-                    and not str(item.get("material") or "").strip()
-                    for item in items):
-                scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；详细规格和材质待核对原文或招标文件。"
-            else:
-                scope_summary = f"共{len(items)}项物料，包括{preview}{suffix}；各项规格、材质和数量见明细。"
-        elif items:
-            scope_summary = f"共{len(items)}项物料；各项规格、材质和数量见明细。"
-        else:
-            scope_summary = ""
-
-        periods = list(dict.fromkeys(
-            [str(item.get("delivery_period") or "").strip() for item in attachment_items
-             if str(item.get("delivery_period") or "").strip()] + body_periods
-        ))
-        locations = list(dict.fromkeys(
-            [str(item.get("delivery_location") or "").strip() for item in attachment_items
-             if str(item.get("delivery_location") or "").strip()] + body_locations
-        ))
-        missing: list[str] = []
-        if not items:
-            missing.append("明细")
-        else:
-            if any(not str(item.get("quantity") or "").strip() or not str(item.get("unit") or "").strip() for item in items):
-                missing.append("数量/单位")
-            if any(not str(item.get("specification") or "").strip() and not str(item.get("material") or "").strip() for item in items):
-                missing.append("规格/材质")
-        if not periods:
-            missing.append("交期")
-        if not locations:
-            missing.append("交地")
-        if unresolved_documents:
-            missing.append("附件未解析")
-        if attachment_status == "failed" and not unresolved_documents:
-            missing.append("附件未解析")
-        if attachment_status == "restricted" and not unresolved_documents:
-            missing.append("附件受限")
-        missing = list(dict.fromkeys(missing))
-
-        attempted = refresh is not None
-        has_body_facts = bool(items and any(item.get("source_kind") == "announcement" for item in items)
-                              or body_periods or body_locations)
-        if has_body_facts:
-            # Body facts are useful even when no document is public.  A
-            # failed/restricted attachment only limits completeness; it must
-            # never erase an evidenced announcement fact.
-            status = ("complete" if not missing and not conflicts
-                      and attachment_status not in {"failed", "restricted"} else "partial")
-        elif not documents:
-            status = "unavailable" if attempted else "not_checked"
-        elif not parsed_documents:
-            status = "unavailable"
-        elif unresolved_documents or missing:
-            status = "partial"
-        else:
-            status = "complete"
-        updated_values = [str(document.get("updated_at") or "") for document in documents if document.get("updated_at")]
-        if refresh and refresh["attempted_at"]:
-            updated_values.append(str(refresh["attempted_at"]))
-        updated_at = max(updated_values) if updated_values else None
-        scope_quotes = [str(fact.get("scope_quote") or "").strip() for fact in body_facts
-                        if str(fact.get("scope_quote") or "").strip()]
-        return {
-            "status": status, "scope_summary": scope_summary, "items": items,
-            "delivery_period": "；".join(periods)[:4000], "delivery_location": "；".join(locations)[:4000],
-            "missing_fields": missing, "documents": public_documents, "updated_at": updated_at,
-            "attachment_status": attachment_status, "attachment_note": attachment_note,
-            "scope_quote": scope_quotes[0] if scope_quotes else "",
-        }
+        return build_procurement_summary(record_rows, documents, refresh)
 
     async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]], *,
                                         preloaded: dict[int, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
@@ -1957,6 +1602,7 @@ class ScreeningService:
                     return value
 
             usage_totals = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}
+            format_repair_attempted = False
             for correction in range(2):
                 if correction:
                     with self._db_lock, self.db:
@@ -2007,6 +1653,78 @@ class ScreeningService:
                                                  require_report=isinstance(provider, (PiSDKProvider, OpenAICompatibleProvider)))
                     break
                 except AIError as exc:
+                    # A malformed final report from the official DeepSeek
+                    # provider gets one isolated YAML serialization pass. This
+                    # avoids replaying the agent investigation and cannot
+                    # execute any business tool; the decoded JSON is still
+                    # checked by validate_judgment below.
+                    if (uses_agent and isinstance(provider, PiSDKProvider) and not self._injected_provider
+                            and exc.code == "MODEL_FORMAT_ERROR"
+                            and not format_repair_attempted
+                            and deepseek_formatter_endpoint(str(config.get("base_url") or "")) is not None):
+                        format_repair_attempted = True
+                        with self._db_lock, self.db:
+                            self.db.execute("UPDATE jobs SET attempts=attempts+1,updated_at=? WHERE id=?",
+                                            (now_iso(), job_id))
+                        if agent_run_id is not None:
+                            self._record_agent_event(agent_run_id, {"stage": "model"})
+                        available_evidence = {
+                            "documents": [{key: document.get(key) for key in
+                                           ("id", "record_id", "name", "read_fragments")}
+                                          for document in document_sources],
+                            "research_sources": research_session.evidence_sources() if research_session else [],
+                        }
+                        repair_messages = correction_messages(
+                            messages, exc, previous_output=content,
+                            available_evidence=available_evidence,
+                        )
+                        finalizer_usage_recorded = False
+
+                        def record_finalizer_usage(value: dict[str, int]) -> None:
+                            nonlocal finalizer_usage_recorded
+                            finalizer_usage_recorded = True
+                            if agent_run_id is not None:
+                                self._update_agent_usage(agent_run_id, value)
+
+                        finalizer = await strict_format_report(
+                            base_url=str(config.get("base_url") or ""),
+                            model=str(config.get("model") or ""),
+                            api_key=str(config.get("api_key") or ""),
+                            messages=repair_messages,
+                            previous_output="",
+                            available_evidence={},
+                            prepared_messages=True,
+                            max_output_tokens=int(runtime_limits.get("max_output_tokens", 16_384)),
+                            on_usage=record_finalizer_usage,
+                        )
+                        if agent_run_id is not None and not finalizer_usage_recorded:
+                            self._update_agent_usage(agent_run_id, finalizer.usage)
+                        content = finalizer.content
+                        try:
+                            judgment = validate_judgment(
+                                content, project, config["model"], fingerprint,
+                                related_records=related_records,
+                                forbidden_values=[str(config.get("api_key") or "")],
+                                document_sources=document_sources,
+                                company_material=capability,
+                                research_sources=research_session.evidence_sources() if research_session else [],
+                                require_report=True,
+                            )
+                        except AIError as finalizer_error:
+                            # A successful format conversion may still fail
+                            # trusted evidence or report semantics.  On the
+                            # first pass, feed that validation error into the
+                            # existing single semantic correction.  Formatter
+                            # failures and second-pass failures remain terminal.
+                            if correction or finalizer_error.code == "MODEL_FORMAT_ERROR":
+                                raise
+                            exc = finalizer_error
+                        else:
+                            break
+                    # A semantic correction still gets only its one agent
+                    # retry.  The format-only finalizer above is the sole
+                    # exception, so a malformed second response can be
+                    # repaired without starting another investigation.
                     if correction:
                         raise
                     if agent_run_id is not None:

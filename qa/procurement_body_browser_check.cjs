@@ -131,12 +131,18 @@ async function checkWidth(page, width) {
       assert.ok(!text.includes('公告未公开，详见招标文件'))
       assert.equal(await section.locator('.detail-procurement-actions button').filter({ hasText: '更新公开资料' }).count(), 1)
       assert.equal(await page.getByText('点击“读取附件”，查看采购清单。', { exact: true }).count(), 0)
-      assert.ok((await page.locator('.detail-meta-item').filter({ hasText: '涉及设备' }).innerText()).includes('煤矿井下压裂泵'))
+      assert.ok((await page.locator('.detail-meta-item').filter({ hasText: '设备线索' }).innerText()).includes('煤矿井下压裂泵'))
       await section.locator('button[aria-label*="展开煤矿井下压裂泵"]').click()
       const expanded = section.locator('.detail-procurement-expanded')
       assert.ok((await expanded.innerText()).includes('公告正文'))
       assert.equal(await expanded.locator('a[href*="#page="]').count(), 0)
       await checkWidth(page, width)
+      const collapseButton = section.getByRole('button', { name: /收起煤矿井下压裂泵/ })
+      assert.ok(await collapseButton.evaluate(el => {
+        const rect = el.getBoundingClientRect()
+        return rect.left >= 0 && rect.right <= window.innerWidth
+      }), 'Group actions must remain visible when the detail table scrolls')
+      await page.screenshot({ path: path.join(output, `announcement-viewport-${width}.png`) })
       await page.screenshot({ path: path.join(output, `announcement-${width}.png`), fullPage: true })
     }
 

@@ -9,9 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend.ai import AIError, PiSDKProvider, validate_judgment
+from backend.analysis.ai import AIError, PiSDKProvider, validate_judgment
 from backend.main import create_app
-from backend.service import ScreeningService
+from backend.application.service import ScreeningService
 from backend.tests.test_backend import Provider, configure_ai, make_service, row
 
 
@@ -148,7 +148,7 @@ def make_research_service(tmp_path, records, *, provider=None):
 
 
 def test_real_host_investigation_preserves_versions_and_only_cited_dependencies(tmp_path, monkeypatch):
-    from backend.project_research import ResearchSession
+    from backend.research.project_research import ResearchSession
 
     monkeypatch.setenv("SCREENING_AI_ENGINE", "pi_sdk")
     source_record = row()

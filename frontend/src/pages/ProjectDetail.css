@@ -2,37 +2,40 @@
   Design plan — procurement records should read like a durable work document.
   Palette: white #fff, ink #172d48, action blue #193c78, line #e2e8f0,
   muted #62748a, and amber only for a real warning. Type is compact and calm:
-  22px record title, 18px section titles, 14px body, 12px metadata.
-  Layout: one readable document column (max 960px) with a 250px sticky rail
-  for properties, actions, and contents. Sections use rules and whitespace,
+  22px record title, 16px section titles, 13px body, 12px metadata.
+  Layout: a compact property/action strip above five sticky horizontal tabs.
+  One panel fills the readable content width. Sections use rules and whitespace,
   with no outer cards or nested colored panels. Content is left aligned and
   capped near 80ch where a long paragraph needs room to breathe.
 
   Critique: a warm palette, repeated rounded cards, and a dashboard grid would
   make a procurement record feel like a generic generated SaaS screen. The
   document treatment keeps the one deliberate visual choice — a quiet blue
-  navigation rail — while letting the source text carry the page.
+  active tab indicator — while letting the source text carry the page.
 */
 
 .detail-page {
-  --detail-ink: #172d48;
-  --detail-blue: #193c78;
-  --detail-muted: #62748a;
-  --detail-line: #e2e8f0;
+  --detail-ink: var(--ink);
+  --detail-blue: var(--accent);
+  --detail-muted: var(--muted);
+  --detail-line: var(--line);
   --detail-soft: #f7f9fc;
   --detail-amber: #a46515;
   width: 100%;
-  max-width: 1440px;
+  max-width: 1520px;
   margin: 0 auto;
   gap: 0;
   color: var(--detail-ink);
   background: #fff;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-/* The application shell gives .page-stack a wider cap; keep this record's
-   document and rail close enough to read as one workspace. */
+/* Keep the project content at a readable width within the application shell. */
 .detail-page.page-stack {
-  max-width: 1320px;
+  max-width: 1520px;
+  gap: 0;
 }
 
 .detail-page,
@@ -68,7 +71,7 @@
   justify-content: space-between;
   gap: 12px;
   min-height: 28px;
-  margin-bottom: 18px;
+  margin-bottom: 10px;
 }
 
 .detail-page .detail-back-button {
@@ -88,7 +91,7 @@
 }
 
 .detail-hero {
-  padding-bottom: 18px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--detail-line);
 }
 
@@ -135,51 +138,85 @@
   background: #102e61;
 }
 
+.detail-page .ant-btn {
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+.detail-page .ant-tag {
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.detail-disclosure .ant-typography {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.detail-disclosure-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.detail-disclosure > .ant-btn {
+  height: auto;
+  padding: 2px 0;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.detail-disclosure > .ant-btn:hover {
+  text-decoration: underline;
+}
+
 .detail-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 250px;
-  align-items: start;
-  gap: 36px;
-  padding-top: 18px;
+  width: 100%;
 }
 
-.detail-workspace > .detail-main-column {
+.detail-tab-panel {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
+  padding-top: 16px;
 }
 
-.detail-info-rail {
-  position: sticky;
-  top: 24px;
+.detail-context-bar {
   display: flex;
-  flex-direction: column;
-  gap: 24px;
-  align-self: start;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 12px 0;
   color: var(--detail-ink);
 }
 
 .detail-rail-section {
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--detail-line);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  flex: 1 1 560px;
 }
 
 .detail-rail-heading {
-  margin: 0 0 12px;
-  color: var(--detail-ink);
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.5;
+  display: none;
 }
 
 .detail-meta-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 9px 0;
-  border-top: 1px solid var(--detail-line);
+  align-items: baseline;
+  gap: 8px;
   font-size: 12px;
   line-height: 1.55;
+  max-width: 100%;
 }
 
 .detail-meta-item:first-of-type {
@@ -190,6 +227,7 @@
 .detail-meta-item .ant-typography {
   color: var(--detail-muted);
   font-size: 12px;
+  flex: 0 0 auto;
 }
 
 .detail-meta-item strong,
@@ -202,38 +240,130 @@
 
 .detail-rail-actions .detail-actions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
+.detail-rail-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .detail-rail-actions .detail-actions .ant-btn {
-  width: 100%;
   height: 32px;
   font-size: 12px;
 }
 
-.detail-contents-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+.detail-tab-bar {
+  position: sticky;
+  top: var(--project-header-height);
+  z-index: 4;
+  background: var(--panel);
+  scroll-margin-top: var(--project-header-height);
 }
 
-.detail-contents-nav .detail-rail-heading {
-  margin-bottom: 4px;
+.detail-tabs > .detail-tab-bar > .ant-tabs-nav {
+  margin: 0;
 }
 
-.detail-contents-nav a {
-  display: block;
-  padding: 3px 0;
+.detail-tabs .ant-tabs-tab {
+  flex: 0 0 auto;
+  padding: 12px 2px;
   color: var(--detail-muted);
   font-size: 13px;
-  line-height: 1.45;
-  text-decoration: none;
+  white-space: nowrap;
 }
 
-.detail-contents-nav a:hover {
+.detail-tabs .ant-tabs-tab + .ant-tabs-tab {
+  margin-left: 28px;
+}
+
+/* The page's universal min-width reset must not shrink the measured tab row. */
+.detail-tabs .ant-tabs-nav-list {
+  min-width: max-content;
+  flex-shrink: 0;
+}
+
+.detail-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
   color: var(--detail-blue);
+  font-weight: 600;
+}
+
+.detail-tabs .ant-tabs-ink-bar {
+  height: 2px;
+  background: var(--detail-blue);
+}
+
+.detail-tabs .ant-tabs-tab:hover {
+  color: var(--detail-blue);
+  background: var(--detail-soft);
+}
+
+.detail-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  text-shadow: none;
+}
+
+.detail-tabs .ant-tabs-tab-btn:focus-visible {
+  outline: 2px solid var(--detail-blue);
+  outline-offset: 4px;
+}
+
+.detail-tabs > .ant-tabs-content-holder {
+  overflow: visible;
+}
+
+.detail-tabs .ant-tabs-tabpane-hidden {
+  display: none;
+}
+
+/* Report sections share the panel surface; evidence keeps its own markers. */
+.detail-page .agent-report-overview-first {
+  gap: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.detail-page .agent-report-overview-first .agent-report-heading h2 {
+  font-size: 16px;
+}
+
+.detail-page .agent-report-overview-first .agent-report-opportunity,
+.detail-page .agent-report-overview-first .agent-report-gap {
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--detail-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.detail-page .agent-report-overview-first .agent-report-gap {
+  padding-left: 12px;
+  border-left: 2px solid var(--detail-amber);
+}
+
+.detail-page .agent-report-overview-first .agent-report-opportunity-heading {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.detail-page .agent-report-overview-first .agent-report-gap-heading {
+  align-items: flex-start;
+}
+
+.detail-page .agent-report-overview-first .agent-report-gap-list:has(> :only-child),
+.detail-page .agent-report-overview-first .agent-report-opportunity-list:has(> :only-child) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.detail-page .agent-report-overview-first .agent-report-paragraph {
+  max-width: 80ch;
+}
+
+.detail-page .detail-tab-panel > .detail-panel:last-child,
+.detail-page .detail-tab-panel > .detail-decision-card:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .detail-section-kicker {
@@ -242,7 +372,7 @@
   gap: 7px;
   color: var(--detail-blue);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-section-title {
@@ -251,8 +381,8 @@
   gap: 8px;
   margin: 0;
   color: var(--detail-ink);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.45;
 }
 
@@ -267,7 +397,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 13px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--detail-line);
 }
 
@@ -287,13 +417,13 @@
 .detail-section-heading h2 {
   margin: 0;
   color: var(--detail-ink);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.45;
 }
 
 .detail-briefing {
-  padding: 0 0 28px;
+  padding: 0 0 20px;
   background: #fff;
 }
 
@@ -314,8 +444,8 @@
 .detail-briefing h2 {
   margin: 0;
   color: var(--detail-ink);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.45;
 }
 
@@ -339,7 +469,7 @@
 .detail-briefing-primary {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(240px, .9fr);
-  gap: 24px;
+  gap: 20px;
   margin-top: 12px;
 }
 
@@ -348,7 +478,7 @@
 }
 
 .detail-briefing-field + .detail-briefing-field {
-  padding-left: 24px;
+  padding-left: 20px;
   border-left: 1px solid var(--detail-line);
 }
 
@@ -363,7 +493,7 @@
 .detail-briefing-label {
   color: var(--detail-ink);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-briefing-field p,
@@ -371,14 +501,14 @@
   max-width: 80ch;
   margin: 0;
   color: #334e68;
-  font-size: 14px;
-  line-height: 1.75;
+  font-size: 13px;
+  line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .detail-briefing-qualifications {
-  margin-top: 19px;
+  margin-top: 12px;
   border-top: 1px solid var(--detail-line);
   border-bottom: 1px solid var(--detail-line);
 }
@@ -392,7 +522,7 @@
   color: var(--detail-ink);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-briefing-qualifications summary::marker {
@@ -410,17 +540,15 @@
 }
 
 .detail-briefing-summary-meta {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   color: var(--detail-muted);
   font-size: 12px;
   font-weight: 400;
 }
 
 .detail-briefing-qualification-body {
-  max-height: 360px;
   margin: 0 0 13px;
   padding: 4px 0 4px 16px;
-  overflow: auto;
   border-left: 2px solid #cbd5e1;
   color: #334e68;
   font-size: 14px;
@@ -430,9 +558,7 @@
 }
 
 .detail-briefing-contact {
-  margin-top: 18px;
-  padding-top: 15px;
-  border-top: 1px solid var(--detail-line);
+  margin-top: 12px;
 }
 
 .detail-briefing-contact .detail-briefing-field-heading {
@@ -446,7 +572,7 @@
 }
 
 .detail-procurement {
-  padding-bottom: 32px;
+  padding-bottom: 20px;
   border-bottom: 1px solid var(--detail-line);
 }
 
@@ -458,7 +584,8 @@
 .detail-procurement-actions .ant-btn {
   color: var(--detail-muted);
   font-size: 12px;
-  padding-inline: 0;
+  padding-inline: 8px;
+  border: 1px solid var(--detail-line);
 }
 
 .detail-procurement-actions a {
@@ -474,8 +601,8 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  margin-top: 14px;
-  padding: 9px 12px;
+  margin-top: 0;
+  padding: 8px 10px;
   border-left: 3px solid var(--detail-line);
   color: var(--detail-muted);
   font-size: 12px;
@@ -511,7 +638,7 @@
 }
 
 .detail-procurement .detail-briefing-heading h2 {
-  font-size: 20px;
+  font-size: 16px;
 }
 
 .detail-procurement-error {
@@ -524,8 +651,8 @@
 
 .detail-procurement-items,
 .detail-procurement-documents {
-  margin-top: 23px;
-  padding-top: 18px;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--detail-line);
 }
 
@@ -541,7 +668,7 @@
   margin: 0 0 3px;
   color: var(--detail-ink);
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.45;
 }
 
@@ -550,8 +677,11 @@
   font-size: 12px;
 }
 
-.detail-procurement-search {
+.detail-procurement-search.ant-input-affix-wrapper {
   width: min(310px, 100%);
+  flex: 0 1 310px;
+  min-height: 32px;
+  font-size: 13px;
 }
 
 .detail-procurement-table-wrap {
@@ -623,8 +753,8 @@
 .detail-procurement-delivery-value {
   display: block;
   color: var(--detail-ink);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.4;
 }
 
@@ -647,9 +777,10 @@
 }
 
 .detail-procurement-delivery-strip {
-  margin-top: 18px;
-  padding-bottom: 16px;
+  margin-top: 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--detail-line);
+  background: var(--detail-soft);
 }
 
 .detail-procurement-delivery-strip .detail-procurement-delivery-facts {
@@ -673,7 +804,16 @@
 }
 
 .detail-procurement-delivery-strip .detail-procurement-delivery-value {
-  font-size: 22px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+}
+
+.detail-procurement-field-warning {
+  display: block;
+  margin-top: 6px;
+  color: var(--detail-amber);
+  font-size: 12px;
 }
 
 .detail-procurement-delivery-strip .detail-procurement-address-note {
@@ -764,7 +904,7 @@
 .detail-procurement-table-wrap .ant-table-thead > tr > th {
   color: var(--detail-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -782,7 +922,7 @@
 .detail-procurement-quantity {
   color: var(--detail-ink);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .detail-procurement-delivery-cell {
@@ -818,16 +958,12 @@
 
 .detail-procurement-quote {
   display: block;
-  max-width: 28ch;
-  overflow: hidden;
   color: var(--detail-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12px;
 }
 
 .detail-procurement-empty {
-  padding: 14px 0;
+  padding: 10px 0;
   color: var(--detail-amber);
   font-size: 13px;
 }
@@ -886,8 +1022,7 @@
 }
 
 .detail-summary {
-  padding: 0 0 28px;
-  border-bottom: 1px solid var(--detail-line);
+  padding: 0;
 }
 
 .detail-summary-header {
@@ -914,10 +1049,10 @@
 
 .detail-summary-conclusion {
   max-width: 80ch;
-  margin: 17px 0 0;
+  margin: 12px 0 0;
   color: #2f485f;
-  font-size: 16px;
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -942,13 +1077,13 @@
 
 .detail-summary-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr) minmax(155px, .8fr);
-  gap: 22px;
-  margin-top: 22px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .6fr);
+  gap: 20px;
+  margin-top: 12px;
 }
 
 .detail-summary-block {
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px solid var(--detail-line);
 }
 
@@ -959,12 +1094,16 @@
   margin-bottom: 6px;
   color: var(--detail-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-summary-block p {
   margin: 0;
   line-height: 1.7;
+}
+
+.detail-page .detail-summary-block > .ant-typography {
+  margin-bottom: 4px;
 }
 
 .detail-summary-block > .ant-typography-secondary {
@@ -1009,30 +1148,18 @@
   border-radius: 3px;
 }
 
-.detail-columns {
-  display: flex;
-  flex-direction: column;
-  gap: 32px;
-}
-
-.detail-columns > .detail-main-column,
-.detail-columns > .detail-side-column {
-  display: block;
-  min-width: 0;
-}
-
 .detail-panel,
 .detail-decision-card {
-  padding-bottom: 28px;
+  padding-bottom: 20px;
   border-bottom: 1px solid var(--detail-line);
   background: #fff;
 }
 
 .detail-panel-intro {
   max-width: 80ch;
-  margin: 15px 0 17px;
+  margin: 10px 0 12px;
   color: var(--detail-muted);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.7;
 }
 
@@ -1048,7 +1175,7 @@
   flex: 0 0 auto;
   color: var(--detail-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-demand-strip .ant-tag {
@@ -1103,11 +1230,9 @@
 }
 
 .detail-record-label > span:first-child {
-  overflow: hidden;
   color: var(--detail-ink);
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .detail-record-label > span:last-child {
@@ -1124,10 +1249,8 @@
 }
 
 .detail-record-body {
-  max-height: 420px;
   margin: 14px 0 10px;
   padding: 3px 0 3px 16px;
-  overflow: auto;
   border-left: 2px solid #cbd5e1;
   color: #334e68;
   line-height: 1.8;
@@ -1471,7 +1594,7 @@
   margin: 0;
   color: var(--detail-ink);
   font-size: 16px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1481,7 +1604,7 @@
   margin-bottom: 3px;
   color: var(--detail-blue);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-option-state {
@@ -1536,7 +1659,7 @@
 .detail-page .detail-decision-form .ant-form-item-label > label {
   color: var(--detail-ink);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .detail-decision-form-grid {
@@ -1585,20 +1708,14 @@
 .detail-secondary-heading-row h2 {
   margin: 0;
   color: var(--detail-ink);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.45;
 }
 
 .detail-secondary-heading-row > .ant-typography {
   color: var(--detail-muted);
   font-size: 12px;
-}
-
-.detail-secondary-label {
-  color: var(--detail-blue);
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .detail-secondary-grid {
@@ -1693,34 +1810,68 @@
   margin: 20px 0;
 }
 
-@media (max-width: 1180px) {
-  .detail-workspace {
-    grid-template-columns: minmax(0, 1fr) 230px;
-    gap: 32px;
+/* Align existing report and research components with the detail-page scale. */
+.detail-page .agent-report,
+.detail-page .research-panel {
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: 13px;
+}
+
+.detail-page .agent-report-heading h2,
+.detail-page .research-panel-heading h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.detail-page .agent-report-section h3,
+.detail-page .agent-report-subheading h3,
+.detail-page .agent-report-opportunity-heading h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.detail-page .research-source-title-row > strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.detail-page .detail-procurement-table-wrap .ant-table-cell {
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.detail-page .detail-procurement-table-wrap .ant-table-thead > tr > th {
+  padding: 8px 10px;
+  background: var(--detail-soft);
+  font-weight: 500;
+}
+
+.detail-page .detail-procurement-table-wrap .ant-table-tbody > tr > td {
+  padding: 10px;
+}
+
+.detail-page .detail-procurement-group-table .ant-table-expanded-row > td {
+  padding: 12px !important;
+  background: var(--detail-soft);
+}
+
+@media (min-width: 1440px) {
+  .detail-procurement-document-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
   }
 }
 
-@media (max-width: 980px) {
-  .detail-workspace {
-    display: flex;
-    flex-direction: column;
+@media (max-width: 1000px) {
+  .detail-decision-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .detail-workspace > .detail-main-column {
-    width: 100%;
-  }
-
-  .detail-info-rail {
-    position: static;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    width: 100%;
-    gap: 24px;
-    order: -1;
-  }
-
-  .detail-rail-section {
-    min-width: 0;
+  .detail-decision-form-grid > :last-child {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1736,101 +1887,34 @@
     text-align: left;
   }
 
-  .detail-workspace {
-    padding-top: 12px;
-  }
-
-  .detail-info-rail {
-    display: grid;
-    grid-template-columns: minmax(95px, .8fr) auto minmax(0, 1.35fr);
-    grid-template-areas: 'properties actions contents';
-    align-items: center;
+  .detail-context-bar {
+    flex-direction: column;
+    align-items: flex-start;
     gap: 10px;
-    padding-bottom: 11px;
-    border-bottom: 1px solid var(--detail-line);
   }
 
   .detail-rail-section {
-    padding-bottom: 0;
-    border-bottom: 0;
+    gap: 6px 16px;
+    flex: 0 1 auto;
+    width: 100%;
   }
 
-  .detail-info-rail > .detail-rail-section:first-child {
-    grid-area: properties;
-  }
-
-  .detail-info-rail > .detail-rail-section:nth-child(2) {
-    grid-area: actions;
-  }
-
-  .detail-info-rail > .detail-rail-section:nth-child(3) {
-    grid-area: contents;
-  }
-
-  .detail-rail-heading {
-    margin-bottom: 3px;
-    font-size: 11px;
-  }
-
-  .detail-info-rail .detail-meta-item {
-    padding: 0;
-    border-top: 0;
-  }
-
-  .detail-info-rail .detail-meta-item:not(:first-of-type) {
-    display: none;
-  }
-
-  .detail-info-rail .detail-meta-item .ant-typography {
-    font-size: 11px;
-  }
-
-  .detail-info-rail .detail-meta-item strong {
-    font-size: 12px;
-  }
-
-  .detail-rail-actions .detail-rail-heading {
-    display: none;
-  }
-
-  .detail-rail-actions .detail-actions {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
+  .detail-rail-actions {
+    margin-left: 0;
   }
 
   .detail-rail-actions .detail-actions .ant-btn {
-    width: auto;
     height: 30px;
     padding-inline: 9px;
-    font-size: 11px;
   }
 
-  .detail-contents-nav {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 12px;
-    align-items: center;
-    overflow-x: auto;
-    padding-left: 12px;
-    border-left: 1px solid var(--detail-line);
-    scrollbar-width: none;
+  /* Ant Design handles touch/wheel scrolling and keyboard focus in one row. */
+  .detail-tabs .ant-tabs-nav .ant-tabs-nav-operations {
+    display: none !important;
   }
 
-  .detail-contents-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .detail-contents-nav .detail-rail-heading {
-    display: none;
-  }
-
-  .detail-contents-nav a {
-    flex: 0 0 auto;
-    padding: 0;
-    font-size: 11px;
-    white-space: nowrap;
+  .detail-tabs .ant-tabs-tab + .ant-tabs-tab {
+    margin-left: 20px;
   }
 
   .detail-hero h2 {
@@ -1859,8 +1943,9 @@
     gap: 9px;
   }
 
-  .detail-procurement-search {
+  .detail-procurement-search.ant-input-affix-wrapper {
     width: 100%;
+    flex-basis: auto;
   }
 
   .detail-procurement-table-wrap {
@@ -1880,6 +1965,14 @@
   .detail-procurement-delivery-strip .detail-procurement-delivery-facts > div + div {
     border-left: 0;
     padding-left: 0;
+  }
+
+  .detail-procurement-attachment-notice {
+    flex-wrap: wrap;
+  }
+
+  .detail-procurement-attachment-notice > span:last-child {
+    flex-basis: 100%;
   }
 
   .detail-briefing-field + .detail-briefing-field {

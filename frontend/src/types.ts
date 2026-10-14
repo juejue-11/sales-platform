@@ -196,6 +196,27 @@ export type ProcurementStatus = 'not_checked' | 'partial' | 'complete' | 'unavai
 export type ProcurementDocumentStatus = 'parsed' | 'unsupported' | 'auth_required' | 'failed' | 'unreadable'
 export type ProcurementSourceKind = 'announcement' | 'attachment'
 export type ProcurementAttachmentStatus = 'not_checked' | 'none_public' | 'restricted' | 'available' | 'failed'
+export type ProcurementFactField = 'scope' | 'delivery_period' | 'delivery_location' | 'qualification' | 'contact'
+export type ProcurementFactStatus = 'extracted' | 'uncertain' | 'conflict'
+
+/** A bounded, immutable citation supplied by the procurement API. */
+export interface ProcurementFactSource {
+  source_kind: ProcurementSourceKind
+  record_id: number
+  document_id?: number | string
+  page?: number | null
+  quote: string
+  sha256?: string | null
+}
+
+export interface ProcurementFact {
+  id: string
+  field: ProcurementFactField
+  value: string
+  status: ProcurementFactStatus
+  note?: string | null
+  sources: ProcurementFactSource[]
+}
 
 export interface ProcurementItem {
   name: string
@@ -214,6 +235,8 @@ export interface ProcurementItem {
   record_id: number
   page?: number | null
   quote?: string | null
+  status?: ProcurementFactStatus
+  sources?: ProcurementFactSource[]
 }
 
 export interface ProcurementDocument {
@@ -230,6 +253,22 @@ export interface ProcurementDocument {
   byte_size?: number | null
 }
 
+export interface ProcurementDocumentSnapshot {
+  id?: number | string
+  record_id?: number
+  name?: string
+  url?: string
+  status?: ProcurementDocumentStatus
+  pages?: number | null
+  sha256?: string | null
+  fetched_at?: string | null
+  mime_type?: string | null
+  byte_size?: number | null
+  error?: string | null
+  text?: string | null
+  page_texts?: Array<{ page?: number | null; text?: string | null }>
+}
+
 export interface ProcurementData {
   status: ProcurementStatus
   scope_summary: string
@@ -239,6 +278,8 @@ export interface ProcurementData {
   missing_fields: string[]
   documents: ProcurementDocument[]
   updated_at: string | null
+  /** Structured facts are optional while older API responses are still in circulation. */
+  facts?: ProcurementFact[]
   /** Optional while older API responses are still in circulation. */
   attachment_status?: ProcurementAttachmentStatus | null
   /** Human-readable access caveat, for example a registration or purchase requirement. */

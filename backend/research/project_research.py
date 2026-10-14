@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
-from .public_documents import DocumentError, discover_attachments, parse_document
+from ..documents.public_documents import DocumentError, discover_attachments, parse_document
 
 
 RESEARCH_POLICY_VERSION = "project_research_v1"
@@ -43,7 +43,7 @@ RESEARCH_RELATIONS = frozenset({
     "conflict",
 })
 _VERIFIED_RELATIONS = frozenset({"same_procurement", "related_project", "buyer_background"})
-_DEFAULT_SOURCES_PATH = Path(__file__).with_name("research_sources.json")
+_DEFAULT_SOURCES_PATH = Path(__file__).resolve().parent.parent / "research_sources.json"
 _DEFAULT_BUDGETS = {
     "max_calls": 24,
     "max_download_bytes": 12 * 1024 * 1024,

@@ -22,7 +22,7 @@ def serve(output: Path) -> None:
     from backend.main import create_app
     from backend.tests.test_backend import Provider
     from backend.tests.test_research_integration import make_research_service
-    from backend.utils import now_iso
+    from backend.core.utils import now_iso
 
     records = [dict(id=project_id, source_id="qa", kind="tender", title=title,
                     project_name=title, buyer="隔离验收采购方", notice_number="P-100",

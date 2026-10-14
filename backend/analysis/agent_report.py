@@ -228,7 +228,7 @@ def normalize_report(value: Any, *, normalize_evidence: EvidenceNormalizer,
                      max_bytes: int = REPORT_MAX_BYTES) -> dict[str, Any]:
     """Validate and canonicalize a version 1 report.
 
-    ``normalize_evidence`` is supplied by :mod:`backend.ai`; this keeps source
+    ``normalize_evidence`` is supplied by :mod:`backend.analysis.ai`; this keeps source
     and document trust rules in one place while this module owns the report
     protocol itself.
     """

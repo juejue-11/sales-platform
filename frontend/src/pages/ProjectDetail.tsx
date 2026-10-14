@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Table, Tag, Typography, message } from 'antd'
-import type { TableColumnsType } from 'antd'
-import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Alert, Button, Collapse, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Radio, Select, Space, Tabs, Tag, Typography, message } from 'antd'
+import { ArrowLeftOutlined, CheckCircleOutlined, FileSearchOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { DecisionStatus, Evidence, JudgmentOption, ProcurementAttachmentStatus, ProcurementData, ProcurementDocument, ProcurementItem, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
+import type { DecisionStatus, Evidence, JudgmentOption, ProjectDetail as ProjectDetailData, ProjectSummary } from '../types'
+import { ProcurementBriefing } from '../components/procurement'
 import { AiDecisionTag, AiStatusTag, AnalysisScopeTag, CompanyMatchTag, companyMatchDescription, companyMatchLabels, DecisionTag, EmptyBlock, ErrorBlock, formatDate, formatFreshness, GateTag, LoadingBlock, ProjectTitle, sourceLabel } from '../components/Common'
-import { DecisionHistoryList, StructuredFields, VersionHistory } from '../components/ReadableFields'
-import { cleanQualificationExcerpt, cleanScopeExcerpt, normalizeOpportunityText } from '../components/opportunities/text'
-import { groupProcurementItems, type ProcurementGroup } from '../utils/procurementGroups'
+import { DecisionHistoryList, VersionHistory } from '../components/ReadableFields'
+import { normalizeOpportunityText } from '../components/opportunities/text'
 import { ResearchDisplay } from '../components/research/ResearchDisplay'
+import { ExpandableText } from '../components/ExpandableText'
 import { AgentReport, LegacyJudgmentReport } from '../components/report/AgentReport'
 import { EvidenceCitation } from '../components/report/EvidenceCitation'
 import './ProjectDetail.css'
@@ -26,6 +26,14 @@ interface DecisionFormState {
 
 const emptyDecision: DecisionFormState = { status: 'new', owner: '', next_action: '', note: '', selected_option_id: null }
 
+const detailTabs = [
+  { key: 'procurement', label: '采购信息' },
+  { key: 'analysis', label: 'AI 研判' },
+  { key: 'research', label: '项目调查' },
+  { key: 'decision', label: '行动与决定' },
+  { key: 'history', label: '历史与关联' },
+]
+
 function decisionFromProject(project: ProjectSummary, currentJudgmentId: number | null, judgmentStale: boolean, blockedGate: boolean): DecisionFormState {
   const selectionFromOldJudgment = project.decision.judgment_id != null && project.decision.judgment_id !== currentJudgmentId
   return {
@@ -41,6 +49,23 @@ export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const projectId = Number(id)
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const activeTab = detailTabs.find((tab) => tab.key === requestedTab)?.key ?? 'procurement'
+  const tabBarRef = useRef<HTMLDivElement>(null)
+  const changeTab = (key: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.set('tab', key)
+      return next
+    }, { preventScrollReset: true })
+    // A short panel can leave the reader below its content after switching.
+    // Keep the panel entrance in view when switching from a scrolled position.
+    const tabBar = tabBarRef.current
+    if (tabBar?.parentElement && tabBar.parentElement.getBoundingClientRect().top < tabBar.getBoundingClientRect().top) {
+      tabBar.scrollIntoView({ block: 'start' })
+    }
+  }
   const [detail, setDetail] = useState<ProjectDetailData | null>(null)
   const [decisionForm, setDecisionForm] = useState<DecisionFormState>(emptyDecision)
   const [decisionDirty, setDecisionDirty] = useState(false)
@@ -56,6 +81,7 @@ export function ProjectDetailPage() {
   const projectIdRef = useRef(projectId)
   const decisionDirtyRef = useRef(false)
   const requestSequenceRef = useRef(0)
+  const procurementRequestSequenceRef = useRef(0)
   projectIdRef.current = projectId
 
   const markDecisionDirty = (value: boolean) => {
@@ -90,11 +116,14 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     requestSequenceRef.current += 1
+    procurementRequestSequenceRef.current += 1
     markDecisionDirty(false)
     setDetail(null)
     setDecisionForm(emptyDecision)
     setError(null)
     setLoading(true)
+    setProcurementLoading(false)
+    setProcurementError(null)
     void loadDetail(true, true)
   }, [loadDetail, projectId])
 
@@ -165,18 +194,23 @@ export function ProjectDetailPage() {
   }
 
   const refreshProcurement = async () => {
+    const requestedProjectId = projectIdRef.current
+    const requestSequence = ++procurementRequestSequenceRef.current
+    const isCurrentRequest = () => requestSequence === procurementRequestSequenceRef.current && projectIdRef.current === requestedProjectId
     setProcurementLoading(true)
     setProcurementError(null)
     try {
-      const result = await api.refreshDocuments(projectId)
-      setDetail((current) => current ? { ...current, procurement: result.procurement } : current)
+      const result = await api.refreshDocuments(requestedProjectId)
+      if (!isCurrentRequest()) return
+      setDetail((current) => current && current.id === requestedProjectId ? { ...current, procurement: result.procurement } : current)
       message.success(result.message || '采购资料已更新')
       await loadDetail(false)
     } catch (refreshError) {
+      if (!isCurrentRequest()) return
       setProcurementError(refreshError)
       message.error(refreshError instanceof Error ? refreshError.message : '采购资料核对失败，请稍后重试')
     } finally {
-      setProcurementLoading(false)
+      if (isCurrentRequest()) setProcurementLoading(false)
     }
   }
 
@@ -199,9 +233,97 @@ export function ProjectDetailPage() {
   if (loading) return <div className="page-stack"><LoadingBlock text="正在读取项目详情" /></div>
   if (error || !detail) return <div className="page-stack"><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>返回机会池</Button><ErrorBlock error={error} onRetry={() => void loadDetail(true, true)} /></div>
 
-  const equipmentFromProcurement = Array.from(new Set((detail.procurement?.items ?? []).map((item) => procurementValue(item.name)).filter(Boolean)))
+  const equipmentFromProcurement = Array.from(new Set((detail.procurement?.items ?? []).map((item) => normalizeOpportunityText(item.name)).filter(Boolean)))
   const equipmentSummary = detail.equipment.length ? detail.equipment : equipmentFromProcurement
   const renderEvidence = (evidence: Evidence, key: string) => <EvidenceCitation key={key} projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? detail.judgment?.investigation?.sources ?? []} />
+
+  const tabPanels = {
+    procurement: (
+      <div className="detail-tab-panel">
+        <ProcurementBriefing projectId={projectId} briefing={detail.briefing} procurement={detail.procurement} records={detail.records} title={detail.title} onRefresh={() => void refreshProcurement()} refreshing={procurementLoading} error={procurementError} />
+
+      </div>
+    ),
+    analysis: (
+      <div className="detail-tab-panel">
+        <section className="detail-summary" id="ai-judgment" aria-labelledby="detail-summary-heading">
+          <div className="detail-summary-header">
+            <div>
+              <h2 className="detail-section-title" id="detail-summary-heading"><FileSearchOutlined /> 分析结论</h2>
+              <div className="detail-summary-status"><AiStatusTag status={detail.ai_status} /><AiDecisionTag decision={displayedDecision} analysisMeta={analysisMeta} />{(analysisMeta || detail.judgment) && <AnalysisScopeTag analysisMeta={analysisMeta} />}<CompanyMatchTag status={analysisMeta?.company_match} /></div>
+            </div>
+            {detail.judgment?.stale && <Tag color="warning">输入已变化，待重新分析</Tag>}
+          </div>
+          <ExpandableText className="detail-summary-conclusion" text={detail.judgment?.summary || detail.ai_summary || (detail.ai_status === 'not_configured' ? '配置模型后生成判断' : '暂未形成一句话结论')} />
+          {analysisMeta?.decision_scope === 'market' && <div className="detail-company-match-note"><Text strong>企业匹配：{companyMatchLabels[analysisMeta.company_match]}</Text><Text>{companyMatchDescription(analysisMeta.company_match)}</Text></div>}
+          <div className="detail-summary-grid">
+            <div className="detail-summary-block detail-summary-rule"><Text className="detail-label">规则先筛</Text>{detail.gate_reasons.length ? <ul className="detail-compact-list">{detail.gate_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : <Text>没有额外排除或复核说明</Text>}</div>
+            <div className="detail-summary-block"><Text className="detail-label">资料时间</Text><Paragraph>{formatDate(detail.updated_at, true)}</Paragraph><Text type="secondary">{detail.records.length} 条源记录 · {detail.versions.length || 0} 个版本</Text></div>
+          </div>
+        </section>
+
+        {detail.needs_review && <div className="detail-inline-note detail-inline-note-warning"><WarningOutlined /><div><Text strong>人工决定需要复核</Text><Text>{hasOldJudgmentSelection ? '项目已有新的 AI 判断。旧人工决定和历史行动仍会保留，请在“行动与决定”中重新确认当前方向或修改下一步。' : '规则或资料发生变化，请核对当前判断后保存人工决定。'}</Text></div></div>}
+        {detail.ai_status === 'failed' && <Alert className="detail-failure-note" type="error" showIcon message="AI 分析失败" description="请查看处理状态中的失败原因，并在修复配置后重试。" action={<Button type="link" onClick={() => navigate('/operations')}>查看任务</Button>} />}
+
+        {!detail.judgment?.report && detail.judgment?.unknowns && detail.judgment.unknowns.length > 0 && <div className="detail-unknown-panel"><Text strong><WarningOutlined /> 待确认信息</Text><ul className="detail-compact-list">{detail.judgment.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul></div>}
+        {!detail.judgment?.report && detail.judgment?.next_actions && detail.judgment.next_actions.length > 0 && <div className="detail-next-actions"><Text strong>AI 建议下一步</Text><ul className="detail-compact-list">{detail.judgment.next_actions.map((next) => <li key={next}>{next}</li>)}</ul></div>}
+        {detail.judgment?.report && <AgentReport report={detail.judgment.report} overviewFirst renderEvidence={renderEvidence} />}
+        {(!detail.judgment?.report || detail.agent_run) && <section className="detail-panel detail-analysis-card" id="ai-evidence" aria-labelledby="ai-evidence-heading">
+          <header className="detail-section-header"><div className="detail-section-heading"><RobotOutlined /><h2 id="ai-evidence-heading">{detail.judgment?.report ? 'Agent 执行活动' : 'AI 理由与证据'}</h2></div><AiStatusTag status={detail.ai_status} /></header>
+          {!detail.judgment?.report && detail.judgment?.demand_summary && <div className="detail-demand-strip"><Text className="detail-label">需求摘要</Text><Paragraph>{detail.judgment.demand_summary}</Paragraph></div>}
+          {!detail.judgment?.report && (detail.judgment ? <div className="detail-judgment-body"><div className="detail-judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="detail-reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="detail-evidence-list">{reason.evidence.map((evidence, index) => <EvidenceCitation projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? detail.judgment?.investigation?.sources ?? []} key={evidenceKey(evidence, index)} />)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />)}
+          <AgentExecutionActivity run={detail.agent_run} retrying={actionLoading === 'analyze'} onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')} />
+
+        </section>}
+      </div>
+    ),
+    research: (
+      <div className="detail-tab-panel">
+        <ResearchDisplay
+          projectId={projectId}
+          judgment={detail.judgment}
+          latestRun={detail.agent_run}
+          projectSources={detail.research_sources}
+          researchSummary={detail.research_summary}
+          onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')}
+        />
+
+      </div>
+    ),
+    decision: (
+      <div className="detail-tab-panel">
+        {detail.needs_review && <div className="detail-inline-note detail-inline-note-warning"><WarningOutlined /><div><Text strong>人工决定需要复核</Text><Text>{hasOldJudgmentSelection ? '项目已有新的 AI 判断。旧人工决定和历史行动仍会保留，请重新确认当前方向或修改下一步。' : '规则或资料发生变化，请核对当前判断后保存人工决定。'}</Text></div></div>}
+        <section className="detail-decision-card" id="decision" aria-labelledby="decision-heading">
+          <header className="detail-section-header"><div className="detail-section-heading"><CheckCircleOutlined /><h2 id="decision-heading">可选行动与人工决定</h2></div><DecisionTag status={decisionForm.status} /></header>
+          <Paragraph className="detail-decision-intro" type="secondary">{optionDescription}</Paragraph>
+          {hasHistoricalSelection && <Alert className="detail-historical-alert" type="warning" showIcon message={hasOldJudgmentSelection ? '当前人工选择来自旧判断版本' : '当前人工选择暂不可修改'} description={hasOldJudgmentSelection ? `历史选择：${historicalOption?.title ?? `行动 ID ${historicalSelectionId}`}。系统不会把旧行动自动当作当前方向；请重新选择当前行动。` : `当前选择：${historicalOption?.title ?? `行动 ID ${historicalSelectionId}`}。项目当前处于不可选状态，人工决定历史仍会保留。`} />}
+          {detail.judgment?.next_actions && detail.judgment.next_actions.length > 0 && <div className="detail-next-actions"><Text strong>AI 建议下一步</Text><ul className="detail-compact-list">{detail.judgment.next_actions.map((next) => <li key={next}>{next}</li>)}</ul></div>}
+
+          {!optionAvailable ? <div className="detail-option-unavailable"><WarningOutlined /><Text>{noOptionsMessage}</Text></div> : <Radio.Group className="detail-option-grid" value={decisionForm.selected_option_id} onChange={(event) => setDecision('selected_option_id', event.target.value)}>{options.map((option) => <OptionCard key={option.id} option={option} />)}</Radio.Group>}
+          <Divider />
+          <Form layout="vertical" className="detail-decision-form">
+            <div className="detail-decision-form-grid"><Form.Item label={<label htmlFor="decision-status">人工状态</label>}><Select id="decision-status" value={decisionForm.status} onChange={(value: DecisionStatus) => setDecision('status', value)} options={[{ value: 'new', label: '未处理' }, { value: 'following', label: '跟进中' }, { value: 'verify', label: '待核实' }, { value: 'closed', label: '已关闭' }]} /></Form.Item><Form.Item label={<label htmlFor="decision-owner">负责人</label>}><Input id="decision-owner" value={decisionForm.owner} onChange={(event) => setDecision('owner', event.target.value)} placeholder="填写负责同事" /></Form.Item><Form.Item label={<label htmlFor="decision-next-action">下一步</label>}><Input id="decision-next-action" value={decisionForm.next_action} onChange={(event) => setDecision('next_action', event.target.value)} placeholder="例如：取得技术清单并核对件号" /></Form.Item></div>
+            <Form.Item label={<label htmlFor="decision-note">备注</label>}><Input.TextArea id="decision-note" value={decisionForm.note} onChange={(event) => setDecision('note', event.target.value)} rows={3} placeholder="记录人工判断、客户沟通或待确认信息" /></Form.Item>
+            <div className="detail-decision-actions"><Text type={decisionDirty ? 'warning' : 'secondary'}>{decisionDirty ? '有未保存修改' : `最近保存：${formatDate(detail.decision.updated_at, true)}`}</Text><Button type="primary" icon={<SaveOutlined />} loading={actionLoading === 'decision'} disabled={!decisionDirty} onClick={() => void saveDecision()}>保存人工决定</Button></div>
+          </Form>
+        </section>
+
+      </div>
+    ),
+    history: (
+      <div className="detail-tab-panel">
+        <section className="detail-secondary" id="history" aria-labelledby="history-heading">
+          <div className="detail-secondary-heading-row"><h2 id="history-heading">历史、版本与关联</h2><Text type="secondary">{detail.judgment_history.length} 条判断 · {detail.decision_history.length} 次决定 · {detail.related_projects.length} 个关联</Text></div>
+          <div className="detail-secondary-grid">
+            <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong>公告版本</Text><Text type="secondary">输入变化会触发复核</Text></div><Descriptions size="small" column={{ xs: 1, sm: 2 }} items={[{ key: 'published', label: '发布时间', children: formatDate(detail.published_at, true) }, { key: 'deadline', label: '截止时间', children: formatDate(detail.deadline_at, true) }, { key: 'records', label: '源记录 ID', children: detail.record_ids.join('、') || '—' }, { key: 'versions', label: '版本数', children: detail.versions.length || '—' }]} />{detail.versions.length > 0 && <Collapse ghost items={[{ key: 'versions', label: '展开版本变更', children: <VersionHistory versions={detail.versions} /> }]} />}</div>
+            <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong><LinkOutlined /> 关联项目</Text><Button size="small" icon={<LinkOutlined />} onClick={() => setLinkOpen(true)}>记录关联</Button></div><Text type="secondary">疑似同项目、重复或排除提示不会自动合并，双方原文与决定都会保留。</Text>{detail.related_projects.length === 0 ? <EmptyBlock description="暂无关联项目" /> : <List className="detail-related-list" dataSource={detail.related_projects} renderItem={(related) => <List.Item actions={[<Button key="open" type="link" onClick={() => navigate(`/projects/${related.id}`)}>查看</Button>]}><List.Item.Meta title={<ProjectTitle project={related} onOpen={(relatedId) => navigate(`/projects/${relatedId}`)} />} description={<Space><GateTag status={related.gate_status} /><Text type="secondary">项目 #{related.id}</Text></Space>} /></List.Item>} />}</div>
+            <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong>历史判断与人工决定</Text><Text type="secondary">可追溯</Text></div><Collapse ghost items={[{ key: 'judgments', label: `历史判断（${detail.judgment_history.length}）`, children: detail.judgment_history.length === 0 ? <Text type="secondary">暂无历史判断</Text> : <List size="small" dataSource={detail.judgment_history} renderItem={(history) => <List.Item><div className="detail-history-item"><Space><AiDecisionTag decision={history.decision} analysisMeta={history.analysis_meta} /><AnalysisScopeTag analysisMeta={history.analysis_meta} /><Text type="secondary">{formatDate(history.created_at, true)}</Text>{history.stale && <Tag color="warning">待复核</Tag>}</Space><div>{history.summary || '暂无判断摘要'}</div>{(history.report || history.reasons.length > 0 || history.unknowns.length > 0 || history.next_actions.length > 0) && <Collapse ghost items={[{ key: `history-report-${history.id}`, label: history.report ? '展开 Agent 报告全文' : '展开旧报告全文', children: history.report ? <AgentReport report={history.report} renderEvidence={(evidence, key) => <EvidenceCitation key={key} projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? history.investigation?.sources ?? []} />} /> : <LegacyJudgmentReport judgment={history} renderEvidence={(evidence, key) => <EvidenceCitation key={key} projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? history.investigation?.sources ?? []} />} /> }]} />}</div></List.Item>} /> }, { key: 'decisions', label: `人工决定（${detail.decision_history.length}）`, children: <DecisionHistoryList history={detail.decision_history} /> }]} /></div>
+          </div>
+        </section>
+
+      </div>
+    ),
+  }
 
   return (
     <div className="page-stack detail-page">
@@ -222,117 +344,41 @@ export function ProjectDetailPage() {
         </div>
       </header>
 
-      <div className="detail-workspace">
-        <main className="detail-main-column">
-          {!detail.judgment?.report && <ProcurementBriefing briefing={detail.briefing} procurement={detail.procurement} records={detail.records} title={detail.title} onRefresh={() => void refreshProcurement()} refreshing={procurementLoading} error={procurementError} />}
-
-          <section className="detail-summary" id="ai-judgment" aria-labelledby="detail-summary-heading">
-            <div className="detail-summary-header">
-              <div>
-                <h2 className="detail-section-title" id="detail-summary-heading"><FileSearchOutlined /> AI研判</h2>
-                <div className="detail-summary-status"><AiStatusTag status={detail.ai_status} /><AiDecisionTag decision={displayedDecision} analysisMeta={analysisMeta} />{(analysisMeta || detail.judgment) && <AnalysisScopeTag analysisMeta={analysisMeta} />}<CompanyMatchTag status={analysisMeta?.company_match} /></div>
-              </div>
-              {detail.judgment?.stale && <Tag color="warning">输入已变化，待重新分析</Tag>}
-            </div>
-            <p className="detail-summary-conclusion">{detail.judgment?.summary || detail.ai_summary || (detail.ai_status === 'not_configured' ? '配置模型后生成判断' : '暂未形成一句话结论')}</p>
-            {analysisMeta?.decision_scope === 'market' && <div className="detail-company-match-note"><Text strong>企业匹配：{companyMatchLabels[analysisMeta.company_match]}</Text><Text>{companyMatchDescription(analysisMeta.company_match)}</Text></div>}
-            <div className="detail-summary-grid">
-              <div className="detail-summary-block detail-summary-rule"><Text className="detail-label">规则先筛</Text>{detail.gate_reasons.length ? <ul className="detail-compact-list">{detail.gate_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : <Text>没有额外排除或复核说明</Text>}</div>
-              {!detail.judgment?.report && <div className="detail-summary-block"><Text className="detail-label">需求摘要</Text><Paragraph>{detail.judgment?.demand_summary || '暂无已验证的需求摘要，先以公告正文为准。'}</Paragraph></div>}
-              <div className="detail-summary-block"><Text className="detail-label">资料时间</Text><Paragraph>{formatDate(detail.updated_at, true)}</Paragraph><Text type="secondary">{detail.records.length} 条源记录 · {detail.versions.length || 0} 个版本</Text></div>
-            </div>
-          </section>
-
-          {detail.judgment?.report && <AgentReport report={detail.judgment.report} renderEvidence={renderEvidence} />}
-          {detail.judgment?.report && <Collapse items={[{
-            key: 'extracted-procurement', label: '公告与附件提取资料',
-            children: <ProcurementBriefing briefing={detail.briefing} procurement={detail.procurement} records={detail.records} title={detail.title} onRefresh={() => void refreshProcurement()} refreshing={procurementLoading} error={procurementError} />,
-          }]} />}
-
-          <ResearchDisplay
-            projectId={projectId}
-            judgment={detail.judgment}
-            latestRun={detail.agent_run}
-            projectSources={detail.research_sources}
-            researchSummary={detail.research_summary}
-            onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')}
-          />
-
-          {detail.needs_review && <div className="detail-inline-note detail-inline-note-warning"><WarningOutlined /><div><Text strong>人工决定需要复核</Text><Text>{hasOldJudgmentSelection ? '项目已有新的 AI 判断。旧人工决定和历史行动仍会保留，请在下方重新确认当前方向或修改下一步。' : '规则或资料发生变化，请核对当前判断后保存人工决定。'}</Text></div></div>}
-          {detail.ai_status === 'failed' && <Alert className="detail-failure-note" type="error" showIcon message="AI 分析失败" description="请查看处理状态中的失败原因，并在修复配置后重试。" action={<Button type="link" onClick={() => navigate('/operations')}>查看任务</Button>} />}
-
-          <div className="detail-columns">
-            <div className="detail-main-column">
-              <section className="detail-panel detail-record-card" id="records" aria-labelledby="records-heading">
-                <header className="detail-section-header"><div className="detail-section-heading"><FileSearchOutlined /><h2 id="records-heading">公告正文与事实</h2></div><Text type="secondary">{detail.records.length} 条源记录</Text></header>
-                <div className="detail-panel-intro">原文是判断依据。展开记录查看正文、来源链接以及已抽取的事实。</div>
-                <div className="detail-demand-strip"><Text className="detail-label">涉及设备词</Text><div>{equipmentSummary.length ? <>{!detail.equipment.length && (detail.procurement?.items?.length ?? 0) > 0 && <Text type="secondary">项目属性按公告物料名称补充：</Text>}{equipmentSummary.map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}</> : <Text type="secondary">设备信息待从正文确认</Text>}</div></div>
-                {detail.records.length === 0 ? <EmptyBlock description="暂无公告正文" /> : <Collapse className="detail-record-list" items={detail.records.map((record) => ({ key: String(record.id), label: <div className="detail-record-label"><span>{record.title || `记录 #${record.id}`}</span><Text type="secondary">记录 #{record.id} · {record.parse_status || '已接入'}</Text></div>, children: <RecordPanel record={record} /> }))} />}
-              </section>
-            </div>
-
-            <div className="detail-side-column">
-              <section className="detail-panel detail-analysis-card" id="ai-evidence" aria-labelledby="ai-evidence-heading">
-                <header className="detail-section-header"><div className="detail-section-heading"><RobotOutlined /><h2 id="ai-evidence-heading">{detail.judgment?.report ? 'Agent 执行活动' : 'AI 理由与证据'}</h2></div><AiStatusTag status={detail.ai_status} /></header>
-                {!detail.judgment?.report && (detail.judgment ? <div className="detail-judgment-body"><div className="detail-judgment-meta"><Text type="secondary">模型：{detail.judgment.model || '未标明'}</Text><Text type="secondary">生成于 {formatDate(detail.judgment.created_at, true)}</Text>{detail.judgment.stale && <Tag color="warning">待复核</Tag>}</div><List className="detail-reason-list" size="small" dataSource={detail.judgment.reasons} locale={{ emptyText: '暂无结构化理由' }} renderItem={(reason) => <List.Item><div><Text strong>{reason.text}</Text>{reason.evidence.length > 0 && <div className="detail-evidence-list">{reason.evidence.map((evidence, index) => <EvidenceCitation projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? detail.judgment?.investigation?.sources ?? []} key={evidenceKey(evidence, index)} />)}</div>}</div></List.Item>} /></div> : <Empty description={detail.ai_status === 'not_configured' ? '完成模型配置后生成判断' : '暂无 AI 判断'} image={Empty.PRESENTED_IMAGE_SIMPLE} />)}
-                <AgentExecutionActivity run={detail.agent_run} retrying={actionLoading === 'analyze'} onRetry={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')} />
-                {!detail.judgment?.report && detail.judgment?.unknowns && detail.judgment.unknowns.length > 0 && <div className="detail-unknown-panel"><Text strong><WarningOutlined /> 待确认信息</Text><ul className="detail-compact-list">{detail.judgment.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul></div>}
-              </section>
-            </div>
+      <aside className="detail-context-bar" aria-label="项目关键信息">
+        <section className="detail-rail-section">
+          <h2 className="detail-rail-heading">项目属性</h2>
+          <div className="detail-meta-item"><Text>截止日期</Text><strong>{formatDate(detail.deadline_at, true)}</strong></div>
+          <div className="detail-meta-item"><Text>设备线索</Text><span>{equipmentSummary.length ? equipmentSummary.join('、') : detail.judgment?.report ? '详见研判报告' : '详见采购信息'}</span></div>
+          <div className="detail-meta-item"><Text>来源</Text><span>{sourceLabel(detail.source_id)}</span></div>
+        </section>
+        <section className="detail-rail-section detail-rail-actions">
+          <h2 className="detail-rail-heading">项目操作</h2>
+          <div className="detail-actions" aria-label="项目操作">
+            {(detail.ai_status === 'failed' || detail.ai_status === 'stale' || detail.ai_status === 'succeeded') && <Button icon={<ReloadOutlined />} loading={actionLoading === 'analyze'} onClick={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')}>重新分析</Button>}
+            {detail.ai_status === 'not_configured' && <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/settings')}>去配置模型</Button>}
+            {detail.ai_status === 'idle' && <Button type="primary" icon={<RobotOutlined />} loading={actionLoading === 'analyze'} onClick={() => void runAction('analyze', () => api.analyze(projectId, false), '已提交分析任务')}>开始分析</Button>}
+            {(detail.ai_status === 'queued' || detail.ai_status === 'running') && <Button type="primary" icon={<RobotOutlined />} disabled>分析中</Button>}
+            {detail.gate_status === 'excluded' && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'restore', '人工恢复机会'), '项目已恢复到机会池')}>恢复机会</Button>}
+            {gateRestored && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'clear', '清除人工恢复规则'), '已清除人工恢复规则')}>清除恢复</Button>}
           </div>
+        </section>
+      </aside>
 
-          <section className="detail-decision-card" id="decision" aria-labelledby="decision-heading">
-            <header className="detail-section-header"><div className="detail-section-heading"><CheckCircleOutlined /><h2 id="decision-heading">可选行动与人工决定</h2></div><DecisionTag status={decisionForm.status} /></header>
-            <Paragraph className="detail-decision-intro" type="secondary">{optionDescription}</Paragraph>
-            {hasHistoricalSelection && <Alert className="detail-historical-alert" type="warning" showIcon message={hasOldJudgmentSelection ? '当前人工选择来自旧判断版本' : '当前人工选择暂不可修改'} description={hasOldJudgmentSelection ? `历史选择：${historicalOption?.title ?? `行动 ID ${historicalSelectionId}`}。系统不会把旧行动自动当作当前方向；请重新选择当前行动。` : `当前选择：${historicalOption?.title ?? `行动 ID ${historicalSelectionId}`}。项目当前处于不可选状态，人工决定历史仍会保留。`} />}
-            {detail.judgment?.next_actions && detail.judgment.next_actions.length > 0 && <div className="detail-next-actions"><Text strong>AI 建议下一步</Text><ul className="detail-compact-list">{detail.judgment.next_actions.map((next) => <li key={next}>{next}</li>)}</ul></div>}
-            {!optionAvailable ? <div className="detail-option-unavailable"><WarningOutlined /><Text>{noOptionsMessage}</Text></div> : <Radio.Group className="detail-option-grid" value={decisionForm.selected_option_id} onChange={(event) => setDecision('selected_option_id', event.target.value)}>{options.map((option) => <OptionCard key={option.id} option={option} />)}</Radio.Group>}
-            <Divider />
-            <Form layout="vertical" className="detail-decision-form">
-              <div className="detail-decision-form-grid"><Form.Item label={<label htmlFor="decision-status">人工状态</label>}><Select id="decision-status" value={decisionForm.status} onChange={(value: DecisionStatus) => setDecision('status', value)} options={[{ value: 'new', label: '未处理' }, { value: 'following', label: '跟进中' }, { value: 'verify', label: '待核实' }, { value: 'closed', label: '已关闭' }]} /></Form.Item><Form.Item label={<label htmlFor="decision-owner">负责人</label>}><Input id="decision-owner" value={decisionForm.owner} onChange={(event) => setDecision('owner', event.target.value)} placeholder="填写负责同事" /></Form.Item><Form.Item label={<label htmlFor="decision-next-action">下一步</label>}><Input id="decision-next-action" value={decisionForm.next_action} onChange={(event) => setDecision('next_action', event.target.value)} placeholder="例如：取得技术清单并核对件号" /></Form.Item></div>
-              <Form.Item label={<label htmlFor="decision-note">备注</label>}><Input.TextArea id="decision-note" value={decisionForm.note} onChange={(event) => setDecision('note', event.target.value)} rows={3} placeholder="记录人工判断、客户沟通或待确认信息" /></Form.Item>
-              <div className="detail-decision-actions"><Text type={decisionDirty ? 'warning' : 'secondary'}>{decisionDirty ? '有未保存修改' : `最近保存：${formatDate(detail.decision.updated_at, true)}`}</Text><Button type="primary" icon={<SaveOutlined />} loading={actionLoading === 'decision'} disabled={!decisionDirty} onClick={() => void saveDecision()}>保存人工决定</Button></div>
-            </Form>
-          </section>
-
-          <section className="detail-secondary" id="history" aria-labelledby="history-heading">
-            <div className="detail-secondary-heading-row"><h2 id="history-heading">历史、版本与关联</h2><Text type="secondary">{detail.judgment_history.length} 条判断 · {detail.decision_history.length} 次决定 · {detail.related_projects.length} 个关联</Text></div>
-            <Collapse ghost items={[{ key: 'secondary', label: <span className="detail-secondary-label">展开历史与关联</span>, children: <div className="detail-secondary-grid">
-              <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong>公告版本</Text><Text type="secondary">输入变化会触发复核</Text></div><Descriptions size="small" column={{ xs: 1, sm: 2 }} items={[{ key: 'published', label: '发布时间', children: formatDate(detail.published_at, true) }, { key: 'deadline', label: '截止时间', children: formatDate(detail.deadline_at, true) }, { key: 'records', label: '源记录 ID', children: detail.record_ids.join('、') || '—' }, { key: 'versions', label: '版本数', children: detail.versions.length || '—' }]} />{detail.versions.length > 0 && <Collapse ghost items={[{ key: 'versions', label: '展开版本变更', children: <VersionHistory versions={detail.versions} /> }]} />}</div>
-              <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong><LinkOutlined /> 关联项目</Text><Button size="small" icon={<LinkOutlined />} onClick={() => setLinkOpen(true)}>记录关联</Button></div><Text type="secondary">疑似同项目、重复或排除提示不会自动合并，双方原文与决定都会保留。</Text>{detail.related_projects.length === 0 ? <EmptyBlock description="暂无关联项目" /> : <List className="detail-related-list" dataSource={detail.related_projects} renderItem={(related) => <List.Item actions={[<Button key="open" type="link" onClick={() => navigate(`/projects/${related.id}`)}>查看</Button>]}><List.Item.Meta title={<ProjectTitle project={related} onOpen={(relatedId) => navigate(`/projects/${relatedId}`)} />} description={<Space><GateTag status={related.gate_status} /><Text type="secondary">项目 #{related.id}</Text></Space>} /></List.Item>} />}</div>
-              <div className="detail-secondary-block"><div className="detail-secondary-heading"><Text strong>历史判断与人工决定</Text><Text type="secondary">可追溯</Text></div><Collapse ghost items={[{ key: 'judgments', label: `历史判断（${detail.judgment_history.length}）`, children: detail.judgment_history.length === 0 ? <Text type="secondary">暂无历史判断</Text> : <List size="small" dataSource={detail.judgment_history} renderItem={(history) => <List.Item><div className="detail-history-item"><Space><AiDecisionTag decision={history.decision} analysisMeta={history.analysis_meta} /><AnalysisScopeTag analysisMeta={history.analysis_meta} /><Text type="secondary">{formatDate(history.created_at, true)}</Text>{history.stale && <Tag color="warning">待复核</Tag>}</Space><div>{history.summary || '暂无判断摘要'}</div>{(history.report || history.reasons.length > 0 || history.unknowns.length > 0 || history.next_actions.length > 0) && <Collapse ghost items={[{ key: `history-report-${history.id}`, label: history.report ? '展开 Agent 报告全文' : '展开旧报告全文', children: history.report ? <AgentReport report={history.report} renderEvidence={(evidence, key) => <EvidenceCitation key={key} projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? history.investigation?.sources ?? []} />} /> : <LegacyJudgmentReport judgment={history} renderEvidence={(evidence, key) => <EvidenceCitation key={key} projectId={projectId} evidence={evidence} procurement={detail.procurement} records={detail.records} sources={detail.research_sources ?? history.investigation?.sources ?? []} />} /> }]} />}</div></List.Item>} /> }, { key: 'decisions', label: `人工决定（${detail.decision_history.length}）`, children: <DecisionHistoryList history={detail.decision_history} /> }]} /></div>
-            </div> }]} />
-          </section>
-        </main>
-
-        <aside className="detail-info-rail" aria-label="项目关键信息">
-          <section className="detail-rail-section">
-            <h2 className="detail-rail-heading">项目属性</h2>
-            <div className="detail-meta-item"><Text>截止日期</Text><strong>{formatDate(detail.deadline_at, true)}</strong></div>
-            <div className="detail-meta-item"><Text>设备线索</Text><span>{equipmentSummary.length ? equipmentSummary.join('、') : detail.judgment?.report ? '详见研判报告' : '详见采购信息'}</span></div>
-            <div className="detail-meta-item"><Text>来源</Text><span>{sourceLabel(detail.source_id)}</span></div>
-          </section>
-          <section className="detail-rail-section detail-rail-actions">
-            <h2 className="detail-rail-heading">项目操作</h2>
-            <div className="detail-actions" aria-label="项目操作">
-              {(detail.ai_status === 'failed' || detail.ai_status === 'stale' || detail.ai_status === 'succeeded') && <Button icon={<ReloadOutlined />} loading={actionLoading === 'analyze'} onClick={() => void runAction('analyze', () => api.analyze(projectId, true), '已提交重新分析任务')}>重新分析</Button>}
-              {detail.ai_status === 'not_configured' && <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/settings')}>去配置模型</Button>}
-              {detail.ai_status === 'idle' && <Button type="primary" icon={<RobotOutlined />} loading={actionLoading === 'analyze'} onClick={() => void runAction('analyze', () => api.analyze(projectId, false), '已提交分析任务')}>开始分析</Button>}
-              {(detail.ai_status === 'queued' || detail.ai_status === 'running') && <Button type="primary" icon={<RobotOutlined />} disabled>分析中</Button>}
-              {detail.gate_status === 'excluded' && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'restore', '人工恢复机会'), '项目已恢复到机会池')}>恢复机会</Button>}
-              {gateRestored && <Button loading={actionLoading === 'gate'} onClick={() => void runAction('gate', () => api.gate(projectId, 'clear', '清除人工恢复规则'), '已清除人工恢复规则')}>清除恢复</Button>}
+      <main className="detail-workspace">
+        <Tabs
+          className="detail-tabs"
+          activeKey={activeTab}
+          onChange={changeTab}
+          size="small"
+          destroyOnHidden={false}
+          renderTabBar={(props, DefaultTabBar) => (
+            <div className="detail-tab-bar" ref={tabBarRef}>
+              <DefaultTabBar {...props} />
             </div>
-          </section>
-          <nav className="detail-rail-section detail-contents-nav" aria-label="页面内容">
-            <h2 className="detail-rail-heading">本页内容</h2>
-            <a href="#procurement-briefing-heading">采购信息</a>
-            <a href="#ai-judgment">AI研判</a>
-            <a href="#research">项目调查</a>
-            <a href="#decision">行动与决定</a>
-            <a href="#history">历史与关联</a>
-          </nav>
-        </aside>
-      </div>
+          )}
+          items={detailTabs.map((tab) => ({ ...tab, forceRender: true, children: tabPanels[tab.key as keyof typeof tabPanels] }))}
+        />
+      </main>
 
       <Modal title="记录关联提示" open={linkOpen} onCancel={() => setLinkOpen(false)} onOk={() => void submitLink()} okText="保存关系" confirmLoading={actionLoading === 'link'}>
         <Form layout="vertical"><Form.Item label="对方项目编号" required><InputNumber min={1} value={linkTarget} onChange={(value) => setLinkTarget(value)} placeholder="输入项目 ID" style={{ width: '100%' }} /></Form.Item><Form.Item label="关系" required><Select value={linkRelation} onChange={setLinkRelation} options={[{ value: 'same_project', label: '同项目' }, { value: 'duplicate', label: '重复项目' }, { value: 'dismiss', label: '排除提示' }]} /></Form.Item><Form.Item label="备注"><Input.TextArea rows={3} value={linkNote} onChange={(event) => setLinkNote(event.target.value)} placeholder="说明人工确认依据" /></Form.Item></Form>
@@ -374,455 +420,11 @@ function AgentExecutionActivity({ run, retrying, onRetry }: { run?: ProjectDetai
   )
 }
 
-function RecordPanel({ record }: { record: ProjectDetailData['records'][number] }) {
-  return <div className="detail-record-panel"><Space wrap><Tag>记录 #{record.id}</Tag>{record.parse_status && <Tag>{record.parse_status}</Tag>}{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开原文</a>}<a href={api.archiveUrl(record.id)} target="_blank" rel="noreferrer">下载归档</a></Space><Paragraph className="detail-record-body">{record.body_text || '这条记录没有正文内容。'}</Paragraph><Collapse ghost items={[{ key: 'facts', label: '已抽取事实', children: <StructuredFields value={record.facts} emptyText="暂无已抽取事实" /> }, { key: 'inferences', label: '推测与待核实线索', children: <StructuredFields value={record.inferences} emptyText="暂无推测；请以公告正文为准" tone="warning" /> }]} /></div>
-}
-
-function sourceHrefWithPage(href: string, page?: number | null): string {
-  if (!href || page == null || page <= 0) return href
-  const hashIndex = href.indexOf('#')
-  return `${hashIndex >= 0 ? href.slice(0, hashIndex) : href}#page=${page}`
+function OptionCard({ option }: { option: JudgmentOption }) {
+  return <Radio value={option.id} className="detail-option-radio"><div className="detail-option-card"><div className="detail-option-title-row"><div><Text className="detail-option-kicker">可选推进方向</Text><h3>{option.title}</h3></div><span className="detail-option-state">可供选择</span></div><Paragraph>{option.description || '暂无说明'}</Paragraph><div className="detail-option-detail-grid"><div><Text className="detail-label">适用条件</Text><Paragraph>{option.suitable_for || '未说明'}</Paragraph></div><div><Text className="detail-label">建议下一步</Text><Paragraph>{option.next_action || '未说明'}</Paragraph></div></div>{option.tradeoffs.length > 0 && <div className="detail-option-list-block"><Text className="detail-label">主要取舍</Text><ul className="detail-compact-list">{option.tradeoffs.map((item) => <li key={item}>{item}</li>)}</ul></div>}{option.unknowns.length > 0 && <div className="detail-option-list-block"><Text className="detail-label">仍需确认</Text><ul className="detail-compact-list">{option.unknowns.map((item) => <li key={item}>{item}</li>)}</ul></div>}</div></Radio>
 }
 
 function evidenceKey(evidence: Evidence, index: number): string {
   if ('source_ref' in evidence) return `research-${evidence.source_ref}-${evidence.source_version}-${evidence.page ?? ''}-${index}`
   return `${evidence.document_id ?? 'record'}-${evidence.record_id}-${evidence.page ?? ''}-${evidence.quote}-${index}`
-}
-
-const procurementDocumentStatusMeta: Record<ProcurementDocument['status'], { label: string; color?: string }> = {
-  parsed: { label: '已解析', color: 'success' },
-  unsupported: { label: '暂不支持解析', color: 'default' },
-  auth_required: { label: '需登录', color: 'warning' },
-  failed: { label: '下载失败', color: 'error' },
-  unreadable: { label: '无法读取', color: 'error' },
-}
-
-const procurementAttachmentStatusMeta: Record<ProcurementAttachmentStatus, { label: string; color?: string }> = {
-  not_checked: { label: '尚未检查公开附件', color: 'default' },
-  none_public: { label: '未发现公开附件', color: 'default' },
-  restricted: { label: '公开附件受限', color: 'warning' },
-  available: { label: '已有公开附件', color: 'success' },
-  failed: { label: '公开附件检查失败', color: 'error' },
-}
-
-const procurementErrorMessages: Record<string, string> = {
-  format_not_supported: '暂不支持解析此附件格式',
-  converter_unavailable: '自动文档转换组件不可用',
-  conversion_timeout: '文档自动转换超时，可稍后重试',
-  conversion_failed: '文档自动转换失败，请核对原文件是否损坏或加密',
-  converted_document_too_large: '转换后的文档超过解析大小限制',
-  source_unreachable: '来源链接不可达，请核对公告链接',
-  fetch_failed: '附件下载失败，请核对原文件',
-  auth_required: '附件需要登录后获取',
-  unsupported: '暂不支持解析此附件',
-  unreadable: '附件无法读取，请核对原文件',
-  parse_failed: '附件解析失败，请核对原文件',
-  empty: '附件内容为空，无法提取',
-  timeout: '附件获取超时，请稍后重试',
-}
-
-type ProcurementMissingField = 'scope' | 'delivery' | 'items' | 'qualification' | 'contact'
-
-function procurementValue(value: string | null | undefined): string {
-  return normalizeOpportunityText(value) || ''
-}
-
-function procurementDocumentError(value: string | null | undefined): string {
-  const raw = procurementValue(value)
-  if (!raw) return ''
-  const normalized = raw.toLowerCase()
-  if (raw.includes('该附件格式暂不能自动解析')) return '暂不支持解析此附件格式'
-  const matchedCode = Object.keys(procurementErrorMessages).find((code) => normalized === code || normalized.includes(code))
-  if (matchedCode) return procurementErrorMessages[matchedCode]
-  return '获取或解析失败，请核对原文件'
-}
-
-function hasProcurementDocumentId(item: ProcurementItem): boolean {
-  return item.source_document_id !== null && item.source_document_id !== undefined && String(item.source_document_id).trim() !== ''
-}
-
-/**
- * Announcement rows are first-class procurement facts. Older responses do
- * not have source_kind, so an empty document id remains the compatibility
- * signal for a row quoted from the notice body.
- */
-function isAnnouncementProcurementItem(item: ProcurementItem): boolean {
-  if (item.source_kind === 'announcement') return true
-  if (item.source_kind === 'attachment') return false
-  return !hasProcurementDocumentId(item)
-}
-
-function procurementAttachmentStatus(procurement: ProcurementData | null | undefined): ProcurementAttachmentStatus {
-  const explicitStatus = procurement?.attachment_status
-  if (explicitStatus) return explicitStatus
-  if (!procurement || procurement.status === 'not_checked') return 'not_checked'
-
-  const documents = procurement.documents ?? []
-  if (documents.some((document) => document.status === 'auth_required')) return 'restricted'
-  if (documents.some((document) => document.status === 'failed' || document.status === 'unreadable')) return 'failed'
-  if (documents.length > 0) return 'available'
-  // `unavailable` is the old API's attempted-but-unsuccessful state. New
-  // responses use `none_public` for a clean absence of public attachments.
-  if (procurement.status === 'unavailable') return 'failed'
-  return 'none_public'
-}
-
-function procurementAttachmentMessage(procurement: ProcurementData | null | undefined, items: ProcurementItem[]): string {
-  const status = procurementAttachmentStatus(procurement)
-  const note = procurementValue(procurement?.attachment_note)
-  if (note) return note
-  if (status === 'not_checked') {
-    return items.some(isAnnouncementProcurementItem)
-      ? '已知采购事实来自公告正文；公开附件尚未检查。'
-      : '公开附件尚未检查，当前没有可展示的附件资料。'
-  }
-  if (status === 'none_public') {
-    return items.some(isAnnouncementProcurementItem)
-      ? '公告正文已提供采购事实；未发现公开附件。'
-      : '公告未提供可公开下载的附件，已知事实仍以公告正文为准。'
-  }
-  if (status === 'restricted') return '附件获取受限，请按公告说明获取招标文件。'
-  if (status === 'failed') {
-    const documentError = procurement?.documents?.find((document) => document.error)?.error
-    return procurementDocumentError(documentError) || '公开附件检查失败，公告正文事实仍可核对。'
-  }
-  return '已发现公开附件，物料行会标注各自的来源。'
-}
-
-function procurementTechnicalMissingValue(procurement: ProcurementData | null | undefined): string {
-  return procurementTechnicalMissingForItem(procurement)
-}
-
-function procurementTechnicalMissingForItem(procurement: ProcurementData | null | undefined, item?: ProcurementItem): string {
-  const items = item ? [item] : (procurement?.items ?? [])
-  const status = procurementAttachmentStatus(procurement)
-  if (items.some(isAnnouncementProcurementItem)) {
-    return status === 'restricted' ? '详细规格需核对招标文件' : '详细规格待核对'
-  }
-
-  switch (status) {
-    case 'none_public': return '详细规格待核对'
-    case 'restricted': return '详细规格需核对招标文件'
-    case 'failed': return '附件未能提供规格，需核对原文件'
-    case 'not_checked': return '详细规格待核对'
-    default: return '详细规格待核对'
-  }
-}
-
-function procurementPageLabel(pages: number | null): string {
-  return pages != null && pages > 0 ? `${pages} 页` : '页数未提取'
-}
-
-function originalNotStated(procurement: Pick<ProcurementData, 'missing_fields'>, field?: ProcurementMissingField): boolean {
-  const aliases: Record<ProcurementMissingField, string[]> = {
-    scope: ['scope', '范围', '采购范围'],
-    delivery: ['delivery', '交付', '交货'],
-    items: ['item', 'material', '物料', '明细'],
-    qualification: ['qualification', '资格'],
-    contact: ['contact', '联系方式'],
-  }
-  return procurement.missing_fields.some((missing) => {
-    const value = procurementValue(missing).toLowerCase()
-    if (!/(?:原文未写|原文未说明|原文未提供|not[_ -]?stated|not[_ -]?specified|original[_ -]?missing)/i.test(value)) return false
-    if (!field) return true
-    return aliases[field].some((alias) => value.includes(alias.toLowerCase())) || /original[_ -]?(?:missing|not[_ -]?stated|not[_ -]?specified)|原文未/.test(value)
-  })
-}
-
-function procurementMissingValue(procurement: ProcurementData | null | undefined, value: string | null | undefined, field?: ProcurementMissingField): string {
-  if (procurementValue(value)) return procurementValue(value)
-  if (field && field !== 'items') {
-    const labels: Record<Exclude<ProcurementMissingField, 'items'>, string> = {
-      scope: '采购范围',
-      delivery: '交付要求',
-      qualification: '资格要求',
-      contact: '联系方式',
-    }
-    return `公告尚未提取到${labels[field]}`
-  }
-  if (!procurement || procurementAttachmentStatus(procurement) === 'not_checked') return '尚未检查公开附件'
-  const statuses = procurement.documents?.map((document) => document.status) ?? []
-  if (procurementAttachmentStatus(procurement) === 'restricted' || statuses.includes('auth_required')) return '附件获取受限，物料明细待核对'
-  if (procurementAttachmentStatus(procurement) === 'none_public') return '物料明细待核对'
-  if (statuses.includes('unsupported')) return '待核对附件'
-  if (procurementAttachmentStatus(procurement) === 'failed' || statuses.includes('failed') || statuses.includes('unreadable') || procurement.status === 'unavailable') {
-    const documentError = procurement.documents?.find((document) => document.error)?.error
-    return procurementDocumentError(documentError) || '获取或解析失败，请核对原文件'
-  }
-  if (originalNotStated(procurement, field)) return '原文未写'
-  return '尚未提取到对应字段'
-}
-
-function procurementDocumentFor(item: ProcurementItem, documents: ProcurementDocument[]): ProcurementDocument | undefined {
-  if (isAnnouncementProcurementItem(item) || !hasProcurementDocumentId(item)) return undefined
-  return documents.find((document) => String(document.id) === String(item.source_document_id))
-}
-
-function uniformProcurementField(items: ProcurementItem[], field: 'delivery_period' | 'delivery_location'): string {
-  const values = Array.from(new Set(items.map((item) => procurementValue(item[field])).filter(Boolean)))
-  return values.length === 1 ? values[0] : ''
-}
-
-function procurementSourceHref(item: ProcurementItem, document: ProcurementDocument | undefined, records: ProjectDetailData['records']): string {
-  if (isAnnouncementProcurementItem(item)) {
-    const record = records.find((candidate) => candidate.id === item.record_id)
-    return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
-  }
-  const baseHref = document?.url || (() => {
-    const record = records.find((candidate) => candidate.id === item.record_id)
-    return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
-  })()
-  if (baseHref) return sourceHrefWithPage(baseHref, item.page)
-  const record = records.find((candidate) => candidate.id === item.record_id)
-  return record?.original_url || record?.canonical_url || api.archiveUrl(item.record_id)
-}
-
-function ProcurementSource({ item, document, href }: { item: ProcurementItem; document?: ProcurementDocument; href: string }) {
-  const announcement = isAnnouncementProcurementItem(item)
-  const page = item.page != null && item.page > 0 ? item.page : null
-  const label = announcement ? '公告正文' : `${document?.name || `记录 #${item.record_id}`}${page ? ` · 第 ${page} 页` : ''}`
-  const quote = procurementValue(item.quote)
-  return (
-    <div className="detail-procurement-source-cell">
-      {href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : <span>{label}</span>}
-      {announcement && <span className="detail-procurement-source-meta">记录 #{item.record_id}</span>}
-      {quote && <span className="detail-procurement-quote" title={quote}>“{quote}”</span>}
-    </div>
-  )
-}
-
-function ProcurementAttachmentNotice({ procurement, items }: { procurement: ProcurementData | null | undefined; items: ProcurementItem[] }) {
-  const status = procurementAttachmentStatus(procurement)
-  const meta = procurementAttachmentStatusMeta[status]
-  return (
-    <div className={`detail-procurement-attachment-notice detail-procurement-attachment-notice-${status}`} data-attachment-status={status}>
-      <Tag color={meta.color}>{meta.label}</Tag>
-      <span>{procurementAttachmentMessage(procurement, items)}</span>
-    </div>
-  )
-}
-
-function ProcurementBriefing({
-  briefing,
-  procurement,
-  records,
-  title,
-  onRefresh,
-  refreshing,
-  error,
-}: {
-  briefing: ProjectDetailData['briefing']
-  procurement: ProjectDetailData['procurement']
-  records: ProjectDetailData['records']
-  title: string
-  onRefresh: () => void
-  refreshing: boolean
-  error: unknown
-}) {
-  const fallbackRecord = records.find((record) => record.original_url || record.canonical_url)
-  const sourceUrl = briefing?.original_url || fallbackRecord?.original_url || fallbackRecord?.canonical_url || ''
-  const attachmentStatus = procurementAttachmentStatus(procurement)
-  const parsedScope = cleanScopeExcerpt(procurement?.scope_summary, title)
-  const scope = parsedScope || cleanScopeExcerpt(briefing?.scope_excerpt, title)
-  const items = procurement?.items ?? []
-  const documents = procurement?.documents ?? []
-  const itemDeliveryPeriod = uniformProcurementField(items, 'delivery_period')
-  const itemDeliveryLocation = uniformProcurementField(items, 'delivery_location')
-  const deliveryPeriod = procurementValue(procurement?.delivery_period) || itemDeliveryPeriod
-  const deliveryLocation = procurementValue(procurement?.delivery_location) || itemDeliveryLocation
-  const deliveryFallback = !deliveryPeriod && !deliveryLocation ? procurementValue(briefing?.delivery_excerpt) : ''
-  const uniformDelivery = Boolean(items.length && itemDeliveryPeriod && itemDeliveryLocation && items.every((item) => procurementValue(item.delivery_period) === itemDeliveryPeriod && procurementValue(item.delivery_location) === itemDeliveryLocation))
-  const itemMissing = items.some(isAnnouncementProcurementItem) ? '物料明细待核对' : procurementMissingValue(procurement, '', 'items')
-  const technicalMissing = procurementTechnicalMissingValue(procurement)
-  const qualification = cleanQualificationExcerpt(briefing?.qualification_excerpt)
-  const contact = procurementValue(briefing?.contact_excerpt)
-  const [itemSearch, setItemSearch] = useState('')
-  const [expandedGroups, setExpandedGroups] = useState<string[]>([])
-  const groups = useMemo(() => groupProcurementItems(items), [items])
-  const filteredItems = useMemo(() => {
-    const query = itemSearch.trim().toLocaleLowerCase()
-    if (!query) return items
-    return items.filter((item) => [item.name, item.specification, item.material, item.code, item.standard, item.delivery_period, item.delivery_location]
-      .some((value) => procurementValue(value).toLocaleLowerCase().includes(query)))
-  }, [itemSearch, items])
-  const filteredGroups = useMemo(() => {
-    const visibleItems = new Set(filteredItems)
-    return groups.flatMap((group) => {
-      const matchingItems = group.items.filter((item) => visibleItems.has(item))
-      if (!matchingItems.length) return []
-      return [{ ...groupProcurementItems(matchingItems)[0], key: group.key }]
-    })
-  }, [filteredItems, groups])
-  const columns = useMemo(() => [
-    {
-      title: '物料编号', key: 'code', width: 115,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.code) || '未提供'}</span>,
-    },
-    {
-      title: '规格', key: 'specification', width: 170,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.specification) || procurementTechnicalMissingForItem(procurement, item)}</span>,
-    },
-    {
-      title: '执行标准', key: 'standard', width: 120,
-      render: (_value: unknown, item: ProcurementItem) => <span>{procurementValue(item.standard) || '未提供'}</span>,
-    },
-    {
-      title: '数量 / 单位', key: 'quantity', width: 115,
-      render: (_value: unknown, item: ProcurementItem) => <span className="detail-procurement-quantity">{procurementValue(item.quantity) || itemMissing}{procurementValue(item.unit) ? ` ${item.unit}` : ''}</span>,
-    },
-    ...(uniformDelivery ? [] : [{
-      title: '交付', key: 'delivery', width: 210,
-      render: (_value: unknown, item: ProcurementItem) => <div className="detail-procurement-delivery-cell"><span>交货地点：{procurementValue(item.delivery_location) || itemMissing}</span><span>交货时间：{procurementValue(item.delivery_period) || itemMissing}</span></div>,
-    }]),
-    {
-      title: '来源', key: 'source', width: 190,
-      render: (_value: unknown, item: ProcurementItem) => {
-        const document = procurementDocumentFor(item, documents)
-        return <ProcurementSource item={item} document={document} href={procurementSourceHref(item, document, records)} />
-      },
-    },
-  ], [documents, itemMissing, procurement, records, technicalMissing, uniformDelivery])
-  const groupColumns: TableColumnsType<ProcurementGroup> = [
-    {
-      title: '名称 / 材质', key: 'name', width: 180,
-      render: (_value: unknown, group: ProcurementGroup) => <div className="detail-procurement-group-name"><span className="detail-procurement-item-name">{group.name || '名称未提供'}</span><Text type="secondary">{group.material || technicalMissing}</Text><span className="detail-procurement-mobile-quantity">数量：{group.quantitySummary}</span><span className="detail-procurement-mobile-spec">{group.specifications.length > 0 && group.specificationSummary}<Text type="secondary">{group.items.length} 条明细</Text></span></div>,
-    },
-    {
-      title: '规格', key: 'specification', responsive: ['md'],
-      render: (_value: unknown, group: ProcurementGroup) => <div className="detail-procurement-group-spec"><span>{group.specifications.length ? group.specificationSummary : technicalMissing}</span><Text type="secondary">{group.items.length} 条明细{group.specifications.length > 0 ? `，${group.specifications.length} 种规格` : ''}</Text></div>,
-    },
-    {
-      title: itemSearch.trim() ? '匹配数量' : '合计数量', key: 'quantity', width: 145, responsive: ['md'],
-      render: (_value: unknown, group: ProcurementGroup) => <span className="detail-procurement-group-quantity">{group.quantitySummary}</span>,
-    },
-    {
-      title: '', key: 'details', width: 95,
-      render: (_value: unknown, group: ProcurementGroup) => <Button type="link" size="small" aria-expanded={expandedGroups.includes(group.key)} aria-label={`${expandedGroups.includes(group.key) ? '收起' : '展开'}${group.name} ${group.material}明细`} onClick={() => setExpandedGroups((keys) => keys.includes(group.key) ? keys.filter((key) => key !== group.key) : [...keys, group.key])}>{expandedGroups.includes(group.key) ? '收起明细' : '查看明细'}</Button>,
-    },
-  ]
-  const errorText = error instanceof Error ? error.message : '采购资料核对失败，请稍后重试。'
-  const documentEmptyMessage = items.some(isAnnouncementProcurementItem)
-    ? '公告正文已提供采购明细；目前没有可列出的公开附件。'
-    : attachmentStatus === 'not_checked'
-      ? '尚未检查公开附件；物料明细待从公告或招标文件核对。'
-      : attachmentStatus === 'none_public'
-        ? '未发现公开附件；物料明细待从公告或招标文件核对。'
-        : attachmentStatus === 'restricted'
-          ? '公开附件获取受限；请按公告说明获取招标文件。'
-          : attachmentStatus === 'failed'
-            ? '公开附件检查失败；请核对来源链接或稍后更新公开资料。'
-            : '已发现公开附件，但暂无可展示的资料条目。'
-  const deliveryHeadline = deliveryPeriod.match(/(?:\d+|[一二三四五六七八九十百]+)(?:个)?(?:工作)?(?:日|天)内(?:供完|交完|交货|送达|完成交付)/)?.[0]
-  const deliveryContent = deliveryPeriod || deliveryLocation ? (
-    <dl className="detail-procurement-delivery-facts">
-      <div>
-        <dt>交货时间</dt>
-        <dd>
-          <strong className="detail-procurement-delivery-value">{deliveryHeadline || deliveryPeriod || '待确认'}</strong>
-          {deliveryHeadline && deliveryHeadline !== deliveryPeriod && <span className="detail-procurement-delivery-context">{deliveryPeriod}</span>}
-        </dd>
-      </div>
-      <div>
-        <dt>交货地点</dt>
-        <dd>
-          <strong className="detail-procurement-delivery-value">{deliveryLocation || '待确认'}</strong>
-          {/^[^；;\n]{2,12}[市县区]$/.test(deliveryLocation) && <span className="detail-procurement-address-note">具体收货地址待确认</span>}
-        </dd>
-      </div>
-    </dl>
-  ) : <p className={!deliveryFallback ? 'detail-procurement-missing' : undefined}>{deliveryFallback || procurementMissingValue(procurement, '', 'delivery')}</p>
-
-  return (
-    <section className="detail-briefing detail-procurement" aria-labelledby="procurement-briefing-heading">
-      <div className="detail-briefing-heading-row">
-        <div className="detail-briefing-heading">
-          <h2 id="procurement-briefing-heading">采购信息</h2>
-        </div>
-        <div className="detail-briefing-source detail-procurement-actions">
-          {procurement?.updated_at && <time className="detail-procurement-updated" dateTime={procurement.updated_at}>{formatDate(procurement.updated_at, true).slice(5)} 更新</time>}
-          {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer"><LinkOutlined /> 公告原文</a> : <Text type="secondary">原文链接未提供</Text>}
-          <Button type="text" size="small" icon={attachmentStatus === 'not_checked' ? <FileTextOutlined /> : <ReloadOutlined />} loading={refreshing} onClick={onRefresh}>{attachmentStatus === 'not_checked' ? '检查公开附件' : '更新公开资料'}</Button>
-        </div>
-      </div>
-
-      <ProcurementAttachmentNotice procurement={procurement} items={items} />
-
-      {Boolean(error) && <Alert className="detail-procurement-error" type="error" showIcon message="采购资料核对失败" description={errorText} />}
-
-      {items.length > 0 ? <div className="detail-procurement-delivery-strip" aria-label="交付要求">{deliveryContent}</div> : <div className="detail-briefing-primary">
-        <article className="detail-briefing-field detail-briefing-scope">
-          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">采购范围</Text></div>
-          <p className={!scope ? 'detail-procurement-missing' : undefined}>{scope || procurementMissingValue(procurement, '', 'scope')}</p>
-        </article>
-        <article className="detail-briefing-field detail-briefing-delivery">
-          <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">交付要求</Text></div>
-          {deliveryContent}
-        </article>
-      </div>}
-
-      <section className="detail-procurement-items" aria-labelledby="procurement-items-heading">
-        <div className="detail-procurement-section-heading">
-          <div>
-            <div className="detail-procurement-range-heading">
-              <h3 id="procurement-items-heading">{items.length ? '采购范围' : '物料明细'}</h3>
-              {items.length > 0 && <span className="detail-procurement-count"><strong>{groups.length} 组物料</strong><span>共 {items.length} 条采购明细</span></span>}
-            </div>
-            {itemSearch.trim() && items.length > 0 && <Text type="secondary">找到 {filteredGroups.length} 组，{filteredItems.length} 条明细；数量仅统计匹配项</Text>}
-            {!items.length && <Text type="secondary">{itemMissing}</Text>}
-          </div>
-          {items.length > 0 && <Input className="detail-procurement-search" allowClear prefix={<SearchOutlined />} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="搜索名称、规格、材质或编号" aria-label="搜索物料明细" />}
-        </div>
-        {items.length > 0 ? (
-          <div className="detail-procurement-table-wrap detail-procurement-group-table">
-            <Table<ProcurementGroup>
-              size="small"
-              rowKey="key"
-              columns={groupColumns}
-              dataSource={filteredGroups}
-              expandable={{
-                showExpandColumn: false,
-                expandedRowKeys: expandedGroups,
-                expandedRowRender: (group) => (
-                  <div className="detail-procurement-expanded">
-                    <div className="detail-procurement-expanded-heading">
-                      {group.name} · {group.material || technicalMissing}
-                      <Text type="secondary">逐项规格、数量及原文来源</Text>
-                    </div>
-                    <Table<ProcurementItem>
-                      size="small"
-                      rowKey={(item, index) => `${item.source_document_id}-${item.record_id}-${item.page}-${item.code || item.name}-${index}`}
-                      columns={columns}
-                      dataSource={group.items}
-                      scroll={{ x: uniformDelivery ? 710 : 920 }}
-                      pagination={group.items.length > 12 ? { pageSize: 12, size: 'small' } : false}
-                    />
-                  </div>
-                ),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32], showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 组` }}
-              locale={{ emptyText: '当前筛选没有匹配的物料' }}
-            />
-          </div>
-        ) : <div className="detail-procurement-empty">物料明细尚未形成可展示的明细行；公告正文事实仍可核对。</div>}
-      </section>
-
-      <section className="detail-procurement-documents" aria-labelledby="procurement-documents-heading">
-        <div className="detail-procurement-section-heading"><div><h3 id="procurement-documents-heading">附件与来源</h3><Text type="secondary">附件名、页码和链接用于回到原文核对</Text></div><Text type="secondary">{documents.length ? `${documents.length} 份资料` : procurementAttachmentStatusMeta[attachmentStatus].label}</Text></div>
-        {documents.length > 0 ? <ul className="detail-procurement-document-list">{documents.map((document) => { const documentMeta = procurementDocumentStatusMeta[document.status]; const documentError = procurementDocumentError(document.error); return <li key={String(document.id)}><div className="detail-procurement-document-main"><FileTextOutlined /><div><div className="detail-procurement-document-title">{document.url ? <a href={document.url} target="_blank" rel="noreferrer">{document.name}</a> : <span>{document.name}</span>}<Tag color={documentMeta.color}>{documentMeta.label}</Tag></div><Text type="secondary">{procurementPageLabel(document.pages)} · 记录 #{document.record_id}{document.mime_type ? ` · ${document.mime_type}` : ''}</Text>{documentError && <div className="detail-procurement-document-error">{documentError}</div>}</div></div></li> })}</ul> : <div className="detail-procurement-empty">{documentEmptyMessage}</div>}
-      </section>
-
-      <details className="detail-briefing-qualifications">
-        <summary><span className="detail-briefing-summary-title">投标人资格要求</span><span className="detail-briefing-summary-meta">{qualification ? '展开完整摘录核对' : procurementMissingValue(procurement, '', 'qualification')}</span></summary>
-        <p className="detail-briefing-qualification-body">{qualification || procurementMissingValue(procurement, '', 'qualification')}</p>
-      </details>
-      <article className="detail-briefing-contact">
-        <div className="detail-briefing-field-heading"><Text className="detail-briefing-label">联系方式</Text></div>
-        <p>{contact || procurementMissingValue(procurement, '', 'contact')}</p>
-      </article>
-    </section>
-  )
-}
-
-function OptionCard({ option }: { option: JudgmentOption }) {
-  return <Radio value={option.id} className="detail-option-radio"><div className="detail-option-card"><div className="detail-option-title-row"><div><Text className="detail-option-kicker">可选推进方向</Text><h3>{option.title}</h3></div><span className="detail-option-state">可供选择</span></div><Paragraph>{option.description || '暂无说明'}</Paragraph><div className="detail-option-detail-grid"><div><Text className="detail-label">适用条件</Text><Paragraph>{option.suitable_for || '未说明'}</Paragraph></div><div><Text className="detail-label">建议下一步</Text><Paragraph>{option.next_action || '未说明'}</Paragraph></div></div>{option.tradeoffs.length > 0 && <div className="detail-option-list-block"><Text className="detail-label">主要取舍</Text><ul className="detail-compact-list">{option.tradeoffs.map((item) => <li key={item}>{item}</li>)}</ul></div>}{option.unknowns.length > 0 && <div className="detail-option-list-block"><Text className="detail-label">仍需确认</Text><ul className="detail-compact-list">{option.unknowns.map((item) => <li key={item}>{item}</li>)}</ul></div>}</div></Radio>
 }

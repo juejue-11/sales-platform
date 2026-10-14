@@ -9,8 +9,8 @@ from typing import Sequence
 import httpx
 import pytest
 
-from backend.db import connect
-from backend.project_research import (
+from backend.storage.db import connect
+from backend.research.project_research import (
     RESEARCH_POLICY_VERSION,
     ResearchSession,
     current_dependencies,

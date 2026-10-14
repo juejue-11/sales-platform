@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.service import ScreeningService
+from backend.application.service import ScreeningService
 from backend.tests.test_backend import row
 
 

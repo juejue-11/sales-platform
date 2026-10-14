@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.ai import AIError, build_messages, input_fingerprint, validate_judgment
-from backend.analysis_policy import (ANALYSIS_POLICY_VERSION, analysis_context,
+from backend.analysis.ai import AIError, build_messages, input_fingerprint, validate_judgment
+from backend.analysis.analysis_policy import (ANALYSIS_POLICY_VERSION, analysis_context,
                                      unsupported_company_assertion)
-from backend.service import ConflictError, ScreeningService
+from backend.application.service import ConflictError, ScreeningService
 from backend.tests.test_backend import Provider, make_service, row
 
 
@@ -153,7 +153,7 @@ def test_agent_failure_keeps_evidenced_body_judgment(tmp_path: Path, monkeypatch
     async def failed_fetch(record):
         raise RuntimeError("isolated document failure")
 
-    monkeypatch.setattr("backend.service.fetch_record_documents", failed_fetch)
+    monkeypatch.setattr("backend.application.service.fetch_record_documents", failed_fetch)
     agent = Agent()
     service = make_service(tmp_path, [row()], agent)
     try:
@@ -219,5 +219,5 @@ def test_context_version_and_preferences_participate_in_fingerprint(monkeypatch)
         assert field not in context["company_capability_card"]
         assert context["company_profile_present"] is False
     assert analysis_context({})["analysis_semantic_version"] == ANALYSIS_POLICY_VERSION
-    monkeypatch.setattr("backend.analysis_policy.ANALYSIS_POLICY_VERSION", "future_market_policy")
+    monkeypatch.setattr("backend.analysis.analysis_policy.ANALYSIS_POLICY_VERSION", "future_market_policy")
     assert empty != input_fingerprint(project, {})

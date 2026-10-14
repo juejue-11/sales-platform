@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from backend.legacy_word import WordConversionError, convert_legacy_word, find_soffice
+from backend.documents.legacy_word import WordConversionError, convert_legacy_word, find_soffice
 
 
 def test_converter_configuration_is_validated(monkeypatch):
@@ -33,8 +33,8 @@ def test_conversion_uses_private_profile_and_removes_temporary_files():
         def communicate(self, timeout):
             assert timeout == 90
             return b'', b''
-    with patch('backend.legacy_word.find_soffice', return_value='soffice'), \
-            patch('backend.legacy_word.subprocess.Popen', Process):
+    with patch('backend.documents.legacy_word.find_soffice', return_value='soffice'), \
+            patch('backend.documents.legacy_word.subprocess.Popen', Process):
         assert convert_legacy_word(b'original doc') == b'%PDF-converted'
     assert not Path(runs[0][-1]).parent.exists()
 
@@ -48,9 +48,9 @@ def test_timeout_terminates_only_owned_conversion():
                 raise subprocess.TimeoutExpired('soffice', timeout)
             return b'', b''
     process = Process()
-    with patch('backend.legacy_word.find_soffice', return_value='soffice'), \
-            patch('backend.legacy_word.subprocess.Popen', return_value=process), \
-            patch('backend.legacy_word._stop_conversion') as stop:
+    with patch('backend.documents.legacy_word.find_soffice', return_value='soffice'), \
+            patch('backend.documents.legacy_word.subprocess.Popen', return_value=process), \
+            patch('backend.documents.legacy_word._stop_conversion') as stop:
         with pytest.raises(WordConversionError, match='conversion_timeout'):
             convert_legacy_word(b'original doc', timeout=0.1)
     stop.assert_called_once_with(process)
@@ -65,8 +65,8 @@ def test_converter_exit_success_does_not_hide_invalid_or_oversized_output(output
                 Path(command[-1]).with_suffix('.pdf').write_bytes(output)
         def communicate(self, timeout):
             return b'', b''
-    with patch('backend.legacy_word.find_soffice', return_value='soffice'), \
-            patch('backend.legacy_word.subprocess.Popen', Process), \
-            patch('backend.legacy_word.MAX_BYTES', 8):
+    with patch('backend.documents.legacy_word.find_soffice', return_value='soffice'), \
+            patch('backend.documents.legacy_word.subprocess.Popen', Process), \
+            patch('backend.documents.legacy_word.MAX_BYTES', 8):
         with pytest.raises(WordConversionError):
             convert_legacy_word(b'doc')

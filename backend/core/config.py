@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DEFAULT_SOURCE_PATH = Path(r"C:/Users/cgr/Desktop/new/销售平台信息采集系统/data/export/records.jsonl")
 DEFAULT_ARCHIVE_ROOT = Path(r"C:/Users/cgr/Desktop/new/销售平台信息采集系统/data")

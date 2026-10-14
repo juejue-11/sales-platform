@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .project_research import merge_project_research
-from .utils import as_list, clean_text, json_text, normalize_timestamp, now_iso, sha256_text
+from ..research.project_research import merge_project_research
+from ..core.utils import as_list, clean_text, json_text, normalize_timestamp, now_iso, sha256_text
 
 
 class ImportErrorDetail(ValueError):

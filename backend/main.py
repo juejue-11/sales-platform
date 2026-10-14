@@ -9,7 +9,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .service import ConflictError, NotFoundError, ScreeningService, ServiceError
+from .application.service import ConflictError, NotFoundError, ScreeningService, ServiceError
 
 
 class AnalyzeRequest(BaseModel):

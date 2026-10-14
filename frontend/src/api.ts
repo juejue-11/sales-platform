@@ -2,6 +2,7 @@ import type {
   AgentRun,
   DashboardData,
   ProcurementData,
+  ProcurementDocumentSnapshot,
   ProjectDetail,
   ProjectSummary,
   ProjectsResponse,
@@ -77,6 +78,12 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  documentSnapshot: (projectId: number, documentId: number | string, sha256?: string | null) => {
+    const query = sha256 ? `?sha256=${encodeURIComponent(sha256)}` : ''
+    return request<ProcurementDocumentSnapshot>(
+      `/projects/${projectId}/documents/${encodeURIComponent(String(documentId))}/snapshot${query}`,
+    )
+  },
   analyze: (id: number, force = false) => request<{ job_id: number | null; status: string; message: string }>(`/projects/${id}/analyze`, {
     method: 'POST',
     body: JSON.stringify({ force }),

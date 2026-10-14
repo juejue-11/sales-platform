@@ -16,8 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.ai import PiSDKProvider
-from backend.service import ScreeningService
+from backend.analysis.ai import PiSDKProvider
+from backend.application.service import ScreeningService
 
 
 class RecordingProvider(PiSDKProvider):

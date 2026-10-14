@@ -101,9 +101,9 @@ def main():
     # Patch only the public-download seam in this child process. Parser, DB, API, bridge, Agent and SSE are real.
     launcher = '''import os
 from pathlib import Path
-from backend.public_documents import parse_document
-import backend.service as service
-import backend.public_documents as documents
+from backend.documents.public_documents import parse_document
+import backend.application.service as service
+import backend.documents.public_documents as documents
 async def fixture_fetch(record):
     return [parse_document(Path(os.environ['PROCUREMENT_QA_FIXTURE']).read_bytes(),record_id=int(record.get('id') or record.get('record_id')),url='https://example.com/material.pdf',name='物料清单附件.pdf')]
 service.fetch_record_documents = fixture_fetch

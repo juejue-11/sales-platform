@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from .utils import parse_timestamp
+from ..core.utils import parse_timestamp
 
 
 GATE_VALUES = {"candidate", "review", "excluded", "expired", "closed", "signal", "duplicate"}

@@ -21,9 +21,9 @@ sys.path.insert(0, str(ROOT))
 
 def serve(output: Path, fixture: Path) -> None:
     import uvicorn
-    import backend.service as service_module
+    import backend.application.service as service_module
     from backend.main import create_app
-    from backend.service import ScreeningService
+    from backend.application.service import ScreeningService
 
     async def empty_fetch(record):
         return []

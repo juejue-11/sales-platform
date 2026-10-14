@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { RuntimeBoundaryError, StreamBoundaryTrace } from "./json-boundary.js";
 import { runRequest, type RuntimeRequest } from "./runner.js";
 
 interface CapturedRequest {
@@ -67,6 +70,86 @@ function assistantCompanyToolCallChunk(topic?: string): Record<string, unknown> 
       },
     ],
   };
+}
+
+function assistantMalformedFetchToolCallChunk(): Record<string, unknown> {
+  return {
+    id: "chatcmpl-malformed-fetch",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "screening-test-model",
+    choices: [{
+      index: 0,
+      delta: {
+        role: "assistant",
+        tool_calls: [{
+          index: 0,
+          id: "call-malformed-fetch",
+          type: "function",
+          function: { name: "fetch_project_documents", arguments: '{"record_id":7' },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  };
+}
+
+function interleavedRpcToolCallChunks(): Record<string, unknown>[] {
+  return [
+    {
+      id: "chatcmpl-interleaved-tools",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "screening-test-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "call-fetch-interleaved",
+              type: "function",
+              function: { name: "fetch_project_documents", arguments: '{"record_id":' },
+            },
+            {
+              index: 1,
+              id: "call-search-interleaved",
+              type: "function",
+              function: { name: "search_project_sources", arguments: '{"purpose":"check","query":"equip' },
+            },
+          ],
+        },
+        finish_reason: null,
+      }],
+    },
+    {
+      id: "chatcmpl-interleaved-tools",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "screening-test-model",
+      choices: [{
+        index: 0,
+        delta: {
+          // The final fragments arrive in the opposite order. The closing
+          // brace and finish reason share this provider chunk.
+          tool_calls: [
+            { index: 1, function: { arguments: 'ment","limit":1}' } },
+            { index: 0, function: { arguments: "7}" } },
+          ],
+        },
+        finish_reason: "tool_calls",
+      }],
+    },
+    {
+      id: "chatcmpl-interleaved-tools",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "screening-test-model",
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+    },
+  ];
 }
 
 function streamResponse(response: ServerResponse, chunks: Record<string, unknown>[]): void {
@@ -328,6 +411,74 @@ test("embedded Pi SDK runs a real SSE tool loop with only business tools", async
   }
 });
 
+test("embedded Pi SDK preserves interleaved RPC tool indexes through execution", async () => {
+  const expectedArguments = new Map<string, Record<string, unknown>>([
+    ["fetch_project_documents", { record_id: 7 }],
+    ["search_project_sources", {
+      purpose: "check",
+      query: "equipment",
+      source_ids: [],
+      limit: 1,
+      offset: 0,
+      published_after: null,
+      published_before: null,
+    }],
+  ]);
+  const received: Record<string, unknown>[] = [];
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, interleavedRpcToolCallChunks());
+      return;
+    }
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const toolMessages = messages.filter((message) => message.role === "tool");
+    assert.equal(toolMessages.length, 2);
+    assert.ok(toolMessages.every((message) => typeof message.tool_call_id === "string"));
+    streamResponse(response, [
+      {
+        id: "chatcmpl-interleaved-final",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "screening-test-model",
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", content: '{"decision":"verify","summary":"two RPC reads completed","reasons":[],"unknowns":[],"next_actions":[],"options":[]}' },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 },
+      },
+    ]);
+  });
+  try {
+    const result = await runDuplexRunner(
+      duplexRequestFor(fake.url),
+      (frame, child) => {
+        const tool = String(frame.tool);
+        assert.ok(expectedArguments.has(tool), `unexpected RPC tool ${tool}`);
+        assert.deepEqual(frame.arguments, expectedArguments.get(tool));
+        received.push(frame);
+        child.stdin?.write(JSON.stringify({
+          type: "tool_response",
+          id: frame.id,
+          ok: true,
+          data: tool === "fetch_project_documents"
+            ? { documents: [], procurement: {} }
+            : { status: "ok", items: [] },
+        }) + "\n");
+      },
+      DUPLEX_HARNESS_TIMEOUT_MS,
+    );
+    assert.equal(received.length, 2);
+    assert.deepEqual(new Set(received.map((frame) => frame.tool)), new Set(expectedArguments.keys()));
+    assert.equal(fake.requests.length, 2);
+    const resultLine = result.lines.at(-1);
+    assert.equal(resultLine?.type, "result");
+    assert.equal((resultLine?.usage as Record<string, unknown>)?.tool_calls, 2);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 test("optional company material keeps a name-only profile unevaluated and separates preferences", async () => {
   const fake = await startFakeServer((body, response) => {
     if (fake.requests.length === 1) {
@@ -468,12 +619,55 @@ test("SDK failures are returned as a redacted protocol error", async () => {
     response.writeHead(500, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "provider rejected secret request-key" }));
   });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
   try {
     const result = await runRunner(requestFor(fake.url));
     const errorLine = result.lines.at(-1);
     assert.deepEqual(errorLine, { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
     assert.ok(!JSON.stringify(result.lines).includes("request-key"));
+    const files = (await readdir(traceDir)).filter((name) => name.startsWith("screening-") && name.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const trace = JSON.parse(await readFile(join(traceDir, files[0]), "utf8")) as Record<string, unknown>;
+    assert.equal(trace.code, "MODEL_ERROR");
+    assert.ok(!JSON.stringify(trace).includes("request-key"));
+    assert.match(String((trace.sdk_message as Record<string, unknown>)?.errorMessage), /provider rejected/iu);
+    const metadata = trace.request_metadata as Record<string, unknown>;
+    assert.equal(metadata.model, "screening-test-model");
+    assert.equal(metadata.max_tokens, 512);
+    assert.deepEqual(metadata.message_roles, ["system", "user"]);
+    assert.ok((metadata.tool_names as string[]).includes("read_project_records"));
+    assert.ok(!Object.hasOwn(metadata, "headers"));
   } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("HTTP 400 provider errors retain a redacted MODEL_ERROR trace", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "invalid payload for request-key" }));
+  });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
+    const files = (await readdir(traceDir)).filter((name) => name.startsWith("screening-") && name.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const trace = JSON.parse(await readFile(join(traceDir, files[0]), "utf8")) as Record<string, unknown>;
+    assert.equal(trace.code, "MODEL_ERROR");
+    assert.ok(!JSON.stringify(trace).includes("request-key"));
+    assert.match(String((trace.sdk_message as Record<string, unknown>)?.errorMessage), /invalid payload/iu);
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
     await new Promise<void>((resolve) => fake.server.close(() => resolve()));
   }
 });
@@ -519,6 +713,9 @@ test("length-terminated JSON-looking output is not reported as completed", async
       { id: "chatcmpl-length", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: {}, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
     ]);
   });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
   try {
     const result = await runRunner(requestFor(fake.url));
     assert.deepEqual(result.lines.at(-1), { type: "error", code: "OUTPUT_TOKEN_LIMIT", message: "The model output token limit was reached." });
@@ -526,10 +723,313 @@ test("length-terminated JSON-looking output is not reported as completed", async
       { model_calls: 1, tool_calls: 0, input_tokens: 1, output_tokens: 1 });
     assert.ok(!result.lines.some((line) => line.type === "result"));
     assert.ok(!result.lines.some((line) => line.type === "progress" && line.stage === "completed"));
+    const files = (await readdir(traceDir)).filter((name) => name.startsWith("screening-") && name.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const trace = JSON.parse(await readFile(join(traceDir, files[0]), "utf8")) as Record<string, unknown>;
+    assert.equal(trace.code, "OUTPUT_TOKEN_LIMIT");
+    assert.equal(trace.provider_chunk_count, 2);
+    assert.deepEqual(trace.finish_reasons, ["length"]);
+    const providerEvents = trace.provider_events as Array<Record<string, unknown>>;
+    assert.equal((providerEvents.at(-1)?.choices as Array<Record<string, unknown>>)[0]?.finish_reason, "length");
+    const sdkMessage = trace.sdk_message as Record<string, unknown>;
+    assert.equal(sdkMessage.stopReason, "length");
+    assert.equal(sdkMessage.rawStopReason, "length");
+    assert.ok(!JSON.stringify(trace).includes("request-key"));
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("embedded Pi SDK preserves a large nested report through a final content brace", async () => {
+  const report = {
+    decision: "recommend",
+    summary: 'Nested } text with a quote " and a backslash \\ stays inside JSON.',
+    demand_summary: "equipment\nprocurement",
+    reasons: Array.from({ length: 24 }, (_, index) => ({
+      text: `Reason ${index} contains } and \\"quoted\\" text`,
+      evidence: Array.from({ length: 4 }, (_, evidenceIndex) => ({
+        record_id: index + 1,
+        quote: `row ${evidenceIndex}: } \\ \\"quoted\\"`,
+        source: { section: `section-${index}`, page: evidenceIndex + 1 },
+      })),
+    })),
+    unknowns: ["attachment } details", 'quoted "value" and slash \\'],
+    next_actions: Array.from({ length: 16 }, (_, index) => ({
+      action: `verify-${index}`,
+      checks: [`field-${index}`, `field-${index}-continued`],
+    })),
+    options: Array.from({ length: 8 }, (_, index) => ({
+      label: `option-${index}`,
+      table: {
+        columns: ["name", "value", "note"],
+        rows: Array.from({ length: 6 }, (_, row) => [
+          `item-${row}`,
+          `value } ${row}`,
+          `literal \\"${row}\\" \\`,
+        ]),
+      },
+    })),
+    sections: Array.from({ length: 12 }, (_, index) => ({
+      heading: `section-${index}`,
+      paragraphs: [`first } paragraph`, `second \\"paragraph\\" \\`],
+      nested: { levels: [{ level: 1, values: ["}", "\\", '"'] }, { level: 2, values: [index, true, null] }] },
+    })),
+  };
+  const source = JSON.stringify(report);
+  assert.ok(source.length > 8_000);
+  assert.equal(source.at(-1), "}");
+  const chunks: Record<string, unknown>[] = [];
+  for (let offset = 0; offset < source.length - 1; offset += 113) {
+    chunks.push({
+      id: "chatcmpl-large-report",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "screening-test-model",
+      choices: [{
+        index: 0,
+        delta: {
+          ...(offset === 0 ? { role: "assistant" } : {}),
+          content: source.slice(offset, Math.min(offset + 113, source.length - 1)),
+        },
+        finish_reason: null,
+      }],
+    });
+  }
+  chunks.push({
+    id: "chatcmpl-large-report",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "screening-test-model",
+    choices: [{ index: 0, delta: { content: "}" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 20, completion_tokens: source.length, total_tokens: source.length + 20 },
+  });
+  const finalChoice = (chunks.at(-1)?.choices as Array<{ delta: { content: string }; finish_reason: string }>)[0];
+  assert.equal(finalChoice.delta.content, "}");
+  assert.equal(finalChoice.finish_reason, "stop");
+
+  const fake = await startFakeServer((_body, response) => streamResponse(response, chunks));
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    const resultLine = result.lines.at(-1);
+    assert.equal(resultLine?.type, "result");
+    assert.equal(resultLine?.content, source);
+    assert.equal(Buffer.byteLength(String(resultLine?.content), "utf8"), Buffer.byteLength(source, "utf8"));
+    assert.deepEqual(JSON.parse(String(resultLine?.content)), report);
+    assert.equal((JSON.parse(String(resultLine?.content)) as Record<string, unknown>).sections instanceof Array, true);
   } finally {
     await new Promise<void>((resolve) => fake.server.close(() => resolve()));
   }
 });
+
+test("raw tool arguments are assembled by index and compared with the SDK object", () => {
+  const trace = new StreamBoundaryTrace();
+  trace.resetTurn();
+  trace.captureProviderEvent({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-a", function: { name: "read_company_capability", arguments: '{"topic":"' } }] } }] });
+  trace.captureProviderEvent({ choices: [{ delta: { tool_calls: [{ index: 1, id: "call-b", function: { name: "read_related_records", arguments: '{"project_id":7}' } }] } }] });
+  trace.captureProviderEvent({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-a", function: { arguments: 'equipment"}' } }] } }] });
+
+  const parsed = trace.readToolArguments("call-a", "read_company_capability", { topic: "equipment" });
+  assert.deepEqual(parsed, { raw: '{"topic":"equipment"}', value: { topic: "equipment" } });
+  const mismatch = trace.readToolArguments("call-b", "read_related_records", { project_id: "7" });
+  assert.ok(mismatch instanceof RuntimeBoundaryError);
+  assert.equal(mismatch.code, "TOOL_PARSER_ERROR");
+
+  const finalTrace = new StreamBoundaryTrace();
+  finalTrace.resetTurn();
+  finalTrace.captureProviderEvent({ choices: [{ delta: { content: '{"decision":"verify"}' }, finish_reason: "stop" }] });
+  finalTrace.setAssistantMessage({
+    role: "assistant",
+    content: [{ type: "text", text: '{"decision":"different"}' }],
+    api: "openai-completions",
+    provider: "fixture",
+    model: "fixture",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  const contentMismatch = finalTrace.compareFinalContent('{"decision":"different"}');
+  assert.ok(contentMismatch instanceof RuntimeBoundaryError);
+  assert.equal(contentMismatch.code, "TOOL_PARSER_ERROR");
+});
+
+test("trace writes bounded provider head and tail and prunes only its own files", async () => {
+  const trace = new StreamBoundaryTrace();
+  trace.resetTurn();
+  for (let index = 0; index <= 400; index += 1) {
+    trace.captureProviderEvent({
+      id: `provider-${index}`,
+      choices: [{
+        index: 0,
+        delta: { content: `chunk-${index}`, ...(index === 0 ? { reasoning_content: "private stream reasoning" } : {}) },
+        finish_reason: index === 400 ? "stop" : null,
+      }],
+    });
+  }
+  trace.captureRequestMetadata({
+    model: "deepseek-flash",
+    max_tokens: 16_384,
+    reasoning_effort: "low",
+    thinking: { type: "enabled" },
+    response_format: { type: "json_object" },
+    tool_choice: "auto",
+    tools: [{ type: "function", function: { name: "read_project_records" } }],
+    messages: [
+      { role: "system", content: "private prompt text" },
+      { role: "assistant", reasoning_content: "private request reasoning", tool_calls: [{ id: "call-1" }] },
+    ],
+    headers: { authorization: "request-key" },
+  });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
+  try {
+    await writeFile(join(traceDir, "keep-foreign.json"), "keep", "utf8");
+    for (let index = 0; index < 101; index += 1) {
+      await writeFile(join(traceDir, `screening-existing-${index}.json`), "{}", "utf8");
+    }
+    await trace.write("MODEL_FORMAT_ERROR", { fixture: true }, "request-key");
+    const entries = await readdir(traceDir);
+    assert.ok(entries.includes("keep-foreign.json"));
+    const ownFiles = entries.filter((name) => name.startsWith("screening-") && name.endsWith(".json"));
+    assert.ok(ownFiles.length <= 100);
+    const generated = await Promise.all(ownFiles.map(async (name) => ({
+      name,
+      value: JSON.parse(await readFile(join(traceDir, name), "utf8")) as Record<string, unknown>,
+    })));
+    const payload = generated.find((entry) => entry.value.provider_chunk_count === 401)?.value;
+    assert.ok(payload);
+    assert.equal(payload.provider_event_dropped, 81);
+    const metadata = payload.request_metadata as Record<string, unknown>;
+    assert.equal(metadata.reasoning_mode, "low");
+    assert.equal(metadata.thinking_mode, "enabled");
+    assert.equal(metadata.reasoning_present, true);
+    assert.equal(metadata.response_format && (metadata.response_format as Record<string, unknown>).type, "json_object");
+    assert.ok(!Object.hasOwn(metadata, "headers"));
+    const providerEvents = payload.provider_events as Array<Record<string, unknown>>;
+    assert.equal(providerEvents.length, 320);
+    assert.equal(providerEvents[0]?.id, "provider-0");
+    assert.equal(providerEvents.at(-1)?.id, "provider-400");
+    assert.equal((providerEvents.at(-1)?.choices as Array<Record<string, unknown>>)[0]?.finish_reason, "stop");
+    const firstDelta = ((providerEvents[0]?.choices as Array<Record<string, unknown>>)[0]?.delta as Record<string, unknown>);
+    assert.deepEqual(firstDelta.reasoning_content, { omitted: "thinking", chars: "private stream reasoning".length });
+    assert.ok(!JSON.stringify(payload).includes("private stream reasoning"));
+    assert.ok(!JSON.stringify(payload).includes("private request reasoning"));
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+  }
+});
+
+test("incomplete raw tool JSON never reaches the host bridge", async () => {
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [assistantMalformedFetchToolCallChunk()]);
+      return;
+    }
+    const toolMessage = (body.messages as Array<Record<string, unknown>>).find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /invalid JSON|invalid_request/u);
+    streamResponse(response, [
+      { id: "malformed-fetch-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { content: '{"decision":"verify"}' }, finish_reason: "stop" }] },
+    ]);
+  });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), () => { hostCalls += 1; });
+    const final = result.lines.at(-1);
+    assert.equal(final?.type, "result");
+    assert.equal((final?.usage as Record<string, unknown>)?.tool_calls, 0);
+    assert.equal(hostCalls, 0);
+    assert.equal(fake.requests.length, 2);
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("repeated incomplete tool JSON stops after one repair attempt", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [assistantMalformedFetchToolCallChunk()]);
+  });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
+  let hostCalls = 0;
+  try {
+    const result = await runDuplexRunner(duplexRequestFor(fake.url), () => { hostCalls += 1; });
+    assert.equal(result.lines.at(-1)?.code, "TOOL_ARGUMENT_JSON");
+    assert.equal(hostCalls, 0);
+    assert.equal(fake.requests.length, 2);
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("a transport EOF retries once when no tool ran", async () => {
+  const fake = await startFakeServer((_body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [
+        { id: "eof-first", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { content: '{"decision":"verify"' }, finish_reason: null }] },
+      ]);
+      return;
+    }
+    streamResponse(response, [
+      { id: "eof-second", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { content: '{"decision":"verify"}' }, finish_reason: "stop" }] },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url));
+    assert.equal(result.lines.at(-1)?.type, "result");
+    assert.equal(fake.requests.length, 2);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+for (const rawContent of ['{"decision":"verify"', " \n\t ", ""]) {
+test(`invalid final JSON (${JSON.stringify(rawContent)}) is traced while the draft remains available to the host`, async () => {
+  const fake = await startFakeServer((_body, response) => {
+    streamResponse(response, [
+      { id: "bad-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { content: rawContent }, finish_reason: "stop" }] },
+    ]);
+  });
+  const traceDir = await mkdtemp(join(tmpdir(), "screening-trace-"));
+  const previousTraceDir = process.env.SCREENING_AI_TRACE_DIR;
+  process.env.SCREENING_AI_TRACE_DIR = traceDir;
+  try {
+    const events: unknown[] = [];
+    const result = await runRequest(requestFor(fake.url) as unknown as RuntimeRequest, (event) => events.push(event));
+    assert.equal(result.content, rawContent.trim());
+    assert.equal(result.finish_reason, "stop");
+    assert.equal(fake.requests.length, 1);
+    assert.ok(events.some((event) => (event as Record<string, unknown>).type === "progress"));
+    const files = (await readdir(traceDir)).filter((name) => name.startsWith("screening-") && name.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const trace = JSON.parse(await readFile(join(traceDir, files[0]), "utf8")) as Record<string, unknown>;
+    assert.equal(trace.code, "MODEL_FORMAT_ERROR");
+    assert.equal((trace.assembled as Record<string, unknown>).content, rawContent);
+    assert.deepEqual(trace.finish_reasons, ["stop"]);
+    assert.equal(typeof trace.run_id, "string");
+    assert.ok(!JSON.stringify(trace).includes("reasoning_content"));
+  } finally {
+    if (previousTraceDir === undefined) delete process.env.SCREENING_AI_TRACE_DIR;
+    else process.env.SCREENING_AI_TRACE_DIR = previousTraceDir;
+    await rm(traceDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+}
 
 test("reserves the last allowed turn for a report without further tools", async () => {
   const fake = await startFakeServer((body, response) => {
@@ -618,7 +1118,7 @@ test("a single oversized SSE text chunk is aborted before completion", async () 
   });
   try {
     const result = await runRunner(requestFor(fake.url));
-    assert.deepEqual(result.lines.at(-1), { type: "error", code: "MODEL_ERROR", message: "The model request failed." });
+    assert.deepEqual(result.lines.at(-1), { type: "error", code: "OUTPUT_TOKEN_LIMIT", message: "The model output token limit was reached." });
     assert.ok(!result.lines.some((line) => line.type === "result"));
     assert.ok(!result.lines.some((line) => line.type === "progress" && line.stage === "completed"));
   } finally {

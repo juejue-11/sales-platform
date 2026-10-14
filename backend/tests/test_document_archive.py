@@ -5,7 +5,7 @@ import io
 
 from docx import Document
 
-from backend.public_documents import read_archived_documents
+from backend.documents.public_documents import read_archived_documents
 
 
 def test_archive_is_hash_checked_and_confined_to_record(tmp_path):

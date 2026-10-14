@@ -54,8 +54,9 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
 .app-content { min-width: 0; padding: 28px 30px 42px; }
 .workspace-home .app-header { display: none; }
 .workspace-home .app-content { padding-top: 16px; }
+.workspace-record { --project-header-height: 44px; }
 .workspace-record, .workspace-record .app-content { background: #FFFFFF; }
-.workspace-record .app-header { height: 44px; }
+.workspace-record .app-header { position: sticky; top: 0; z-index: 6; height: var(--project-header-height); }
 .workspace-record .app-content { padding-top: 16px; }
 @media (max-width: 760px) {
   .workspace-home .app-header { display: flex; height: 40px; }

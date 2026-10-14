@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend.document_access import (
+from backend.documents.document_access import (
     DEFAULT_DOCUMENT_LIMIT,
     MAX_DOCUMENT_LIMIT,
     DocumentAccessError,

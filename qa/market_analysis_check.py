@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def serve():
     sys.path.insert(0, str(ROOT))
     from backend.main import create_app
-    from backend.service import ScreeningService
+    from backend.application.service import ScreeningService
     import uvicorn
 
     class LocalProvider:

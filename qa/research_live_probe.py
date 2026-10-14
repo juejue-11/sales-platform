@@ -10,8 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.db import connect
-from backend.project_research import ResearchSession, read_saved_source
+from backend.storage.db import connect
+from backend.research.project_research import ResearchSession, read_saved_source
 
 
 async def main() -> None:
