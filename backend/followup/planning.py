@@ -81,21 +81,75 @@ def _bool(value: Any) -> bool:
     return bool(value)
 
 
+def _is_material_section(section: str) -> bool:
+    text = _text(section).lower()
+    return any(token in text for token in (
+        "material", "qualification", "credential", "participation", "fee", "document",
+        "材料", "资格", "资质", "费用", "怎样参加", "参与", "办理",
+    ))
+
+
+def _has_source(item: Mapping[str, Any]) -> bool:
+    sources = item.get("sources")
+    return bool(sources) or bool(item.get("source_ref")) or isinstance(item.get("source"), Mapping)
+
+
+def _is_concrete_action(item: Mapping[str, Any], *, section: str) -> bool:
+    text = " ".join(_text(item.get(key)).lower() for key in ("title", "name", "text", "explanation", "label", "kind"))
+    return _text(section).lower() == "milestones" or any(token in text for token in (
+        "register", "registration", "document_access", "obtain", "get file", "submit", "submission",
+        "certificate", "question", "opening", "报名", "注册", "获取文件", "购买文件", "提交", "证书",
+        "提问", "开标", "缴费", "保证金",
+    ))
+
+
+def _is_material_requirement(item: Mapping[str, Any], *, section: str) -> bool:
+    """Whether one source requirement represents a user-provided material."""
+
+    if any(key in item for key in ("materials", "required_materials", "documents", "attachments", "material")):
+        return True
+    section_text = _text(section).lower()
+    text = " ".join(_text(item.get(key)).lower() for key in ("title", "name", "text", "explanation"))
+    if any(token in section_text for token in ("material", "qualification", "credential", "资质", "资格", "材料")):
+        # A qualification section may also describe a platform action.  Keep
+        # those as tasks and only retain actual proof/document requirements as
+        # materials.
+        if any(token in text for token in ("注册", "报名", "获取文件", "购买文件", "提问", "缴费", "保证金", "开标")) \
+                and not any(token in text for token in ("证书", "证明", "营业执照", "授权", "资质", "资格", "材料", "文件清单")):
+            return False
+        return True
+    if any(token in section_text for token in ("participation", "怎样参加", "参与", "费用", "fee")):
+        return any(token in text for token in (
+            "证书", "证明", "营业执照", "授权", "资质", "资格", "材料", "文件", "清单", "报告",
+        )) and not any(token in text for token in ("获取文件", "购买文件"))
+    return False
+
+
 def _source_basis(item: Mapping[str, Any], *, section: str) -> str:
-    """Map reading provenance into the three user-visible plan categories."""
+    """Map source provenance and workflow conditions to a plan category.
+
+    A normalized reading contains many factual requirements (buyer, scope,
+    delivery).  Those facts inform a suggested check; only an explicit
+    classification or a source-backed concrete action/material is required.
+    """
 
     raw: Any = item.get("basis")
+    explicit = raw is not None
     if raw is None:
         raw = item.get("source_type", item.get("source_kind"))
-    if raw is None:
+        explicit = raw is not None
+    if raw is None and isinstance(item.get("source"), str):
         raw = item.get("source")
+        explicit = True
     if raw is None:
         raw = item.get("status")
-    if raw is None:
-        raw = item.get("text", item.get("explanation", ""))
+        explicit = raw is not None
     if isinstance(raw, Mapping):
         raw = raw.get("basis", raw.get("type", raw.get("kind", raw.get("classification"))))
-    text = _text(raw).lower()
+        explicit = raw is not None
+    text = " ".join(_text(value).lower() for value in (
+        raw, item.get("text"), item.get("explanation"), item.get("label"), item.get("kind"),
+    ))
     if _bool(item.get("suggested")) or _bool(item.get("ai_suggested")) or any(
         token in text for token in ("suggest", "recommend", "建议", "可选")
     ):
@@ -104,15 +158,13 @@ def _source_basis(item: Mapping[str, Any], *, section: str) -> str:
         token in text for token in ("conditional", "condition", "条件", "视", "如适用", "如满足", "若", "如果")
     ):
         return "conditional"
-    if _bool(item.get("required")) or _bool(item.get("mandatory")) or any(
-        token in text for token in ("required", "mandatory", "must", "必", "规定")
-    ):
+    if explicit and any(token in text for token in ("required", "mandatory", "must", "required", "必", "规定")):
         return "required"
-    # Items under the reading module's requirements/milestones sections are
-    # source-derived facts.  A caller can mark an item suggested/conditional
-    # explicitly; absence of a marker must not turn a stated requirement into
-    # an AI suggestion.
-    return "suggested" if section.lower() in {"suggestions", "recommendations"} else "required"
+    if _bool(item.get("required")) or _bool(item.get("mandatory")):
+        return "required"
+    if _has_source(item) and (_is_concrete_action(item, section=section) or _is_material_section(section)):
+        return "required"
+    return "suggested"
 
 
 def _as_items(value: Any) -> list[Any]:
@@ -328,11 +380,14 @@ def generate_plan(explanation: Mapping[str, Any]) -> dict[str, Any]:
         requirements = _as_items(section_value.get("requirements", []))
         if not requirements:
             continue
-        section_basis = "required"
-        for requirement in requirements:
-            if isinstance(requirement, Mapping) and _source_basis(requirement, section=section_id) == "conditional":
-                section_basis = "conditional"
-                break
+        section_key = f"{section_id} {section_title}"
+        requirement_bases = [
+            _source_basis(requirement, section=section_key) if isinstance(requirement, Mapping) else "suggested"
+            for requirement in requirements
+        ]
+        section_basis = "required" if "required" in requirement_bases else (
+            "conditional" if "conditional" in requirement_bases else "suggested"
+        )
         task_id = _digest({"section": section_id, "title": section_title, "basis": section_basis}, "task", 12)
         task = {
             "id": task_id,
@@ -350,7 +405,7 @@ def generate_plan(explanation: Mapping[str, Any]) -> dict[str, Any]:
         for requirement_index, requirement in enumerate(requirements):
             if isinstance(requirement, Mapping):
                 requirement_title = _item_title(requirement, fallback="requirement")
-                material_basis = _source_basis(requirement, section=section_id)
+                material_basis = _source_basis(requirement, section=section_key)
                 requirement_key = _text(requirement.get("id")) or f"{section_id}:{requirement_index}:{requirement_title}"
                 material_source = _source_ref(requirement)
             else:
@@ -359,19 +414,23 @@ def generate_plan(explanation: Mapping[str, Any]) -> dict[str, Any]:
                 requirement_key = f"{section_id}:{requirement_index}:{requirement_title}"
                 material_source = ""
             material_id = _digest({"key": requirement_key, "name": requirement_title}, "material", 12)
-            materials.append({
-                "id": material_id,
-                "task_id": task_id,
-                "name": requirement_title,
-                "basis": material_basis,
-                "status": "not_prepared",
-                "ai_check_status": "not_checked",
-                "ai_check_note": "",
-                "provided_at": None,
-                "note": "",
-                "source_ref": material_source,
-            })
-            task["materials"].append(material_id)
+            include_material = isinstance(requirement, Mapping) and _is_material_requirement(
+                requirement, section=section_key
+            )
+            if include_material:
+                materials.append({
+                    "id": material_id,
+                    "task_id": task_id,
+                    "name": requirement_title,
+                    "basis": material_basis,
+                    "status": "not_prepared",
+                    "ai_check_status": "not_checked",
+                    "ai_check_note": "",
+                    "provided_at": None,
+                    "note": "",
+                    "source_ref": material_source,
+                })
+                task["materials"].append(material_id)
         tasks.append(task)
 
     # Compatibility input (and the canonical top-level milestones list) still

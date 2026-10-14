@@ -372,6 +372,8 @@ def adopt_plan(
         changes["needs_review"] = 1
 
     changed_tasks = json_value(row["changed_tasks_json"], []) or []
+    if row["plan_fingerprint"] and row["plan_fingerprint"] != fingerprint:
+        changed_tasks = _changed_task_ids(row, plan, changed_tasks)
     task_ids: list[str] = []
     material_ids: list[str] = []
     material_by_id = {str(material["id"]): material for material in plan.get("materials", [])}
@@ -400,14 +402,20 @@ def adopt_plan(
             if structural:
                 if task_id not in changed_tasks:
                     changed_tasks.append(task_id)
-                repo.update_task(
-                    project_id,
-                    task_id,
-                    {
-                        "title": task["title"], "basis": task["basis"], "due_at": task["due_at"],
-                        "prerequisites": task["prerequisites"], "materials": task["materials"], "plan_id": actual_plan_id,
-                    },
-                )
+                if existing["status"] in {"done", "skipped"}:
+                    # A changed reading may make a completed action worth
+                    # reviewing, but it must not rewrite the historical task
+                    # definition or its completion record.
+                    repo.update_task(project_id, task_id, {"plan_id": actual_plan_id})
+                else:
+                    repo.update_task(
+                        project_id,
+                        task_id,
+                        {
+                            "title": task["title"], "basis": task["basis"], "due_at": task["due_at"],
+                            "prerequisites": task["prerequisites"], "materials": task["materials"], "plan_id": actual_plan_id,
+                        },
+                    )
             else:
                 # Keep completed state, completion note, and owner untouched;
                 # the plan id is safe metadata to update.

@@ -95,6 +95,31 @@ def test_canonical_reading_sections_group_requirements_into_materials() -> None:
     assert all(material["task_id"] == plan["tasks"][0]["id"] for material in plan["materials"])
 
 
+def test_fact_sections_are_suggested_checks_without_fake_materials() -> None:
+    plan = generate_plan(
+        {
+            "demand_type": "confirmed",
+            "sections": [
+                {
+                    "id": "buyer",
+                    "title": "谁在采购",
+                    "requirements": [{"id": "buyer-name", "text": "采购人为某企业", "sources": [{"record_id": 1, "quote": "某企业"}]}],
+                },
+                {
+                    "id": "qualification",
+                    "title": "资格与材料",
+                    "requirements": [{"id": "license", "text": "提供营业执照", "sources": [{"record_id": 1, "quote": "营业执照"}]}],
+                },
+            ],
+        }
+    )
+    buyer_task = next(task for task in plan["tasks"] if task["id"].startswith("task-"))
+    assert buyer_task["basis"] == "suggested"
+    assert len(plan["materials"]) == 1
+    assert plan["materials"][0]["name"] == "提供营业执照"
+    assert plan["materials"][0]["basis"] == "required"
+
+
 def test_adoption_is_explicit_idempotent_and_preserves_progress(explanation: dict) -> None:
     conn = _db()
     first = get_followup(conn, 10, explanation)
@@ -173,6 +198,27 @@ def test_source_change_marks_review_without_rolling_back_task(explanation: dict)
     assert task_id in changed["changed_tasks"]
     assert next(task["status"] for task in changed["tasks"] if task["id"] == task_id) == "done"
     assert any(event["type"] == "source_changed" for event in changed["events"])
+
+
+def test_re_adoption_preserves_completed_task_definition(explanation: dict) -> None:
+    conn = _db()
+    first = adopt_plan(conn, 14, generate_plan(explanation))
+    completed = first["tasks"][0]
+    update_task(conn, 14, completed["id"], {"status": "done", "completion_note": "已完成"})
+    changed_explanation = {
+        **explanation,
+        "sections": {
+            **explanation["sections"],
+            "requirements": [{"id": "qualification", "title": "变化后的资格核对", "basis": "required"}],
+        },
+    }
+    second_plan = generate_plan(changed_explanation)
+    state = adopt_plan(conn, 14, second_plan)
+    preserved = next(task for task in state["tasks"] if task["id"] == completed["id"])
+    assert preserved["status"] == "done"
+    assert preserved["title"] == completed["title"]
+    assert preserved["completion_note"] == "已完成"
+    assert completed["id"] in state["changed_tasks"]
 
 
 def test_foreign_key_prevents_orphan_children() -> None:
