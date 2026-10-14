@@ -161,6 +161,8 @@ def save_followup(
             raise FollowupValidationError("submitted stage requires submitted_at and submission_channel confirmation")
     elif submitted_at_present or submission_channel_present:
         raise FollowupValidationError("submission confirmation is only valid for submitted stage")
+    if stage == "awaiting_result" and (not submitted_at or not submission_channel):
+        raise FollowupValidationError("awaiting_result requires a previously confirmed submission")
     if current["submitted_at"] and submitted_at != current["submitted_at"]:
         raise FollowupConflictError("submitted_at is part of immutable submission history")
     if current["submission_channel"] and submission_channel != current["submission_channel"]:
