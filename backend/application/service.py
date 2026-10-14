@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import threading
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ from ..documents.public_documents import fetch_record_documents, read_archived_d
 
 from ..procurement import (build_procurement_summary, document_from_row, document_public_metadata,
                            normalize_document, procurement_fingerprint)
+from .reading import READING_LIMITS, ReadingProtocolMismatch, invoke_reading
+from ..procurement.reading import (build_material, empty_reading, material_version as reading_material_version)
 # Compatibility imports keep the historical ScreeningService private entry
 # points available while their implementations live in the pure model module.
 from ..procurement.model import (
@@ -203,6 +206,21 @@ class ScreeningService:
             # A process crash can leave a task marked running. It is safe to
             # return it to the durable queue on the next startup.
             self.db.execute("UPDATE jobs SET status='queued',updated_at=? WHERE status='running'", (now_iso(),))
+            self.db.execute("UPDATE procurement_reading_jobs SET status='queued',updated_at=? WHERE status='running'",
+                            (now_iso(),))
+            pending_projects = self.db.execute(
+                "SELECT DISTINCT project_id FROM procurement_readings WHERE status='pending'"
+            ).fetchall()
+            for row in pending_projects:
+                active = self.db.execute(
+                    "SELECT 1 FROM procurement_reading_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
+                    (int(row["project_id"]),),
+                ).fetchone()
+                if active is None:
+                    self.db.execute(
+                        "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (?,0,'queued',?,?)",
+                        (int(row["project_id"]), now_iso(), now_iso()),
+                    )
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = self._spawn(self._worker_loop())
         if self._import_task is None or self._import_task.done():
@@ -221,6 +239,12 @@ class ScreeningService:
     async def _worker_loop(self) -> None:
         while not self._closed:
             try:
+                reading_job = self.db.execute(
+                    "SELECT id FROM procurement_reading_jobs WHERE status='queued' ORDER BY id LIMIT 1"
+                ).fetchone()
+                if reading_job is not None:
+                    await self._run_reading_job(int(reading_job["id"]))
+                    continue
                 job = self.db.execute("SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
                 if job is not None and int(job["id"]) not in self._active_jobs:
                     await self.run_job(int(job["id"]))
@@ -432,8 +456,290 @@ class ScreeningService:
         refresh = self.db.execute("SELECT * FROM procurement_refreshes WHERE project_id=?", (project_id,)).fetchone()
         return build_procurement_summary(record_rows, documents, refresh)
 
+    def _reading_corrections(self, project_id: int) -> list[dict[str, Any]]:
+        """Read optional human corrections without coupling to supplements.py.
+
+        The corrections table is created by the supplements workstream.  This
+        branch must also run against databases created before that table
+        existed, so the lookup is deliberately capability-detected.
+        """
+
+        table = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='procurement_corrections'"
+        ).fetchone()
+        if table is None:
+            return []
+        rows = self.db.execute(
+            "SELECT id,project_id,requirement_id,text,reason,material_version,created_at "
+            "FROM procurement_corrections WHERE project_id=? ORDER BY id", (int(project_id),)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _reading_material(self, project_id: int) -> dict[str, Any]:
+        records = self._records_for_project(int(project_id))
+        documents = self._document_sources_for_records([int(record["id"]) for record in records
+                                                         if record.get("id") is not None])
+        corrections = self._reading_corrections(int(project_id))
+        version = reading_material_version(records, documents, corrections)
+        return build_material(records, documents, version=version, corrections=corrections)
+
+    def _reading_row(self, project_id: int, material_version: str | None = None) -> sqlite3.Row | None:
+        if material_version:
+            return self.db.execute(
+                "SELECT * FROM procurement_readings WHERE project_id=? AND material_version=? "
+                "ORDER BY id DESC LIMIT 1", (int(project_id), material_version)
+            ).fetchone()
+        return self.db.execute(
+            "SELECT * FROM procurement_readings WHERE project_id=? ORDER BY id DESC LIMIT 1",
+            (int(project_id),)
+        ).fetchone()
+
+    @staticmethod
+    def _reading_json(value: Any, default: Any) -> Any:
+        parsed = json_value(value, default)
+        return parsed if isinstance(parsed, type(default)) else default
+
+    def _reading_public(self, row: sqlite3.Row | None, current_material_version: str,
+                        *, configured: bool | None = None) -> dict[str, Any]:
+        configured = self._ai_config()["configured"] if configured is None else configured
+        if row is None:
+            return empty_reading(current_material_version, status="pending" if configured else "not_configured")
+        status = str(row["status"] or "partial")
+        if status not in {"pending", "complete", "partial", "failed", "not_configured"}:
+            status = "failed"
+        stale = str(row["material_version"] or "") != current_material_version
+        return {
+            "version": int(row["version"] or 1), "id": int(row["id"]), "revision": int(row["revision"] or 1),
+            "material_version": str(row["material_version"] or ""), "status": status, "stale": stale,
+            "summary": str(row["summary"] or ""), "demand_type": str(row["demand_type"] or "unknown"),
+            "stage": str(row["stage"] or ""), "buyer": str(row["buyer"] or ""),
+            "region": str(row["region"] or ""), "category": self._reading_json(row["category_json"], []),
+            "sections": self._reading_json(row["sections_json"], []),
+            "milestones": self._reading_json(row["milestones_json"], []),
+            "coverage": self._reading_json(row["coverage_json"], []),
+            "conflicts": self._reading_json(row["conflicts_json"], []),
+            "unresolved": self._reading_json(row["unresolved_json"], []),
+            "error": str(row["error"] or "") if row["error"] else None,
+            "updated_at": row["updated_at"],
+        }
+
+    def _procurement_reading_for_project(self, project_id: int, *, material: dict[str, Any] | None = None) -> dict[str, Any]:
+        material = material or self._reading_material(int(project_id))
+        current_version = str(material.get("material_version") or "")
+        row = self._reading_row(int(project_id), current_version)
+        if row is None:
+            # Keep a previous explanation visible as stale evidence when the
+            # source package changed. The current row (if any) is selected
+            # below only when no exact-version row exists.
+            row = self._reading_row(int(project_id))
+        # Legacy injected judgment providers do not opt into the procurement
+        # reading protocol.  Do not manufacture a pending reading in their
+        # project snapshot, which would perturb their existing fingerprints.
+        if row is None and not self._reading_gate_enabled():
+            return empty_reading(current_version, status="not_configured")
+        public = self._reading_public(row, current_version)
+        # A pending or failed retry must not erase a previously successful
+        # explanation. Expose the old facts with the current processing status
+        # and an explicit limitation; gate decisions still inspect the latest
+        # row directly, so an incomplete retry cannot make an old deadline
+        # look verified.
+        if row is not None and str(row["status"] or "") in {"pending", "failed"}:
+            fallback = self.db.execute(
+                "SELECT * FROM procurement_readings WHERE project_id=? AND material_version=? "
+                "AND status IN ('complete','partial') AND id<? ORDER BY id DESC LIMIT 1",
+                (int(project_id), current_version, int(row["id"])),
+            ).fetchone()
+            if fallback is not None:
+                previous = self._reading_public(fallback, current_version)
+                for key in ("summary", "demand_type", "stage", "buyer", "region", "category",
+                            "sections", "milestones", "coverage", "conflicts"):
+                    public[key] = previous[key]
+                unresolved = list(previous.get("unresolved") or [])
+                unresolved.append("本轮采购阅读尚未成功，以上保留上一次已保存说明供复核")
+                public["unresolved"] = list(dict.fromkeys(unresolved))
+                public["status"] = str(row["status"] or "failed")
+                public["id"] = int(row["id"])
+                public["revision"] = int(row["revision"] or 1)
+                public["error"] = str(row["error"] or "") or None
+                public["updated_at"] = row["updated_at"]
+        return public
+
+    def _save_procurement_reading(self, project_id: int, reading: Mapping[str, Any], *, material_version: str,
+                                  config: Mapping[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
+        value = dict(reading)
+        status = str(value.get("status") or "partial")
+        if status not in {"pending", "complete", "partial", "failed", "not_configured"}:
+            status = "failed"
+        category = value.get("category") if isinstance(value.get("category"), list) else []
+        sections = value.get("sections") if isinstance(value.get("sections"), list) else []
+        milestones = value.get("milestones") if isinstance(value.get("milestones"), list) else []
+        coverage = value.get("coverage") if isinstance(value.get("coverage"), list) else []
+        conflicts = value.get("conflicts") if isinstance(value.get("conflicts"), list) else []
+        unresolved = value.get("unresolved") if isinstance(value.get("unresolved"), list) else []
+        error_value = str(error or value.get("error") or "")[:500] or None
+        current = now_iso()
+        model = str((config or {}).get("model") or "")[:256]
+        fingerprint = self._reading_request_fingerprint(material_version, config or {})
+        with self._db_lock, self.db:
+            previous = self.db.execute(
+                "SELECT COALESCE(MAX(revision),0) FROM procurement_readings WHERE project_id=? AND material_version=?",
+                (int(project_id), material_version),
+            ).fetchone()
+            revision = int(previous[0] or 0) + 1 if previous else 1
+            self.db.execute(
+                """INSERT INTO procurement_readings
+                (project_id,version,revision,material_version,status,stale,summary,demand_type,stage,buyer,region,
+                 category_json,sections_json,milestones_json,coverage_json,conflicts_json,unresolved_json,
+                 input_fingerprint,model,error,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (int(project_id), int(value.get("version") or 1), revision, material_version, status, 0,
+                 str(value.get("summary") or "")[:4_000], str(value.get("demand_type") or "unknown")[:20],
+                 str(value.get("stage") or "")[:200], str(value.get("buyer") or "")[:500],
+                 str(value.get("region") or "")[:500], json_text(category), json_text(sections),
+                 json_text(milestones), json_text(coverage), json_text(conflicts), json_text(unresolved),
+                 fingerprint, model, error_value, current, current),
+            )
+        return self._procurement_reading_for_project(int(project_id))
+
+    @staticmethod
+    def _reading_request_fingerprint(material_version: str, config: Mapping[str, Any]) -> str:
+        return sha256_text(json_text({"material_version": material_version,
+                                      "model": config.get("model"), "base_url": config.get("base_url"),
+                                      "engine": config.get("engine"), "enabled": config.get("enabled")}))
+
+    def queue_reading(self, project_id: int, *, force: bool = False, schedule: bool = False) -> dict[str, Any]:
+        """Create a durable pending reading and optionally run it now."""
+
+        project_id = int(self._project_row(project_id)["id"])
+        material = self._reading_material(project_id)
+        version = str(material["material_version"])
+        config = self._ai_config()
+        if not config["configured"]:
+            return {"status": "not_configured", "reading": self._reading_public(
+                self._reading_row(project_id, version), version, configured=False)}
+        current = self._reading_row(project_id, version)
+        current_fingerprint = self._reading_request_fingerprint(version, config)
+        if (current and not force and str(current["input_fingerprint"] or "") == current_fingerprint
+                and str(current["status"] or "") == "pending"):
+            return {"status": "pending", "reading": self._reading_public(current, version)}
+        if (current and not force and str(current["status"] or "") in {"complete", "partial"}
+                and str(current["input_fingerprint"] or "") == current_fingerprint):
+            return {"status": str(current["status"]), "reading": self._reading_public(current, version)}
+        pending = empty_reading(version, status="pending")
+        self._save_procurement_reading(project_id, pending, material_version=version, config=config)
+        if schedule:
+            self.schedule_reading(project_id, force=force)
+        return {"status": "queued", "reading": self._procurement_reading_for_project(project_id)}
+
+    def schedule_reading(self, project_id: int, *, force: bool = False) -> None:
+        project_id = int(self._project_row(project_id)["id"])
+        with self._db_lock, self.db:
+            queued = self.db.execute(
+                "SELECT 1 FROM procurement_reading_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
+                (project_id,),
+            ).fetchone()
+            if queued is None:
+                self.db.execute(
+                    "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (?,?,'queued',?,?)",
+                    (project_id, int(force), now_iso(), now_iso()),
+                )
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = self._spawn(self._worker_loop())
+
+    async def _run_reading_job(self, reading_job_id: int) -> None:
+        with self._db_lock, self.db:
+            row = self.db.execute("SELECT * FROM procurement_reading_jobs WHERE id=?", (reading_job_id,)).fetchone()
+            if row is None or row["status"] not in {"queued", "running"}:
+                return
+            project_id = int(row["project_id"])
+            force = bool(row["force"])
+            self.db.execute(
+                "UPDATE procurement_reading_jobs SET status='running',attempts=attempts+1,started_at=?,updated_at=?,error=NULL WHERE id=?",
+                (now_iso(), now_iso(), reading_job_id),
+            )
+        try:
+            result = await self.run_reading(project_id, force=force)
+            status = "succeeded" if result.get("status") in {"complete", "partial", "not_configured"} else "failed"
+            error = result.get("error") or ("reading status: " + str(result.get("status"))) if status == "failed" else None
+            with self._db_lock, self.db:
+                self.db.execute(
+                    "UPDATE procurement_reading_jobs SET status=?,error=?,finished_at=?,updated_at=? WHERE id=?",
+                    (status, str(error or "")[:500] or None, now_iso(), now_iso(), reading_job_id),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            safe_error = sanitize_ai_error(exc, secrets=[str(self._ai_config().get("api_key") or "")])
+            with self._db_lock, self.db:
+                self.db.execute(
+                    "UPDATE procurement_reading_jobs SET status='failed',error=?,finished_at=?,updated_at=? WHERE id=?",
+                    (safe_error[:500], now_iso(), now_iso(), reading_job_id),
+                )
+
+    async def run_reading(self, project_id: int, *, force: bool = False, bypass_gate: bool = True) -> dict[str, Any]:
+        project_id = int(self._project_row(project_id)["id"])
+        await self._ensure_reading_documents(project_id)
+        material = self._reading_material(project_id)
+        version = str(material["material_version"])
+        config = self._ai_config()
+        if not config["configured"]:
+            return self._save_procurement_reading(
+                project_id, empty_reading(version, status="not_configured"), material_version=version, config=config,
+            ) if self._reading_row(project_id, version) else empty_reading(version, status="not_configured")
+        current = self._reading_row(project_id, version)
+        current_fingerprint = self._reading_request_fingerprint(version, config)
+        if (current and not force and str(current["status"] or "") in {"complete", "partial"}
+                and str(current["input_fingerprint"] or "") == current_fingerprint):
+            return self._reading_public(current, version)
+        # Legacy injected providers implement the judgment protocol only. Do
+        # not add a second call to them; explicit read/read_procurement methods
+        # opt into the new module while preserving all existing test doubles.
+        explicit = callable(getattr(self.provider, "read_procurement", None)) or callable(getattr(self.provider, "read", None))
+        if self._injected_provider and not explicit and not bool(getattr(self.provider, "supports_procurement_reading", False)):
+            return self._reading_public(self._reading_row(project_id, version), version)
+        pending = empty_reading(version, status="pending")
+        self._save_procurement_reading(project_id, pending, material_version=version, config=config)
+        provider: Any = self.provider
+        if config.get("engine") == "single_call" and isinstance(provider, PiSDKProvider) and not self._injected_provider:
+            provider = OpenAICompatibleProvider()
+        try:
+            result = await invoke_reading(provider, material=material, config=config)
+            saved = self._save_procurement_reading(project_id, result, material_version=version, config=config)
+        except ReadingProtocolMismatch:
+            # The compatibility caller consumes the returned content as the
+            # judgment response in the same job. Keep the reading stage
+            # explicitly failed for operators, without storing model output.
+            message = "reading runtime task protocol is unavailable"
+            failed = empty_reading(version, status="failed", error=message)
+            self._save_procurement_reading(project_id, failed, material_version=version, config=config, error=message)
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            message = sanitize_ai_error(exc, secrets=[str(config.get("api_key") or "")])
+            failed = empty_reading(version, status="failed", error=message)
+            saved = self._save_procurement_reading(project_id, failed, material_version=version, config=config, error=message)
+        # A newly read material package invalidates the recommendation that
+        # depended on the previous package. Preserve the old judgment and
+        # queue a fresh one only when this was an explicit reading request;
+        # run_job itself is already the active queue item.
+        with self._db_lock, self.db:
+            judgment = self.db.execute(
+                "SELECT id,stale FROM judgments WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)
+            ).fetchone()
+            running = self.db.execute(
+                "SELECT 1 FROM jobs WHERE project_id=? AND status='running' LIMIT 1", (project_id,)
+            ).fetchone()
+            if judgment is not None and (force or saved.get("status") in {"complete", "partial", "failed"}):
+                self.db.execute("UPDATE judgments SET stale=1 WHERE project_id=? AND stale=0", (project_id,))
+                self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
+        if judgment is not None and not running and (force or saved.get("status") in {"complete", "partial"}):
+            self.queue_project(project_id, force=True, schedule=True)
+        return saved
+
     async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]], *,
-                                        preloaded: dict[int, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+                                        preloaded: dict[int, list[dict[str, Any]]] | None = None,
+                                        queue_reading: bool = True) -> dict[str, Any]:
         """Fetch and persist attachment documents without invoking an AI provider."""
         before = self._procurement_for_project(project_id)
         target_record_ids = [int(record["id"]) for record in records]
@@ -474,8 +780,11 @@ class ScreeningService:
                 # Keep superseded rows for historical citations, but exclude
                 # them from the current aggregate after every refresh. An
                 # empty result therefore also reflects attachment deletion.
-                self.db.execute(f"UPDATE procurement_documents SET is_current=0 WHERE record_id IN ({placeholders})",
-                                tuple(target_record_ids))
+                # User-supplemented files are independent material. A public
+                # source refresh must not hide them when the collector's
+                # attachment list changes or returns an empty result.
+                self.db.execute(f"UPDATE procurement_documents SET is_current=0 WHERE record_id IN ({placeholders}) "
+                                "AND id NOT LIKE 'supplement-%'", tuple(target_record_ids))
             # An observed read failure is different from an observed removal.
             # Retain the last successful bytes alongside the failed attempt;
             # the aggregate stays partial and shows both timestamps/statuses.
@@ -523,7 +832,41 @@ class ScreeningService:
             if semantic_changed:
                 self.db.execute("UPDATE judgments SET stale=1 WHERE project_id=?", (project_id,))
             self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
+            for record in records:
+                self.db.execute(
+                    "INSERT INTO procurement_attachment_fetches(record_id,record_version,status,updated_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(record_id) DO UPDATE SET record_version=excluded.record_version,status=excluded.status,updated_at=excluded.updated_at",
+                    (int(record["id"]), int(record.get("current_version") or 1), "attempted", now_iso()),
+                )
+        if queue_reading and self._ai_config()["configured"] and self._reading_gate_enabled():
+            # Attachment acquisition is a material change. Queue a fresh
+            # source reading so cards/detail/研判 can converge on one result.
+            self.queue_reading(project_id, force=semantic_changed, schedule=True)
         return after
+
+    async def _ensure_reading_documents(self, project_id: int) -> None:
+        """Acquire public attachments once per record version before reading.
+
+        The fetch marker prevents retrying the same network operation on every
+        model retry.  The explicit refresh endpoint remains available for a
+        user-requested retry and always calls the existing document pipeline.
+        """
+
+        records = self._records_for_project(int(project_id))
+        candidates = [record for record in records
+                      if isinstance(record.get("attachments"), list) and record.get("attachments")]
+        if not candidates:
+            return
+        pending: list[dict[str, Any]] = []
+        for record in candidates:
+            marker = self.db.execute(
+                "SELECT record_version FROM procurement_attachment_fetches WHERE record_id=?",
+                (int(record["id"]),),
+            ).fetchone()
+            if marker is None or int(marker["record_version"] or 0) != int(record.get("current_version") or 1):
+                pending.append(record)
+        if pending:
+            await self._refresh_record_documents(int(project_id), pending, queue_reading=False)
 
     async def refresh_project_documents(self, project_id: int) -> dict[str, Any]:
         project_id = int(self._project_row(project_id)["id"])
@@ -672,6 +1015,7 @@ class ScreeningService:
         latest = records[0] if records else {}
         gate, gate_reasons = self._gate(records, project_id)
         procurement = self._procurement_for_project(project_id)
+        procurement_reading = self._procurement_reading_for_project(project_id)
         return {
             "id": int(project_id),
             "title": latest.get("title") or f"项目 {project_id}",
@@ -688,6 +1032,11 @@ class ScreeningService:
             # metadata. Full text remains available through the trusted tool.
             "procurement": build_procurement_context(procurement),
             "procurement_fingerprint": self._procurement_fingerprint(procurement),
+            # The AI judgment consumes the same persisted reading that cards
+            # and details expose. A stale reading remains visible as evidence
+            # but is explicitly marked for the model and reviewer.
+            "procurement_reading": procurement_reading,
+            "procurement_reading_fingerprint": sha256_text(json_text(procurement_reading)),
             "updated_at": project_row["updated_at"],
         }
 
@@ -1000,10 +1349,78 @@ class ScreeningService:
         return bool(deadline and now <= deadline <= now + timedelta(days=7) and
                     item.get("gate_status") in {"candidate", "review"})
 
+    @staticmethod
+    def _reading_submission_date(item: dict[str, Any]) -> Any:
+        reading = item.get("procurement_reading") if isinstance(item, dict) else None
+        if not isinstance(reading, dict):
+            return None
+        milestones = reading.get("milestones")
+        if not isinstance(milestones, list):
+            return None
+        dates = []
+        for milestone in milestones:
+            if not isinstance(milestone, dict) or milestone.get("kind") != "submission":
+                continue
+            value = parse_timestamp(milestone.get("at"), deadline=True)
+            if value is not None:
+                dates.append(value.astimezone(SHANGHAI).date() if value.tzinfo else value.date())
+        return min(dates) if dates else None
+
+    def _reading_gate_enabled(self) -> bool:
+        return (not self._injected_provider
+                or callable(getattr(self.provider, "read_procurement", None))
+                or callable(getattr(self.provider, "read", None))
+                or bool(getattr(self.provider, "supports_procurement_reading", False)))
+
     def _gate(self, records: list[dict[str, Any]], project_id: int) -> tuple[str, list[str]]:
         override_row = self.db.execute("SELECT * FROM project_gate WHERE project_id=?", (project_id,)).fetchone()
         override = dict(override_row) if override_row else None
-        return gate_for_project(records, self.get_settings(), now=datetime.now(SHANGHAI), override=override)
+        if not self._reading_gate_enabled():
+            return gate_for_project(records, self.get_settings(), now=datetime.now(SHANGHAI), override=override)
+
+        # Collector deadline_at is not known to be a submission deadline.  It
+        # may be the public-document acquisition window, so an expired value
+        # cannot block the first source-grounded reading.  Preserve all other
+        # rule checks and let the normalized submission milestone decide
+        # expiration after a successful reading.
+        now = datetime.now(SHANGHAI)
+        adjusted: list[dict[str, Any]] = []
+        for record in records:
+            value = dict(record)
+            deadline = parse_timestamp(value.get("deadline_at"), deadline=True)
+            if deadline and deadline < now:
+                value["deadline_at"] = None
+            adjusted.append(value)
+        gate, reasons = gate_for_project(adjusted, self.get_settings(), now=now, override=override)
+
+        try:
+            material = self._reading_material(int(project_id))
+            row = self._reading_row(int(project_id), str(material.get("material_version") or ""))
+        except (sqlite3.Error, KeyError, TypeError, ValueError):
+            row = None
+        if row is None:
+            if gate == "expired":
+                gate = "review"
+                reasons.append("reading has not verified a submission deadline")
+            return gate, reasons
+        status = str(row["status"] or "")
+        unresolved = json_value(row["unresolved_json"], [])
+        conflicts = json_value(row["conflicts_json"], [])
+        milestones = json_value(row["milestones_json"], [])
+        verified_submission = None
+        if status == "complete" and not unresolved and not conflicts and isinstance(milestones, list):
+            for milestone in milestones:
+                if not isinstance(milestone, dict) or milestone.get("kind") != "submission":
+                    continue
+                candidate = parse_timestamp(milestone.get("at"), deadline=True)
+                if candidate is not None:
+                    verified_submission = candidate
+                    break
+        if verified_submission is not None and verified_submission < now:
+            return "expired", reasons + ["reading verified the submission deadline has passed"]
+        if gate == "expired":
+            return "review", reasons + ["raw collector deadline is not a verified submission deadline"]
+        return gate, reasons
 
     def _judgment_dict(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
@@ -1085,6 +1502,7 @@ class ScreeningService:
         published = latest.get("published_at")
         deadline = latest.get("deadline_at")
         procurement = self._procurement_for_project(project_id)
+        procurement_reading = self._procurement_reading_for_project(project_id)
         briefing = build_briefing(latest, procurement=procurement)
         # Keep source-derived briefing fields intact while exposing parsed
         # attachment facts beside them for detail and list clients.
@@ -1129,7 +1547,9 @@ class ScreeningService:
             "research_summary": research_summary,
             "briefing": briefing,
             "procurement": procurement,
+            "procurement_reading": procurement_reading,
             "procurement_fingerprint": self._procurement_fingerprint(procurement),
+            "procurement_reading_fingerprint": sha256_text(json_text(procurement_reading)),
             "needs_review": gate == "review" or ai_status in {"stale", "failed", "not_configured", "idle"} or
                             (judgment is not None and judgment["decision"] == "verify") or selection_needs_review,
             "decision": decision_value,
@@ -1178,7 +1598,11 @@ class ScreeningService:
 
     def list_projects(self, *, q: str = "", gate: str = "", ai_status: str = "", decision: str = "",
                       ai_decision: str = "", deadline_soon: bool = False, kind: str = "", source_id: str = "",
-                      page: int = 1, page_size: int = 30, sort: str = "updated", active_only: bool = False) -> dict[str, Any]:
+                      category: str = "", region: str = "", buyer: str = "", procurement_stage: str = "",
+                      demand_type: str = "", followup_stage: str = "", is_following: bool = False,
+                      key_time: str = "",
+                      page: int = 1, page_size: int = 30, sort: str = "updated",
+                      active_only: bool = False) -> dict[str, Any]:
         page = max(1, int(page))
         page_size = max(1, min(200, int(page_size)))
         projects = []
@@ -1212,6 +1636,28 @@ class ScreeningService:
                 continue
             if source_id and item["source_id"] != source_id:
                 continue
+            reading = item.get("procurement_reading") or {}
+            if category and not any(category.lower() in str(value).lower()
+                                    for value in reading.get("category", []) if value):
+                continue
+            if region and region.lower() not in str(reading.get("region") or "").lower():
+                continue
+            if buyer and buyer.lower() not in str(item.get("buyer") or reading.get("buyer") or "").lower():
+                continue
+            if procurement_stage and str(reading.get("stage") or "") != procurement_stage:
+                continue
+            if demand_type and str(reading.get("demand_type") or "unknown") != demand_type:
+                continue
+            if key_time:
+                submission_date = self._reading_submission_date(item)
+                today = now.astimezone(SHANGHAI).date()
+                if key_time == "unknown":
+                    if submission_date is not None:
+                        continue
+                elif key_time in {"today", "7d", "30d"}:
+                    days = {"today": 0, "7d": 7, "30d": 30}[key_time]
+                    if submission_date is None or not today <= submission_date <= today + timedelta(days=days):
+                        continue
             projects.append(item)
         if sort == "deadline":
             projects.sort(key=lambda item: (item.get("deadline_at") is None, item.get("deadline_at") or "9999"))
@@ -1290,6 +1736,8 @@ class ScreeningService:
                 # A daily incremental import must not rerun an unrelated old
                 # backlog merely because its policy/model result is stale.
                 for project_id in sorted(set(result.affected_project_ids) | set(related_changes)):
+                    if self._reading_gate_enabled():
+                        self.queue_reading(project_id, schedule=False)
                     self.queue_project(project_id, schedule=False)
             return {"inserted": result.inserted, "updated": result.updated, "unchanged": result.unchanged,
                     "total": result.total, "message": "导入完成"}
@@ -1318,6 +1766,15 @@ class ScreeningService:
                 return {"job_id": None, "status": "not_configured",
                         "message": "Pi SDK运行时未就绪，请安装Node.js 22.19+并构建agent-runtime/dist/runner.js"}
             return {"job_id": None, "status": "not_configured", "message": "AI 未配置，已保留项目"}
+        # Keep a durable material-version marker even when an injected legacy
+        # provider is used; that provider will continue to execute the old
+        # judgment protocol without an unexpected extra model call.
+        # ``force`` belongs to the judgment queue.  A completed reading must
+        # remain the current evidence while its dependent judgment is rerun;
+        # passing force through here would append a fresh pending reading and
+        # hide the result we just produced.
+        if self._reading_gate_enabled():
+            self.queue_reading(project_id, force=False, schedule=False)
         records = self._records_for_project(project_id)
         gate, _ = self._gate(records, project_id)
         if gate in {"excluded", "expired", "duplicate", "closed"}:
@@ -1508,6 +1965,8 @@ class ScreeningService:
         agent_run_id: int | None = None
         research_session: ResearchSession | None = None
         research_configuration_snapshot: str | None = None
+        legacy_judgment_content: str | None = None
+        legacy_judgment_usage: dict[str, int] = {}
         try:
             with self._db_lock, self.db:
                 job = self.db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -1524,6 +1983,30 @@ class ScreeningService:
                         and not config.get("sdk_ready") and isinstance(self.provider, PiSDKProvider)):
                     raise AIError("Pi SDK运行时未就绪，请安装Node.js 22.19+并构建agent-runtime/dist/runner.js")
                 raise AIError("AI is not configured")
+            # Procurement reading is an independent, source-grounded stage.
+            # The legacy injected judgment doubles opt out unless they expose
+            # read/read_procurement; real Pi SDK and single-call providers
+            # always pass through the stage before a judgment is generated.
+            explicit_reader = callable(getattr(self.provider, "read_procurement", None)) or callable(getattr(self.provider, "read", None))
+            if (not self._injected_provider) or explicit_reader or bool(getattr(self.provider, "supports_procurement_reading", False)):
+                # A failed reading remains an explicit, persisted input state.
+                # The judgment may still use the primary announcement as a
+                # fallback, but its prompt carries the failed/partial reading
+                # and unresolved evidence so it cannot present that stage as
+                # successfully completed.
+                try:
+                    reading_result = await self.run_reading(project_id, force=False)
+                except ReadingProtocolMismatch as mismatch:
+                    # Older Pi runners do not echo task_kind. Their first
+                    # response is the legacy judgment draft; reuse it instead
+                    # of spending a second model turn before the judgment.
+                    legacy_judgment_content = mismatch.content
+                    legacy_judgment_usage = mismatch.usage
+                else:
+                    reading_status = str(reading_result.get("status") or "failed")
+                    if reading_status in {"failed", "pending", "not_configured"}:
+                        raise AIError("procurement reading is not ready for judgment")
+                project = self.project_detail(project_id)
             gate, _ = self._gate(self._records_for_project(project_id), project_id)
             if gate in {"excluded", "expired", "duplicate", "closed"}:
                 with self._db_lock, self.db:
@@ -1595,6 +2078,16 @@ class ScreeningService:
                         procurement_snapshot = self._procurement_for_project(project_id)
                         fingerprint_project["procurement"] = procurement_snapshot
                         fingerprint_project["procurement_fingerprint"] = self._procurement_fingerprint(procurement_snapshot)
+                        # Attachment reads also change the source package
+                        # version exposed to the shared reading contract.
+                        # Keep the in-job snapshot aligned so the document
+                        # fetch remains part of this job rather than looking
+                        # like a concurrent change that must be requeued.
+                        reading_snapshot = self._procurement_reading_for_project(project_id)
+                        fingerprint_project["procurement_reading"] = reading_snapshot
+                        fingerprint_project["procurement_reading_fingerprint"] = sha256_text(
+                            json_text(reading_snapshot)
+                        )
                     fingerprint = self._analysis_fingerprint(
                         fingerprint_project, capability, config, related_context,
                         research_configuration=research_configuration_snapshot,
@@ -1602,6 +2095,14 @@ class ScreeningService:
                     return value
 
             usage_totals = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}
+            if legacy_judgment_content is not None:
+                if agent_run_id is not None:
+                    self._update_agent_usage(agent_run_id, legacy_judgment_usage)
+                for key in usage_totals:
+                    value = legacy_judgment_usage.get(key)
+                    if isinstance(value, int) and value >= 0:
+                        usage_totals[key] += value
+            runtime_limits = self._agent_limits()
             format_repair_attempted = False
             for correction in range(2):
                 if correction:
@@ -1610,7 +2111,10 @@ class ScreeningService:
                                         (now_iso(), job_id))
                 # Request failures (including credentials, timeouts and rate limits)
                 # are not output errors and must not trigger a correction request.
-                if uses_agent:
+                if legacy_judgment_content is not None and correction == 0:
+                    content = legacy_judgment_content
+                    usage = {}
+                elif uses_agent:
                     runtime_limits = self._agent_limits()
                     if correction:
                         runtime_limits = {**runtime_limits, "max_turns": min(runtime_limits["max_turns"], 3)}
@@ -1914,10 +2418,19 @@ class ScreeningService:
         for row in self.db.execute("SELECT id,project_id,status,attempts,error,created_at,updated_at FROM jobs ORDER BY id DESC LIMIT 100").fetchall():
             jobs.append(dict(row))
         counts = {str(row["status"]): int(row["count"]) for row in self.db.execute("SELECT status,count(*) AS count FROM jobs GROUP BY status").fetchall()}
+        reading_jobs = [dict(row) for row in self.db.execute(
+            "SELECT id,project_id,status,attempts,error,created_at,updated_at "
+            "FROM procurement_reading_jobs ORDER BY id DESC LIMIT 100"
+        ).fetchall()]
+        reading_job_counts = {str(row["status"]): int(row["count"]) for row in self.db.execute(
+            "SELECT status,count(*) AS count FROM procurement_reading_jobs GROUP BY status"
+        ).fetchall()}
         return {"data_updated_at": self._source_data_updated_at(), "last_import_at": self._get_meta("last_import_at"),
                 "import_error": self._get_meta("import_error"), "file_stale": self._source_age_stale(),
                 "import_pending": self._import_pending(), "source_notes": self._source_notes(include_path=True),
-                "imports": imports, "jobs": jobs, "job_counts": counts, "ai_configured": self._ai_config()["configured"]}
+                "imports": imports, "jobs": jobs, "job_counts": counts,
+                "reading_jobs": reading_jobs, "reading_job_counts": reading_job_counts,
+                "ai_configured": self._ai_config()["configured"]}
 
     def archive_path(self, record_id: int) -> Path:
         row = self.db.execute("SELECT archive_path FROM records WHERE id=?", (record_id,)).fetchone()

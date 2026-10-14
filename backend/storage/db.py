@@ -253,6 +253,58 @@ CREATE TABLE IF NOT EXISTS procurement_refreshes (
     status TEXT NOT NULL,
     message TEXT NOT NULL DEFAULT ''
 );
+-- A reading is an immutable explanation of one versioned procurement
+-- material package.  It is kept separate from judgments so regenerating a
+-- market opinion cannot overwrite the source-grounded procurement facts.
+CREATE TABLE IF NOT EXISTS procurement_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 1,
+    revision INTEGER NOT NULL DEFAULT 1,
+    material_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    stale INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    demand_type TEXT NOT NULL DEFAULT 'unknown',
+    stage TEXT NOT NULL DEFAULT '',
+    buyer TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    category_json TEXT NOT NULL DEFAULT '[]',
+    sections_json TEXT NOT NULL DEFAULT '[]',
+    milestones_json TEXT NOT NULL DEFAULT '[]',
+    coverage_json TEXT NOT NULL DEFAULT '[]',
+    conflicts_json TEXT NOT NULL DEFAULT '[]',
+    unresolved_json TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_readings_project
+    ON procurement_readings(project_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_procurement_readings_status
+    ON procurement_readings(status, updated_at);
+CREATE TABLE IF NOT EXISTS procurement_reading_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    force INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_reading_jobs_status
+    ON procurement_reading_jobs(status, id);
+CREATE TABLE IF NOT EXISTS procurement_attachment_fetches (
+    record_id INTEGER PRIMARY KEY REFERENCES records(id) ON DELETE CASCADE,
+    record_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT NOT NULL,
@@ -317,6 +369,9 @@ def connect(path: Path) -> sqlite3.Connection:
         # Existing document rows predate version-aware refreshes. Treat them
         # as current once so the first refresh can supersede them safely.
         db.execute("ALTER TABLE procurement_documents ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1")
+    reading_columns = {row[1] for row in db.execute("PRAGMA table_info(procurement_readings)")}
+    if reading_columns and "revision" not in reading_columns:
+        db.execute("ALTER TABLE procurement_readings ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
     research_source_columns = {row[1] for row in db.execute("PRAGMA table_info(research_sources)")}
     if research_source_columns and "published_at" not in research_source_columns:
         db.execute("ALTER TABLE research_sources ADD COLUMN published_at TEXT")

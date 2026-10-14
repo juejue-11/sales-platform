@@ -118,6 +118,8 @@ const RPC_ERROR_CODES = new Set([
   "source_unreadable",
   "relation_unconfirmed",
 ]);
+const READING_SYSTEM_INSTRUCTION =
+  "本次任务是采购资料阅读，不是市场研判。只依据 host 传入的 versioned procurement material，逐段覆盖公告正文和附件，输出阅读协议要求的采购说明 JSON；不得调用工具、编造来源、合并不同包或把获取截止与提交截止合并。";
 const MARKET_SYSTEM_INSTRUCTION =
   "默认判断范围是市场关注价值，不是企业资格：保留正文已知事实，识别有依据的潜在线索，按实际影响说明缺口和下一步；客户关注偏好只调整重点，用户自填企业资料只用于其能够支持的具体匹配，不得推断未提供的能力；不按公告类别套固定分析模板。";
 const DUPLEX_SYSTEM_INSTRUCTION =
@@ -169,6 +171,7 @@ export interface RuntimeLimits {
 
 export interface RuntimeRequest {
   protocol: 1 | 2;
+  task_kind: "market" | "reading";
   config: RuntimeConfig;
   messages: RuntimeMessage[];
   context: RuntimeContext;
@@ -195,6 +198,7 @@ interface ProgressEvent {
 interface ResultEvent {
   type: "result";
   engine: "pi_sdk";
+  task_kind: "market" | "reading";
   content: string;
   finish_reason: "stop";
   usage: RuntimeUsage;
@@ -431,9 +435,14 @@ function parseRequest(value: unknown): RuntimeRequest {
     : explicitCompanyProfilePresent && derivedCompanyProfilePresent;
   const relatedProjects = normalizeRecordList(context.related_projects, "context.related_projects");
   const research = normalizeResearchContext(context.research);
+  const taskKind = input.task_kind === undefined ? "market" : input.task_kind;
+  if (taskKind !== "market" && taskKind !== "reading") {
+    throw new ProtocolError("invalid task_kind");
+  }
 
   return {
     protocol: input.protocol as 1 | 2,
+    task_kind: taskKind,
     config: { base_url: baseUrl, model, api_key: apiKey },
     messages,
     context: {
@@ -1652,9 +1661,11 @@ export async function runRequest(
   const systemPrompt = [
     request.messages[0].content,
     runtimeContextInstruction(request.context),
-    MARKET_SYSTEM_INSTRUCTION,
-    request.protocol === DUPLEX_PROTOCOL_VERSION ? DUPLEX_SYSTEM_INSTRUCTION : undefined,
-    `本次最多 ${request.limits.max_turns} 轮模型调用，最后一轮专用于生成完整 JSON 报告，届时工具将关闭。已有事实可支持结论时提前结束；不得为了凑齐潜在线索追查页面导航中的无关公告。`,
+    request.task_kind === "reading" ? READING_SYSTEM_INSTRUCTION : MARKET_SYSTEM_INSTRUCTION,
+    request.task_kind === "market" && request.protocol === DUPLEX_PROTOCOL_VERSION ? DUPLEX_SYSTEM_INSTRUCTION : undefined,
+    request.task_kind === "reading"
+      ? `本次最多 ${request.limits.max_turns} 轮模型调用，最后输出完整采购阅读 JSON；不得调用任何工具。`
+      : `本次最多 ${request.limits.max_turns} 轮模型调用，最后一轮专用于生成完整 JSON 报告，届时工具将关闭。已有事实可支持结论时提前结束；不得为了凑齐潜在线索追查页面导航中的无关公告。`,
   ].filter((value): value is string => Boolean(value)).join("\n\n");
   const resourceLoader = emptyResourceLoader(systemPrompt);
   let limitError: LimitError | undefined;
@@ -1673,7 +1684,9 @@ export async function runRequest(
     usage.tool_calls += 1;
     return true;
   };
-  const tools = makeTools(request.context, reserveToolCall, request.protocol === DUPLEX_PROTOCOL_VERSION ? rpc : undefined);
+  const tools = request.task_kind === "reading"
+    ? []
+    : makeTools(request.context, reserveToolCall, request.protocol === DUPLEX_PROTOCOL_VERSION ? rpc : undefined);
   const { session } = await createAgentSession({
     cwd: "sales-screening-agent",
     agentDir: "sales-screening-agent",
@@ -1933,7 +1946,8 @@ export async function runRequest(
       break;
     }
     emit(progress("completed", "完成分析"));
-    return { type: "result", engine: "pi_sdk", content, finish_reason: "stop", usage };
+    return { type: "result", engine: "pi_sdk", task_kind: request.task_kind,
+      content, finish_reason: "stop", usage };
   } catch (error) {
     // Preserve billed usage even when no acceptable final report was emitted.
     // Successful requests already return these counters in their result.

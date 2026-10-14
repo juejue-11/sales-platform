@@ -16,6 +16,10 @@ class AnalyzeRequest(BaseModel):
     force: bool = False
 
 
+class ReadingRequest(BaseModel):
+    force: bool = False
+
+
 class DecisionRequest(BaseModel):
     status: str
     owner: str = ""
@@ -89,11 +93,17 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
         ai_decision: str = Query(""), deadline_soon: bool = Query(False),
         kind: str = Query(""), source_id: str = Query(""), page: int = Query(1, ge=1),
         page_size: int = Query(30, ge=1, le=200), sort: str = Query("updated"), active_only: bool = Query(False),
+        category: str = Query(""), region: str = Query(""), buyer: str = Query(""),
+        procurement_stage: str = Query(""), demand_type: str = Query(""), followup_stage: str = Query(""),
+        key_time: str = Query(""),
+        is_following: bool = Query(False),
     ) -> dict[str, Any]:
         return app.state.service.list_projects(q=q, gate=gate, ai_status=ai_status, decision=decision,
                                                ai_decision=ai_decision, deadline_soon=deadline_soon,
                                                kind=kind, source_id=source_id, page=page, page_size=page_size, sort=sort,
-                                               active_only=active_only)
+                                               active_only=active_only, category=category, region=region, buyer=buyer,
+                                               procurement_stage=procurement_stage, demand_type=demand_type,
+                                               followup_stage=followup_stage, is_following=is_following, key_time=key_time)
 
     @app.get("/api/projects/{project_id}")
     async def project(project_id: int) -> dict[str, Any]:
@@ -104,6 +114,17 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
         body = body or AnalyzeRequest()
         result = app.state.service.queue_project(project_id, force=body.force, schedule=True)
         return result
+
+    @app.get("/api/projects/{project_id}/reading")
+    async def reading(project_id: int) -> dict[str, Any]:
+        # The summary path computes the current material version and keeps an
+        # older explanation visibly stale when source material changed.
+        return {"procurement_reading": app.state.service.summary(project_id)["procurement_reading"]}
+
+    @app.post("/api/projects/{project_id}/reading")
+    async def queue_reading(project_id: int, body: ReadingRequest | None = Body(default=None)) -> dict[str, Any]:
+        body = body or ReadingRequest()
+        return app.state.service.queue_reading(project_id, force=body.force, schedule=True)
 
     @app.post("/api/projects/{project_id}/documents/refresh")
     async def refresh_project_documents(project_id: int) -> dict[str, Any]:

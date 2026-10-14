@@ -411,6 +411,40 @@ test("embedded Pi SDK runs a real SSE tool loop with only business tools", async
   }
 });
 
+test("reading task uses the no-tool protocol and preserves its task marker", async () => {
+  const fake = await startFakeServer((body, response) => {
+    assert.ok(body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0));
+    const messages = body.messages as Array<Record<string, unknown>>;
+    assert.ok(messages.some((message) => String(message.content || "").includes("采购资料阅读")));
+    streamResponse(response, [
+      {
+        id: "chatcmpl-reading-final",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "screening-test-model",
+        choices: [{ index: 0, delta: { role: "assistant", content: '{"version":1,"summary":"reading"}' }, finish_reason: null }],
+      },
+      {
+        id: "chatcmpl-reading-final",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "screening-test-model",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+      },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url, { task_kind: "reading" }));
+    const resultLine = result.lines.find((line) => line.type === "result");
+    assert.ok(resultLine);
+    assert.equal(resultLine.task_kind, "reading");
+    assert.deepEqual(JSON.parse(String(resultLine.content)), { version: 1, summary: "reading" });
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 test("embedded Pi SDK preserves interleaved RPC tool indexes through execution", async () => {
   const expectedArguments = new Map<string, Record<string, unknown>>([
     ["fetch_project_documents", { record_id: 7 }],
