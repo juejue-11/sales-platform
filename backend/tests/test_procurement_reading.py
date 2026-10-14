@@ -361,3 +361,113 @@ def test_restart_recovers_only_the_latest_pending_reading(tmp_path):
         assert [(int(row["project_id"]), row["status"]) for row in rows] == [(1, "queued")]
     finally:
         reopened.close()
+
+
+def test_restart_reuses_followup_instead_of_resuming_old_running_reading(tmp_path):
+    service = _reading_restart_service(tmp_path)
+    _save_reading_state(service, "pending")
+    now = service_module.now_iso()
+    with service.db:
+        service.db.execute(
+            "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (1,0,'running',?,?)",
+            (now, now),
+        )
+        service.db.execute(
+            "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (1,1,'queued',?,?)",
+            (now, now),
+        )
+    db_path, source_path = service.db_path, service.source_path
+    service.close()
+
+    reopened = ScreeningService(db_path=db_path, source_path=source_path,
+                                archive_root=tmp_path, provider=object())
+    try:
+        reopened.start_background()
+        rows = reopened.db.execute(
+            "SELECT status,error FROM procurement_reading_jobs WHERE project_id=1 ORDER BY id"
+        ).fetchall()
+        assert [row["status"] for row in rows] == ["failed", "queued"]
+        assert rows[0]["error"]
+    finally:
+        reopened.close()
+
+
+def test_material_changes_while_reading_keep_one_followup_for_latest_version(tmp_path: Path):
+    record = {"id": 1, "source_id": "race", "kind": "tender", "title": "notice",
+              "project_name": "notice", "buyer": "buyer", "body_text": "old material",
+              "attachments": [], "current_version": 1, "published_at": "2026-10-01", "deadline_at": None}
+    source = tmp_path / "records.jsonl"
+    source.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+
+    class SlowReader:
+        def __init__(self):
+            self.calls: list[str] = []
+            self.first_started = asyncio.Event()
+            self.second_started = asyncio.Event()
+            self.release_first = asyncio.Event()
+
+        async def read_procurement(self, *, material, **kwargs):
+            body = str(material["records"][0].get("body_text") or "")
+            self.calls.append(body)
+            if len(self.calls) == 1:
+                self.first_started.set()
+                await self.release_first.wait()
+            elif len(self.calls) == 2:
+                self.second_started.set()
+            return {"version": 1, "summary": body, "demand_type": "confirmed", "stage": "confirmed",
+                    "sections": [], "milestones": []}
+
+    reader = SlowReader()
+    service = ScreeningService(db_path=tmp_path / "db.sqlite3", source_path=source,
+                               archive_root=tmp_path, provider=reader)
+    asyncio.run(service.import_file())
+    service.update_settings({"ai": {"base_url": "https://mock.local/v1", "model": "mock",
+                                     "enabled": True, "api_key": "test-key"}})
+
+    async def scenario():
+        old_version = str(service._reading_material(1)["material_version"])
+        service.queue_reading(1, schedule=True)
+        await asyncio.wait_for(reader.first_started.wait(), timeout=2)
+
+        for version, body in ((2, "new material"), (3, "latest material")):
+            changed = json.loads(source.read_text(encoding="utf-8"))
+            changed["current_version"] = version
+            changed["body_text"] = body
+            source.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+            await service.import_file()
+
+        jobs = service.db.execute(
+            "SELECT status FROM procurement_reading_jobs WHERE project_id=1 ORDER BY id"
+        ).fetchall()
+        assert [row["status"] for row in jobs].count("running") == 1
+        assert [row["status"] for row in jobs].count("queued") == 1
+        assert len(jobs) == 2
+
+        reader.release_first.set()
+        await asyncio.wait_for(reader.second_started.wait(), timeout=3)
+
+        async def finished():
+            rows = service.db.execute(
+                "SELECT status FROM procurement_reading_jobs WHERE project_id=1 ORDER BY id"
+            ).fetchall()
+            return len(rows) == 2 and all(row["status"] not in {"queued", "running"} for row in rows)
+
+        for _ in range(300):
+            if await finished():
+                break
+            await asyncio.sleep(0.01)
+        assert await finished()
+        assert reader.calls == ["old material", "latest material"]
+        latest_version = str(service._reading_material(1)["material_version"])
+        assert latest_version != old_version
+        versions = [row["material_version"] for row in service.db.execute(
+            "SELECT material_version FROM procurement_readings WHERE project_id=1 ORDER BY id"
+        ).fetchall()]
+        assert old_version in versions and latest_version in versions
+        await service.aclose()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        if not service._closed:
+            service.close()

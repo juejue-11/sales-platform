@@ -206,8 +206,24 @@ class ScreeningService:
             # A process crash can leave a task marked running. It is safe to
             # return it to the durable queue on the next startup.
             self.db.execute("UPDATE jobs SET status='queued',updated_at=? WHERE status='running'", (now_iso(),))
+            restart_time = now_iso()
+            # If a follow-up is already durable, the old in-flight attempt
+            # must not be resurrected beside it after restart. Keep its
+            # failure row for operators and let the queued job read the
+            # latest material. A lone running job remains resumable.
+            self.db.execute(
+                """UPDATE procurement_reading_jobs
+                      SET status='failed',error=?,finished_at=?,updated_at=?
+                    WHERE status='running'
+                      AND EXISTS (
+                          SELECT 1 FROM procurement_reading_jobs AS followup
+                           WHERE followup.project_id=procurement_reading_jobs.project_id
+                             AND followup.status='queued'
+                      )""",
+                ("reading superseded by queued follow-up after restart", restart_time, restart_time),
+            )
             self.db.execute("UPDATE procurement_reading_jobs SET status='queued',updated_at=? WHERE status='running'",
-                            (now_iso(),))
+                            (restart_time,))
             # Readings are append-only: an old pending revision must not be
             # resurrected after a later complete/partial/failed revision was
             # written.  Only the newest row for each project can represent
@@ -630,6 +646,8 @@ class ScreeningService:
         current_fingerprint = self._reading_request_fingerprint(version, config)
         if (current and not force and str(current["input_fingerprint"] or "") == current_fingerprint
                 and str(current["status"] or "") == "pending"):
+            if schedule:
+                self.schedule_reading(project_id, force=force)
             return {"status": "pending", "reading": self._reading_public(current, version)}
         if (current and not force and str(current["status"] or "") in {"complete", "partial"}
                 and str(current["input_fingerprint"] or "") == current_fingerprint):
@@ -644,13 +662,22 @@ class ScreeningService:
         project_id = int(self._project_row(project_id)["id"])
         with self._db_lock, self.db:
             queued = self.db.execute(
-                "SELECT 1 FROM procurement_reading_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
+                "SELECT id,force FROM procurement_reading_jobs WHERE project_id=? AND status='queued' "
+                "ORDER BY id DESC LIMIT 1",
                 (project_id,),
             ).fetchone()
             if queued is None:
                 self.db.execute(
                     "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (?,?,'queued',?,?)",
                     (project_id, int(force), now_iso(), now_iso()),
+                )
+            elif force and not bool(queued["force"]):
+                # Multiple material changes while an older reading is
+                # running share one durable follow-up.  Keep the strongest
+                # rerun request without starting a parallel worker.
+                self.db.execute(
+                    "UPDATE procurement_reading_jobs SET force=1,updated_at=? WHERE id=?",
+                    (now_iso(), int(queued["id"])),
                 )
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = self._spawn(self._worker_loop())
@@ -1746,7 +1773,10 @@ class ScreeningService:
                 # backlog merely because its policy/model result is stale.
                 for project_id in sorted(set(result.affected_project_ids) | set(related_changes)):
                     if self._reading_gate_enabled():
-                        self.queue_reading(project_id, schedule=False)
+                        # Import changes are a material event.  Persist a
+                        # reading job independently of the judgment queue so
+                        # a running read/judge cannot lose the new version.
+                        self.queue_reading(project_id, schedule=True)
                     self.queue_project(project_id, schedule=False)
             return {"inserted": result.inserted, "updated": result.updated, "unchanged": result.unchanged,
                     "total": result.total, "message": "导入完成"}
