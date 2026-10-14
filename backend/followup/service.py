@@ -506,6 +506,8 @@ def update_task(
         material_ids = _array(values["materials"], "task.materials")
         normalized_material_ids: list[str] = []
         for material_id in material_ids:
+            if isinstance(material_id, Mapping):
+                material_id = material_id.get("id")
             normalized = _id(material_id, "task.materials[]")
             if repo.material_row(project_id, normalized) is None:
                 raise FollowupValidationError(f"unknown material id: {normalized}")
