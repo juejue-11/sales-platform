@@ -229,3 +229,107 @@ def test_foreign_key_prevents_orphan_children() -> None:
             (999, "t", "孤儿", "required", "2026-10-14", "2026-10-14"),
         )
 
+
+def test_canonical_reading_activation_and_task_definition_audit() -> None:
+    conn = _db()
+    reading = {
+        "demand_type": "confirmed",
+        "material_version": "canonical-v1",
+        "sections": [
+            {
+                "id": "buyer",
+                "title": "Buyer facts",
+                "requirements": [
+                    {
+                        "id": "buyer-name",
+                        "text": "The buyer is Acme Procurement",
+                        "sources": [{"record_id": 1, "quote": "Acme Procurement"}],
+                    },
+                    {
+                        "id": "scope",
+                        "text": "Purchase ten pumps",
+                        "sources": [{"record_id": 1, "quote": "ten pumps"}],
+                    },
+                ],
+            },
+            {
+                "id": "qualification",
+                "title": "Qualification materials",
+                "requirements": [
+                    {
+                        "id": "license",
+                        "text": "Provide a business license certificate",
+                        "sources": [{"record_id": 2, "quote": "business license"}],
+                    },
+                    {
+                        "id": "registration",
+                        "text": "Register in the portal before the deadline",
+                        "sources": [{"record_id": 2, "quote": "register in the portal"}],
+                    },
+                ],
+            },
+        ],
+        "milestones": [
+            {
+                "id": "submit-quote",
+                "kind": "submission",
+                "title": "Submit quotation",
+                "at": "2026-11-02",
+                "sources": [{"record_id": 3, "quote": "submit quotation"}],
+            }
+        ],
+    }
+
+    # Reading a project only stores a proposal.  It does not join the
+    # follow-up list or create executable tasks/materials.
+    preview = get_followup(conn, 20, reading)
+    assert preview["is_following"] is False
+    assert preview["tasks"] == []
+    assert preview["plan"]["eligible"] is True
+    assert sum(task["basis"] == "suggested" for task in preview["plan"]["tasks"]) == 1
+    assert len(preview["plan"]["materials"]) == 1
+    assert preview["plan"]["materials"][0]["name"] == "Provide a business license certificate"
+    assert any(task["title"] == "Submit quotation" for task in preview["plan"]["tasks"])
+    assert get_followup(conn, 20)["is_following"] is False
+
+    # A user can manually follow a project even when there is no AI plan.
+    manual = save_followup(conn, 21, {"is_following": True})
+    assert manual["is_following"] is True
+    assert manual["plan"] is None
+    assert manual["tasks"] == []
+
+    adopted = adopt_plan(conn, 20, preview["plan"])
+    task = next(task for task in adopted["tasks"] if task["title"] == "核对/准备Qualification materials")
+
+    with pytest.raises(FollowupValidationError):
+        update_task(conn, 20, task["id"], {"title": "Renamed without audit reason"})
+    updated = update_task(
+        conn,
+        20,
+        task["id"],
+        {"title": "核对新的Qualification materials", "reason": "采购方补充了资格材料说明"},
+    )
+    assert next(item for item in updated["tasks"] if item["id"] == task["id"])["title"] == "核对新的Qualification materials"
+    audit = [event for event in updated["events"] if event["type"] == "task_updated"][-1]
+    assert audit["payload"]["definition_changed"] is True
+    assert audit["payload"]["reason"] == "采购方补充了资格材料说明"
+
+    # Owner assignment and an ordinary todo/doing transition have no
+    # definition-change requirement.  Completion text is its own field and
+    # cannot be used as an adjustment reason.
+    doing = update_task(conn, 20, task["id"], {"owner": "Alice", "status": "doing"})
+    assert next(item for item in doing["tasks"] if item["id"] == task["id"])["owner"] == "Alice"
+    done = update_task(conn, 20, task["id"], {"status": "done", "completion_note": "已完成核对"})
+    completed = next(item for item in done["tasks"] if item["id"] == task["id"])
+    with pytest.raises(FollowupConflictError):
+        update_task(
+            conn,
+            20,
+            task["id"],
+            {"title": "不得覆盖已完成任务", "reason": "确需补办"},
+        )
+    preserved = next(item for item in get_followup(conn, 20)["tasks"] if item["id"] == task["id"])
+    assert preserved["status"] == "done"
+    assert preserved["title"] == completed["title"]
+    assert preserved["completion_note"] == "已完成核对"
+

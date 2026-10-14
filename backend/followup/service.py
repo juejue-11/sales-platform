@@ -479,19 +479,22 @@ def update_task(
     values = dict(patch)
     if "skip_reason" in values and "skipped_reason" not in values:
         values["skipped_reason"] = values.pop("skip_reason")
-    if "reason" in values and "skipped_reason" not in values:
-        values["skipped_reason"] = values.pop("reason")
-    allowed = {"title", "basis", "owner", "due_at", "prerequisites", "materials", "status", "completion_note", "skipped_reason"}
+    allowed = {
+        "title", "basis", "owner", "due_at", "prerequisites", "materials", "status",
+        "completion_note", "skipped_reason", "reason",
+    }
     unknown = set(values) - allowed
     if unknown:
         raise FollowupValidationError(f"unknown task fields: {', '.join(sorted(unknown))}")
-    if row["status"] in {"done", "skipped"}:
-        for key in ("status", "completion_note", "skipped_reason"):
-            if key in values and str(values[key] or "").strip() != str(row[key] or "").strip():
-                raise FollowupConflictError("completed or skipped task records cannot be overwritten")
-        # Preserve every immutable task record; a repeated identical patch is
-        # harmless and returns the current state.
-        values = {key: value for key, value in values.items() if key not in {"status", "completion_note", "skipped_reason"}}
+
+    # ``reason`` is an audit-only explanation for changing a task definition.
+    # It is deliberately independent from ``skipped_reason``: completing a
+    # task or skipping it must never smuggle a definition change through the
+    # status fields.
+    adjustment_reason: str | None = None
+    if "reason" in values:
+        adjustment_reason = _required_text(values.pop("reason"), "task.reason")
+
     if "title" in values:
         values["title"] = _required_text(values["title"], "task.title")
     if "basis" in values:
@@ -513,6 +516,38 @@ def update_task(
                 raise FollowupValidationError(f"unknown material id: {normalized}")
             normalized_material_ids.append(normalized)
         values["materials"] = normalized_material_ids
+
+    definition_fields = ("title", "basis", "due_at", "prerequisites", "materials")
+    existing_definition = {
+        "title": row["title"],
+        "basis": row["basis"],
+        "due_at": row["due_at"],
+        "prerequisites": json_value(row["prerequisites_json"], []) or [],
+        "materials": json_value(row["materials_json"], []) or [],
+    }
+    definition_changes = {
+        key: values[key]
+        for key in definition_fields
+        if key in values and values[key] != existing_definition[key]
+    }
+    if row["status"] in {"done", "skipped"} and definition_changes:
+        raise FollowupConflictError(
+            "completed or skipped task definitions cannot be edited; keep the original task and review a replacement"
+        )
+    if definition_changes and not adjustment_reason:
+        raise FollowupValidationError("task definition changes require a non-blank reason")
+    if row["status"] in {"done", "skipped"}:
+        for key in ("status", "completion_note", "skipped_reason"):
+            if key in values and str(values[key] or "").strip() != str(row[key] or "").strip():
+                raise FollowupConflictError("completed or skipped task records cannot be overwritten")
+        # Preserve every immutable task record; a repeated identical patch is
+        # harmless and returns the current state.  ``owner`` remains editable
+        # as an explicit assignment, because it is not task definition data.
+        values = {
+            key: value
+            for key, value in values.items()
+            if key not in {"status", "completion_note", "skipped_reason"}
+        }
     if "status" in values:
         values["status"] = _validate_task_status(values["status"])
         if values["status"] == "skipped":
@@ -530,7 +565,14 @@ def update_task(
         _validate_task_transition(row["status"], values["status"])
     if values:
         repo.update_task(project_id, task_id, values)
-        repo.add_event(project_id, "task_updated", {"task_id": str(task_id), "changes": _json_safe_patch(values)})
+        event_payload: dict[str, Any] = {
+            "task_id": str(task_id),
+            "changes": _json_safe_patch(values),
+        }
+        if definition_changes:
+            event_payload["definition_changed"] = True
+            event_payload["reason"] = adjustment_reason
+        repo.add_event(project_id, "task_updated", event_payload)
         conn.commit()
     return repo.state(project_id)
 

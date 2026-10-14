@@ -114,7 +114,11 @@ def _is_material_requirement(item: Mapping[str, Any], *, section: str) -> bool:
         # A qualification section may also describe a platform action.  Keep
         # those as tasks and only retain actual proof/document requirements as
         # materials.
-        if any(token in text for token in ("注册", "报名", "获取文件", "购买文件", "提问", "缴费", "保证金", "开标")) \
+        if any(token in text for token in (
+            "注册", "报名", "获取文件", "购买文件", "提问", "缴费", "保证金", "开标",
+            "register", "registration", "document_access", "obtain", "get file", "question",
+            "opening", "fee", "bond",
+        )) \
                 and not any(token in text for token in ("证书", "证明", "营业执照", "授权", "资质", "资格", "材料", "文件清单")):
             return False
         return True
