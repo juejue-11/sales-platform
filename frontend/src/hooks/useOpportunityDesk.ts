@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import type { DashboardData, ProjectSummary } from '../types'
 import { isDeadlineWithinDays } from '../components/opportunities/text'
-import { submissionMilestone } from '../components/procurement/reading'
 
 export type OpportunityTabKey = 'current' | 'all' | 'procurement' | 'leads' | 'ai' | 'review' | 'deadline' | 'following' | 'queued'
 export type OpportunitySort = 'updated' | 'deadline'
@@ -160,29 +159,6 @@ function asError(value: unknown): Error {
   return new Error('请求失败，请稍后重试')
 }
 
-function locallyMatches(project: ProjectSummary, query: OpportunityQuery): boolean {
-  const reading = project.procurement_reading ?? null
-  const categories = [...(project.category ?? []), ...(reading?.category ?? []), ...project.equipment]
-  const searchText = [project.title, project.buyer ?? '', reading?.summary ?? '', ...categories].join(' ').toLocaleLowerCase()
-  if (query.q && !searchText.includes(query.q.toLocaleLowerCase())) return false
-  if (query.category && !categories.some((item) => item.toLocaleLowerCase().includes(query.category.toLocaleLowerCase()))) return false
-  if (query.region && !(project.region ?? reading?.region ?? '').toLocaleLowerCase().includes(query.region.toLocaleLowerCase())) return false
-  if (query.buyer && !(project.buyer ?? reading?.buyer ?? '').toLocaleLowerCase().includes(query.buyer.toLocaleLowerCase())) return false
-  if (query.procurement_stage && (project.procurement_stage ?? reading?.stage ?? '') !== query.procurement_stage) return false
-  if (query.demand_type && (project.demand_type ?? reading?.demand_type ?? 'unknown') !== query.demand_type) return false
-  if (query.is_following && !project.is_following) return false
-  if (query.key_time) {
-    const at = submissionMilestone(reading)?.at
-    if (query.key_time === 'unknown') { if (at) return false } else if (!at) return false
-    else {
-      const days = query.key_time === 'today' ? 1 : query.key_time === '7d' ? 7 : 30
-      const delta = new Date(at).getTime() - Date.now()
-      if (delta < 0 || delta > days * 24 * 60 * 60 * 1000) return false
-    }
-  }
-  return true
-}
-
 export function useOpportunityDesk() {
   const [restoredNavigation] = useState<OpportunityDeskNavigationState | null>(readNavigationState)
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -224,10 +200,8 @@ export function useOpportunityDesk() {
     try {
       const result = await api.projects({ ...nextQuery })
       if (!disposed.current && sequence === projectsSequence.current) {
-        const visible = result.items.filter((project) => locallyMatches(project, nextQuery))
-        setProjects(visible)
-        const hasLocalFilter = Boolean(nextQuery.q || nextQuery.category || nextQuery.region || nextQuery.buyer || nextQuery.procurement_stage || nextQuery.demand_type || nextQuery.key_time || nextQuery.is_following)
-        setTotal(hasLocalFilter ? visible.length : result.total)
+        setProjects(result.items)
+        setTotal(result.total)
       }
     } catch (error) {
       if (!disposed.current && sequence === projectsSequence.current) setProjectsError(error)
@@ -300,7 +274,7 @@ export function useOpportunityDesk() {
     { key: 'ai', label: 'AI建议', count: count(dashboard, 'ai_decision_counts', 'recommend') },
     { key: 'review', label: '待核实', count: count(dashboard, 'gate_counts', 'review') },
     { key: 'deadline', label: '7天截止', count: dashboard?.deadline_soon_count ?? dashboard?.deadline_soon.length ?? 0 },
-    { key: 'following', label: '跟进', count: count(dashboard, 'decision_counts', 'following') },
+    { key: 'following', label: '跟进', count: dashboard?.followup_count ?? count(dashboard, 'decision_counts', 'following') },
     { key: 'queued', label: '等待分析', count: count(dashboard, 'ai_counts', 'queued') },
   ], [dashboard])
 

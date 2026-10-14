@@ -21,8 +21,10 @@ export function OpportunityFeedItem({ project, onOpen }: OpportunityFeedItemProp
   const submission = submissionMilestone(reading)
   const categories = project.category?.length ? project.category : reading?.category ?? project.equipment
   const stage = project.procurement_stage ?? reading?.stage
-  const summary = reading?.summary || '采购说明待核对，进入详情查看已读取资料。'
   const readingNeedsProcessing = reading?.status === 'failed' || reading?.status === 'not_configured'
+  const summary = readingNeedsProcessing
+    ? (reading?.status === 'not_configured' ? '采购阅读服务待配置，请在业务配置中完成设置。' : '采购资料阅读失败，请在处理状态中查看原因。')
+    : reading?.summary || '采购说明待核对，进入详情查看已读取资料。'
 
   return (
     <Link className="opportunity-feed-item" data-testid="opportunity-item" to={`/projects/${project.id}`} onClick={() => onOpen?.(project.id)} aria-label={`查看项目详情：${project.title || '未命名项目'}`}>

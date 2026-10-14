@@ -3,12 +3,14 @@ import { FileSearchOutlined, ReloadOutlined } from '@ant-design/icons'
 import type {
   ProcurementData,
   ProcurementDocument,
+  ProjectBriefing,
   ProcurementReading,
   ProcurementReadingRequirement,
   ProcurementReadingSection,
   ProjectRecord,
 } from '../../types'
 import { formatDate } from '../Common'
+import { ProcurementBriefing } from './ProcurementBriefing'
 import {
   demandTypeMeta,
   demandTypeLabel,
@@ -35,8 +37,10 @@ const QUESTION_TITLES: Record<string, string> = {
 }
 
 interface ProcurementReadingProps {
+  projectId: number
   reading?: ProcurementReading | null
   legacyProcurement?: ProcurementData | null
+  briefing?: ProjectBriefing | null
   records?: ProjectRecord[]
   title?: string
   onRefresh?: () => void
@@ -61,52 +65,38 @@ function RequirementSource({ requirement, records, documents }: { requirement: P
         <details className="reading-source" key={`${source.record_id}-${source.document_id ?? 'record'}-${source.page ?? ''}-${index}`}>
           <summary><FileSearchOutlined aria-hidden="true" /> {sourceLabel(source, records, documents)}</summary>
           <blockquote>{sourceText(source)}</blockquote>
-          {source.sha256 && <Text type="secondary">版本指纹：{source.sha256}</Text>}
+          {source.sha256 && <Text type="secondary">资料版本已记录</Text>}
         </details>
       ))}
     </div>
   )
 }
 
-function legacyReading(procurement: ProcurementData | null | undefined, title: string): ProcurementReading | null {
-  if (!procurement) return null
-  const sections: ProcurementReadingSection[] = []
-  const add = (id: string, text: string, sourceKind: 'announcement' | 'attachment' = 'announcement') => {
-    if (!text.trim()) return
-    sections.push({
-      id,
-      title: QUESTION_TITLES[id] ?? id,
-      requirements: [{ id: `${id}-legacy`, text, explanation: null, lot: null, status: 'legacy', sources: [{ source_kind: sourceKind, record_id: procurement.items[0]?.record_id ?? 0, quote: text }] }],
-    })
-  }
-  add('scope', procurement.scope_summary || title)
-  add('delivery', [procurement.delivery_period, procurement.delivery_location].filter(Boolean).join('；'))
-  const items = procurement.items.map((item, index) => ({
-    id: `item-${index}`,
-    text: [item.name, item.specification, item.quantity, item.unit].filter(Boolean).join(' · '),
-    explanation: [item.delivery_period, item.delivery_location].filter(Boolean).join('；') || null,
-    lot: null,
-    status: item.status ?? null,
-    sources: item.sources ?? (item.quote ? [{ source_kind: item.source_kind ?? 'announcement', record_id: item.record_id, document_id: item.source_document_id ?? undefined, page: item.page, quote: item.quote }] : []),
-  }))
-  if (items.length) sections.push({ id: 'materials', title: QUESTION_TITLES.materials, requirements: items })
-  return {
-    version: 1,
-    material_version: procurement.updated_at,
-    status: procurement.status === 'complete' ? 'complete' : procurement.status === 'partial' ? 'partial' : 'pending',
-    stale: false,
-    summary: procurement.scope_summary || null,
-    demand_type: 'unknown',
-    stage: null,
-    buyer: null,
-    region: null,
-    category: [],
-    sections,
-    milestones: [],
-    coverage: [],
-    conflicts: [],
-    unresolved: procurement.missing_fields,
-  }
+const milestoneKindLabels: Record<string, string> = {
+  document_access: '文件获取',
+  registration: '报名 / 注册',
+  question: '答疑 / 澄清',
+  submission: '提交',
+  opening: '开标 / 评审',
+  other: '其他节点',
+}
+
+function MilestoneList({ reading, records, documents }: { reading: ProcurementReading; records: ProjectRecord[]; documents: ProcurementDocument[] }) {
+  if (!reading.milestones?.length) return null
+  return (
+    <section className="reading-milestones" aria-labelledby="reading-milestones-heading">
+      <div className="reading-section-header"><div><h2 id="reading-milestones-heading">办理节点</h2><Text type="secondary">按阅读结果列出全部时间节点；来源和不确定性保留在节点内。</Text></div><Text type="secondary">{reading.milestones.length} 个节点</Text></div>
+      <ol className="reading-milestone-list">
+        {reading.milestones.map((milestone) => (
+          <li className="reading-milestone" key={milestone.id}>
+            <div className="reading-milestone-main"><Tag>{milestoneKindLabels[milestone.kind] ?? milestone.kind}</Tag><strong>{milestone.label || '未命名节点'}</strong></div>
+            <div className="reading-milestone-time">{milestone.at ? formatDate(milestone.at, true) : '时间待核对'}</div>
+            {milestone.sources?.length ? <div className="reading-milestone-sources">{milestone.sources.map((source, index) => <details key={`${source.record_id}-${source.document_id ?? 'record'}-${source.page ?? ''}-${index}`}><summary>{sourceLabel(source, records, documents)}</summary><blockquote>{source.quote?.trim() || '来源原文待补充'}</blockquote></details>)}</div> : <Text type="secondary">节点来源待补充</Text>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
 }
 
 function RequirementRow({ requirement, sectionTitle }: { requirement: ProcurementReadingRequirement; sectionTitle: string }) {
@@ -138,8 +128,15 @@ function SectionBlock({ section, records, documents }: { section: ProcurementRea
   )
 }
 
-export function ProcurementReadingPanel({ reading, legacyProcurement, records = [], title = '采购项目', onRefresh, refreshing = false, error, onOpenOperations }: ProcurementReadingProps) {
-  const displayReading = reading ?? legacyReading(legacyProcurement, title)
+export function ProcurementReadingPanel({ projectId, reading, legacyProcurement, briefing, records = [], title = '采购项目', onRefresh, refreshing = false, error, onOpenOperations }: ProcurementReadingProps) {
+  if (!reading) {
+    return (
+      <div className="procurement-reading-panel" data-testid="procurement-reading">
+        {legacyProcurement || briefing ? <ProcurementBriefing projectId={projectId} briefing={briefing} procurement={legacyProcurement} records={records} title={title} onRefresh={onRefresh ?? (() => undefined)} refreshing={refreshing} error={error} /> : <div className="reading-empty"><Empty description="采购说明尚未建立" />{Boolean(error) && <Alert type="error" showIcon message="采购资料更新失败" description={error instanceof Error ? error.message : '资料更新失败，请稍后重试。'} />}{onOpenOperations && <Button type="link" onClick={onOpenOperations}>查看处理状态</Button>}</div>}
+      </div>
+    )
+  }
+  const displayReading = reading
   const submission = submissionMilestone(displayReading)
   const statusMeta = displayReading ? readingStatusMeta[displayReading.status] : null
   const demandMeta = displayReading ? demandTypeMeta[displayReading.demand_type] : demandTypeMeta.unknown
@@ -170,6 +167,7 @@ export function ProcurementReadingPanel({ reading, legacyProcurement, records = 
       {displayReading?.category && displayReading.category.length > 0 && <div className="reading-category-line"><Text type="secondary">设备 / 服务</Text>{displayReading.category.map((category) => <Tag key={category}>{category}</Tag>)}</div>}
 
       {displayReading ? <>
+        <MilestoneList reading={displayReading} records={records} documents={documents} />
         <section className="reading-questions" aria-labelledby="reading-questions-heading">
           <div className="reading-section-header"><div><h2 id="reading-questions-heading">按 8 个问题查看要求</h2><Text type="secondary">每条要求都保留来源原文；包 / 标段和冲突不会合并隐藏。</Text></div><Text type="secondary">{allRequirements.length} 项要求</Text></div>
           <div className="reading-question-grid">{displayReading.sections.map((section) => <SectionBlock key={section.id} section={section} records={records} documents={documents} />)}</div>
@@ -177,8 +175,7 @@ export function ProcurementReadingPanel({ reading, legacyProcurement, records = 
         </section>
 
         <section className="reading-complete-table" aria-labelledby="reading-complete-table-heading">
-          <div className="reading-section-header"><div><h2 id="reading-complete-table-heading">完整要求表</h2><Text type="secondary">长表完整展示，横向滚动可查看来源计数。</Text></div><Text type="secondary">{allRequirements.length} 行</Text></div>
-          {allRequirements.length === 0 ? <Text type="secondary">当前没有可展示的要求明细。</Text> : <div className="reading-table-wrap"><table><thead><tr><th>包 / 标段</th><th>要求</th><th>状态</th><th>来源</th></tr></thead><tbody>{allRequirements.map(({ requirement, sectionTitle }) => <RequirementRow key={requirement.id} requirement={requirement} sectionTitle={sectionTitle} />)}</tbody></table></div>}
+          <Collapse ghost items={[{ key: 'complete-table', label: <div className="reading-complete-table-label"><strong id="reading-complete-table-heading">完整要求表</strong><Text type="secondary">{allRequirements.length} 行；展开查看全部要求与来源</Text></div>, children: allRequirements.length === 0 ? <Text type="secondary">当前没有可展示的要求明细。</Text> : <div className="reading-table-wrap"><table><thead><tr><th>包 / 标段</th><th>要求</th><th>状态</th><th>来源</th></tr></thead><tbody>{allRequirements.map(({ requirement, sectionTitle }) => <RequirementRow key={requirement.id} requirement={requirement} sectionTitle={sectionTitle} />)}</tbody></table></div> }]}/>
         </section>
 
         {(displayReading.conflicts.length > 0 || displayReading.unresolved.length > 0 || displayReading.coverage.length > 0) && <Collapse className="reading-disclosures" ghost items={[{
@@ -190,6 +187,7 @@ export function ProcurementReadingPanel({ reading, legacyProcurement, records = 
             {displayReading.coverage.length > 0 && <div><Text strong>覆盖范围</Text><ul>{readableCoverage(displayReading.coverage).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
           </div>,
         }]} />}
+      {(legacyProcurement || briefing) && <Collapse className="reading-legacy-materials" ghost items={[{ key: 'legacy-materials', label: '原始资料与完整物料', children: <ProcurementBriefing projectId={projectId} briefing={briefing} procurement={legacyProcurement} records={records} title={title} onRefresh={onRefresh ?? (() => undefined)} refreshing={refreshing} error={error} /> }]} />}
       </> : <div className="reading-empty"><Empty description="采购说明尚未建立" /><Text type="secondary">页面不会从采集截止时间或标题推断提交要求。</Text></div>}
 
       <details className="reading-original-records"><summary>原始资料入口（{recordCount} 条记录）</summary><div className="reading-record-list">{records.length === 0 ? <Text type="secondary">暂无原始记录。</Text> : records.map((record) => <div className="reading-record" key={record.id}><div><strong>{record.title || `记录 #${record.id}`}</strong><Text type="secondary">记录 #{record.id} · {record.parse_status || '已接入'}</Text></div>{record.original_url && <a href={record.original_url} target="_blank" rel="noreferrer">打开来源</a>}</div>)}</div></details>

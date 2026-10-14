@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type { TableProps } from 'antd'
 import { CloudDownloadOutlined, DatabaseOutlined, ExperimentOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { StatusData, StatusJob } from '../types'
+import type { ReadingJob, StatusData, StatusJob } from '../types'
 import { ErrorBlock, formatDate, formatFreshness, LoadingBlock } from '../components/Common'
 
 const { Title, Text, Paragraph } = Typography
@@ -93,6 +93,7 @@ export function OperationsPage() {
   if (error || !status) return <div className="page-stack"><ErrorBlock error={error} onRetry={() => void loadStatus()} /></div>
 
   const jobs = status.jobs ?? []
+  const readingJobs = status.reading_jobs ?? []
   const jobColumns: TableProps<StatusJob>['columns'] = [
     { title: '任务', dataIndex: 'id', key: 'id', width: 84, render: (value: number) => `#${value}` },
     { title: '项目', dataIndex: 'project_id', key: 'project_id', width: 90, render: (value: number | null) => value ? <Button type="link" onClick={() => navigate(`/projects/${value}`)}>项目 #{value}</Button> : '批量任务' },
@@ -101,6 +102,15 @@ export function OperationsPage() {
     { title: '失败说明', dataIndex: 'error', key: 'error', render: (value: string | null) => value ? <span title={value}>{jobError(value)}</span> : <Text type="secondary">—</Text> },
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150, render: (value: string) => formatDate(value, true) },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: (value: string) => formatDate(value, true) },
+  ]
+  const readingJobColumns: TableProps<ReadingJob>['columns'] = [
+    { title: '阅读任务', dataIndex: 'id', key: 'id', width: 90, render: (value: number) => `#${value}` },
+    { title: '采购项目', dataIndex: 'project_id', key: 'project_id', width: 120, render: (value: number) => <Button type="link" onClick={() => navigate(`/projects/${value}`)}>项目 #{value}</Button> },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: (value: string) => <Tag color={jobColor(value)}>{jobLabel(value)}</Tag> },
+    { title: '尝试次数', dataIndex: 'attempts', key: 'attempts', width: 90 },
+    { title: '失败说明', dataIndex: 'error', key: 'error', render: (value: string | null) => value ? <span title={value}>{value}</span> : <Text type="secondary">—</Text> },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: (value: string) => formatDate(value, true) },
+    { title: '操作', key: 'actions', width: 110, render: (_: unknown, record: ReadingJob) => <Button size="small" icon={<ReloadOutlined />} loading={action === `reading-${record.project_id}`} onClick={() => void run(`reading-${record.project_id}`, () => api.refreshReading(record.project_id))}>重试该项目</Button> },
   ]
 
   return (
@@ -119,6 +129,9 @@ export function OperationsPage() {
       {!status.ai_configured && <Alert type="info" showIcon message="模型尚未配置，可先查看和处理项目" action={<Button size="small" type="link" onClick={() => navigate('/settings')}>配置模型</Button>} />}
       <Card className="task-ledger" title={<span>分析任务 <Text type="secondary">（最近 {jobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">每 10 秒自动更新</span>}>
         {jobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有分析任务，配置模型后会开始处理候选项目" /> : <Table<StatusJob> rowKey="id" columns={jobColumns} dataSource={jobs} size="middle" scroll={{ x: 820 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
+      </Card>
+      <Card className="task-ledger reading-job-ledger" title={<span>采购阅读任务 <Text type="secondary">（最近 {readingJobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">阅读失败可按项目重试</span>}>
+        {readingJobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采购阅读任务" /> : <Table<ReadingJob> rowKey="id" columns={readingJobColumns} dataSource={readingJobs} size="middle" scroll={{ x: 920 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
       </Card>
       <Collapse className="source-details" items={[
         { key: 'coverage', label: '查看来源覆盖与采集说明', children: status.source_notes ? <Paragraph className="source-note-text">{status.source_notes}</Paragraph> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未读取来源说明" /> },

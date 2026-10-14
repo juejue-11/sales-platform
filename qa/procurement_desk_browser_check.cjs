@@ -62,6 +62,7 @@ const project = {
   needs_review: false,
   decision: { status: 'new', owner: '', next_action: '', note: '', selected_option_id: null, updated_at: null },
   procurement_reading: reading,
+  procurement: { status: 'complete', scope_summary: '\u9ad8\u538b\u53d8\u9891\u5668\u91c7\u8d2d', items: [{ record_id: 101, name: '\u9ad8\u538b\u53d8\u9891\u5668', specification: '10kV', quantity: 2, unit: '\u5957', delivery_period: '\u5408\u540c\u540e 60 \u5929', delivery_location: '\u5c71\u897f\u9879\u76ee\u73b0\u573a', source_kind: 'announcement', quote: '\u91c7\u8d2d\u9ad8\u538b\u53d8\u9891\u5668 2 \u5957' }], delivery_period: '\u5408\u540c\u540e 60 \u5929', delivery_location: '\u5c71\u897f\u9879\u76ee\u73b0\u573a', missing_fields: [], documents: [], updated_at: '2026-10-14T09:30:00+08:00' },
   records: [{ id: 101, title: '山西能源采购公告', body_text: '公告正文', original_url: 'https://example.test/notice/101', parse_status: 'parsed' }],
   judgment: { id: 9, created_at: '2026-10-14T09:00:00+08:00', model: 'mock', input_fingerprint: 'fp', stale: false, decision: 'recommend', summary: '建议核对附件中的资格例外和两包技术边界。', demand_summary: '高压变频器采购', reasons: [{ text: '采购阶段明确，且提交节点有来源。', evidence: [{ record_id: 101, quote: '报价文件提交截止 2026 年 10 月 20 日。' }] }], unknowns: ['联合体限制需要核对完整附件。'], next_actions: ['核对技术附件并确认供货能力。'], options: [], report: null },
   judgment_history: [], decision_history: [], related_projects: [], versions: [], research_sources: [], agent_run: null,
@@ -71,28 +72,32 @@ function followup(isFollowing = false) {
   return {
     stage: 'evaluating', disposition: 'following', owner: '', next_action: '核对技术附件', outcome: null,
     submitted_at: null, submission_channel: null, receipt: null, needs_review: false, is_following: isFollowing,
-    plan_id: 'plan-1', plan: { tasks: [{ title: '核对技术附件', basis: 'requirement', due_at: '2026-10-16', prerequisites: '取得附件', materials: ['技术规格书'], completeness: '待核对' }] },
-    tasks: isFollowing ? [{ id: 'task-1', title: '核对技术附件', status: 'pending', required: true, source_kind: 'requirement', owner: '', due_at: '2026-10-16', note: '', skipped_reason: null }] : [],
-    materials: isFollowing ? [{ id: 'mat-1', name: '技术规格书', status: 'not_ready' }] : [], events: [],
+    plan: { id: 'plan-1', eligible: true, kind: 'procurement', procedure: '采购跟进', tasks: [{ id: 'task-1', title: '核对技术附件', basis: 'required', owner: '', due_at: '2026-10-16', prerequisites: ['取得附件'], materials: ['mat-1'] }], materials: [{ id: 'mat-1', task_id: 'task-1', name: '技术规格书', basis: 'required' }] },
+    tasks: isFollowing ? [{ id: 'task-1', title: '核对技术附件', status: 'todo', required: true, basis: 'required', owner: '', due_at: '2026-10-16', prerequisites: [], materials: [], completion_note: '', skipped_reason: null }] : [],
+    materials: isFollowing ? [{ id: 'mat-1', task_id: 'task-1', name: '技术规格书', basis: 'required', status: 'not_prepared', ai_check_status: 'not_checked', ai_check_note: '', provided_at: null, note: '', plan_id: 'plan-1' }] : [], events: [], note: null, changed_tasks: [],
   };
 }
 
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-  const errors = [];
+  const errors = []
+  let activeFollowup = followup(false)
+  const payloads = { followup: [], adopt: [], task: [], material: [], readingRetry: [] };
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
-    if (path === '/api/dashboard') return route.fulfill({ json: { total_records: 1, total_projects: 1, gate_counts: { candidate: 1, review: 0, signal: 0 }, ai_counts: {}, ai_decision_counts: { recommend: 1 }, decision_counts: {}, deadline_soon: [], deadline_soon_count: 0, data_updated_at: project.updated_at, import_error: null, file_stale: false, import_pending: false, source_notes: '仅覆盖已接入来源。', ai_configured: true } });
+    if (path === '/api/dashboard') return route.fulfill({ json: { total_records: 1, total_projects: 1, gate_counts: { candidate: 1, review: 0, signal: 0 }, ai_counts: {}, ai_decision_counts: { recommend: 1 }, decision_counts: {}, followup_count: 0, deadline_soon: [], deadline_soon_count: 0, data_updated_at: project.updated_at, import_error: null, file_stale: false, import_pending: false, source_notes: '仅覆盖已接入来源。', ai_configured: true } });
     if (path === '/api/projects' && route.request().method() === 'GET') return route.fulfill({ json: { items: [project], total: 1, page: 1, page_size: 12 } });
     if (path === '/api/projects/1' && route.request().method() === 'GET') return route.fulfill({ json: project });
-    if (path === '/api/projects/1/followup' && route.request().method() === 'GET') return route.fulfill({ json: followup(false) });
-    if (path === '/api/projects/1/followup/adopt' && route.request().method() === 'POST') return route.fulfill({ json: followup(true) });
-    if (path === '/api/projects/1/followup' && route.request().method() === 'PUT') return route.fulfill({ json: followup(true) });
-    if (path.startsWith('/api/projects/1/followup/tasks/') && route.request().method() === 'PATCH') return route.fulfill({ json: followup(true) });
-    if (path.startsWith('/api/projects/1/followup/materials/') && route.request().method() === 'PATCH') return route.fulfill({ json: followup(true) });
+    if (path === '/api/projects/1/followup' && route.request().method() === 'GET') return route.fulfill({ json: activeFollowup });
+    if (path === '/api/projects/1/followup/adopt' && route.request().method() === 'POST') { const body = route.request().postDataJSON(); payloads.adopt.push(body); assert.deepEqual(body, { plan_id: 'plan-1' }); activeFollowup = followup(true); return route.fulfill({ json: activeFollowup }); }
+    if (path === '/api/projects/1/followup' && route.request().method() === 'PUT') { const body = route.request().postDataJSON(); payloads.followup.push(body); assert.ok(Object.keys(body).every((key) => ['is_following', 'stage', 'disposition', 'owner', 'next_action', 'outcome', 'note', 'submitted_at', 'submission_channel', 'receipt', 'reason'].includes(key))); activeFollowup = { ...followup(true), ...body }; return route.fulfill({ json: activeFollowup }); }
+    if (path.startsWith('/api/projects/1/followup/tasks/') && route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); payloads.task.push(body); assert.ok(Object.keys(body).every((key) => ['title', 'basis', 'owner', 'due_at', 'prerequisites', 'materials', 'status', 'completion_note', 'skipped_reason', 'reason'].includes(key))); return route.fulfill({ json: activeFollowup }); }
+    if (path.startsWith('/api/projects/1/followup/materials/') && route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); payloads.material.push(body); assert.deepEqual(Object.keys(body), ['status']); return route.fulfill({ json: activeFollowup }); }
+    if (path === '/api/status' && route.request().method() === 'GET') return route.fulfill({ json: { data_updated_at: project.updated_at, last_import_at: null, file_stale: false, import_pending: false, import_error: null, source_notes: 'mock', imports: [], jobs: [], job_counts: {}, reading_jobs: [{ id: 71, project_id: 1, status: 'failed', attempts: 2, error: 'mock reading failure', created_at: project.updated_at, updated_at: project.updated_at }], reading_job_counts: { failed: 1 }, ai_configured: true } });
+    if (path === '/api/projects/1/reading' && route.request().method() === 'POST') { payloads.readingRetry.push(route.request().postDataJSON()); return route.fulfill({ json: { message: '已提交阅读重试' } }); }
     if (path === '/api/projects/1/reading/corrections' && route.request().method() === 'GET') return route.fulfill({ json: { corrections: [] } });
     if (path === '/api/projects/1/documents/refresh' && route.request().method() === 'POST') return route.fulfill({ json: { procurement: null, message: 'ok' } });
     return route.fulfill({ status: 404, json: { detail: 'mock route not found' } });
@@ -117,15 +122,41 @@ function followup(isFollowing = false) {
   const detailText = await page.getByTestId('procurement-reading').innerText();
   assert.ok(detailText.includes('报价文件提交截止') && detailText.includes('2026-10-20 10:00'));
   assert.ok(detailText.includes('完整要求表'));
+  await page.getByText('\u539f\u59cb\u8d44\u6599\u4e0e\u5b8c\u6574\u7269\u6599', { exact: true }).click();
+  assert.ok(await page.getByLabel('\u641c\u7d22\u7269\u6599\u660e\u7ec6').count() >= 1);
+  assert.ok((await page.getByTestId('procurement-reading').innerText()).includes('\u9ad8\u538b\u53d8\u9891\u5668'));
   await page.screenshot({ path: path.join(screenshotDir, 'procurement-reading.png'), fullPage: true });
   await page.getByRole('tab', { name: '跟进' }).click();
   await page.getByText('尚未加入跟进').waitFor();
-  assert.ok((await page.getByTestId('followup-panel').innerText()).includes('核对技术附件'));
-  await page.getByRole('button', { name: '手工开始，不采用计划' }).click();
+  const previewText = await page.getByTestId('followup-panel').innerText();
+  assert.ok(previewText.includes('核对技术附件'));
+  assert.ok(previewText.includes('技术规格书'));
+  assert.ok(!previewText.includes('mat-1'));
+  await page.getByRole('button', { name: '加入我的跟进' }).click();
   await page.getByText('跟进中').first().waitFor();
   assert.ok((await page.getByTestId('followup-panel').innerText()).includes('不等于已提交'));
+  await page.locator('.followup-task .followup-status-select').click();
+  await page.getByText('已完成', { exact: true }).last().click();
+  await page.locator('.ant-modal textarea').fill('已核对技术附件');
+  await page.locator('.ant-modal').getByRole('button').last().click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(payloads.task.at(-1), { status: 'done', completion_note: '已核对技术附件' });
+  await page.locator('.followup-material .ant-select').click();
+  await page.getByText('待核对', { exact: true }).last().click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(payloads.material.at(-1), { status: 'pending_check' });
   await page.screenshot({ path: path.join(screenshotDir, 'followup.png'), fullPage: true });
+  await page.goto(`${base}/operations`);
+  await page.getByRole('heading', { name: '处理状态' }).waitFor();
+  assert.ok(await page.getByText('采购阅读任务', { exact: false }).count() >= 1);
+  assert.ok(await page.getByText('mock reading failure', { exact: true }).count() >= 1);
+  await page.getByRole('button', { name: '重试该项目' }).click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(payloads.readingRetry.at(-1), { force: true });
   assert.equal(errors.length, 0, errors.join('\n'));
-  console.log(JSON.stringify({ passed: true, filters: ['category', 'region', 'buyer', 'stage', 'key_time'], sharedReading: true, tabs: 3, followupPreviewAndAdopt: true, screenshots: screenshotDir }));
+  assert.equal(payloads.adopt.length, 1);
+  assert.equal(payloads.task.length, 1);
+  assert.equal(payloads.material.length, 1);
+  console.log(JSON.stringify({ passed: true, filters: ['category', 'region', 'buyer', 'stage', 'key_time'], sharedReading: true, tabs: 3, followupPreviewAndAdopt: true, payloads, screenshots: screenshotDir }));
   await browser.close();
 })().catch(async (error) => { console.error(error); process.exitCode = 1; });

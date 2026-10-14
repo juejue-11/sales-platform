@@ -55,7 +55,7 @@ export function demandTypeLabel(type: ProcurementDemandType | null | undefined):
 }
 
 export function submissionMilestone(reading: ProcurementReading | null | undefined): ProcurementReadingMilestone | null {
-  if (!reading?.milestones?.length || reading.stale || (reading.conflicts?.length ?? 0) > 0) return null
+  if (!reading?.milestones?.length || reading.stale || reading.status === 'pending' || reading.status === 'failed' || reading.status === 'not_configured' || (reading.conflicts?.length ?? 0) > 0) return null
   const milestone = reading.milestones.find((item) => item.kind === 'submission')
   if (!milestone?.at || !milestone.sources?.length) return null
   return milestone

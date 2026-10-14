@@ -3,6 +3,7 @@ import { Button, Input, Select } from 'antd'
 import { FilterOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { AiDecision } from '../../types'
 import { aiDecisionLabels, marketAiDecisionLabels } from '../Common'
+import { procurementStageLabels } from '../procurement/reading'
 import type { OpportunityQuery, OpportunityTab, OpportunityTabKey } from '../../hooks/useOpportunityDesk'
 
 interface OpportunityFiltersProps {
@@ -73,16 +74,7 @@ const aiDecisionOptions = [
   { value: 'not_recommended', label: decisionFilterLabel('not_recommended') },
 ]
 
-const stageOptions = [
-  { value: '', label: '全部采购阶段' },
-  { value: 'confirmed', label: '已确认采购' },
-  { value: 'registration', label: '报名 / 注册' },
-  { value: 'document_access', label: '获取文件' },
-  { value: 'question', label: '答疑 / 澄清' },
-  { value: 'submission', label: '提交阶段' },
-  { value: 'bidding', label: '报价 / 投标' },
-  { value: 'opening', label: '开标 / 评审' },
-]
+const stageOptions = [{ value: '', label: '全部采购阶段' }, ...Object.entries(procurementStageLabels).map(([value, label]) => ({ value, label }))]
 
 const timeOptions = [
   { value: '', label: '全部关键时间' },

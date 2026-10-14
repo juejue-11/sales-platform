@@ -111,6 +111,10 @@ export const api = {
     body: JSON.stringify(body),
   }),
   status: () => request<StatusData>('/status'),
+  refreshReading: (id: number) => request<{ message: string }>(`/projects/${id}/reading`, {
+    method: 'POST',
+    body: JSON.stringify({ force: true }),
+  }),
   importNow: () => request<{ inserted: number; updated: number; unchanged: number; total: number; message: string }>('/import', {
     method: 'POST',
     body: JSON.stringify({}),

@@ -369,8 +369,10 @@ export interface FollowupTask {
   description?: string | null
   status?: string
   required?: boolean
+  basis?: 'required' | 'conditional' | 'suggested' | string | null
   source_kind?: string | null
   due_at?: string | null
+  due?: string | null
   owner?: string | null
   skip_reason?: string | null
   skipped_reason?: string | null
@@ -406,7 +408,7 @@ export interface FollowupData {
   outcome: string | null
   submitted_at: string | null
   submission_channel: string | null
-  receipt: string | null
+  receipt: unknown
   tasks: FollowupTask[]
   materials: FollowupMaterial[]
   events: FollowupEvent[]
@@ -414,6 +416,8 @@ export interface FollowupData {
   needs_review: boolean
   is_following?: boolean
   plan_id?: string | number | null
+  note?: string | null
+  reason?: string | null
 }
 
 export interface ProjectSummary {
@@ -563,6 +567,7 @@ export interface DashboardData {
   ai_counts: Record<string, number>
   ai_decision_counts?: Record<string, number>
   decision_counts: Record<string, number>
+  followup_count?: number
   deadline_soon: ProjectSummary[]
   data_updated_at: string | null
   import_error: string | null
@@ -641,6 +646,16 @@ export interface StatusJob {
   updated_at: string
 }
 
+export interface ReadingJob {
+  id: number
+  project_id: number
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | string
+  attempts: number
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface StatusData {
   data_updated_at: string | null
   last_import_at: string | null
@@ -651,6 +666,8 @@ export interface StatusData {
   imports: StatusImport[]
   jobs: StatusJob[]
   job_counts: Record<string, number>
+  reading_jobs?: ReadingJob[]
+  reading_job_counts?: Record<string, number>
   ai_configured: boolean
 }
 
