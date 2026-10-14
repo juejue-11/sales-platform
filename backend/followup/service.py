@@ -356,6 +356,8 @@ def adopt_plan(
     }
     if source_fingerprint is None and source_document is not None:
         source_fingerprint = _source_fingerprint(None, source_document)
+    if source_version is None and source_document is not None:
+        source_version = _reading_version(source_document)
     if source_fingerprint:
         source_fingerprint = _required_text(source_fingerprint, "source_fingerprint")
         if row["source_fingerprint"] and row["source_fingerprint"] != source_fingerprint:
