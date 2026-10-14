@@ -260,11 +260,13 @@ def _source_ref(item: Any) -> str:
         if isinstance(sources, Sequence) and not isinstance(sources, (str, bytes, bytearray)):
             source = sources[0] if sources else None
     if isinstance(source, Mapping):
-        source = source.get("source_ref", source.get("id"))
-        if source is None:
-            source_kind = _text(item.get("source_kind", ""))
-            record_id = _text(item.get("record_id", ""))
-            document_id = _text(item.get("document_id", ""))
+        source_ref = source.get("source_ref", source.get("id"))
+        if source_ref is not None:
+            source = source_ref
+        else:
+            source_kind = _text(source.get("source_kind", item.get("source_kind", "")))
+            record_id = _text(source.get("record_id", item.get("record_id", "")))
+            document_id = _text(source.get("document_id", item.get("document_id", "")))
             source = ":".join(part for part in (source_kind, record_id, document_id) if part)
     return _text(item.get("source_ref", item.get("source_id", source)))
 
