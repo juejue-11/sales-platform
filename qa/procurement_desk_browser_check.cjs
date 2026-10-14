@@ -93,7 +93,25 @@ function followup(isFollowing = false) {
     if (path === '/api/projects/1' && route.request().method() === 'GET') return route.fulfill({ json: project });
     if (path === '/api/projects/1/followup' && route.request().method() === 'GET') return route.fulfill({ json: activeFollowup });
     if (path === '/api/projects/1/followup/adopt' && route.request().method() === 'POST') { const body = route.request().postDataJSON(); payloads.adopt.push(body); assert.deepEqual(body, { plan_id: 'plan-1' }); activeFollowup = followup(true); return route.fulfill({ json: activeFollowup }); }
-    if (path === '/api/projects/1/followup' && route.request().method() === 'PUT') { const body = route.request().postDataJSON(); payloads.followup.push(body); assert.ok(Object.keys(body).every((key) => ['is_following', 'stage', 'disposition', 'owner', 'next_action', 'outcome', 'note', 'submitted_at', 'submission_channel', 'receipt', 'reason'].includes(key))); activeFollowup = { ...followup(true), ...body }; return route.fulfill({ json: activeFollowup }); }
+    if (path === '/api/projects/1/followup' && route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      payloads.followup.push(body);
+      assert.ok(Object.keys(body).every((key) => ['is_following', 'stage', 'disposition', 'owner', 'next_action', 'outcome', 'note', 'submitted_at', 'submission_channel', 'receipt', 'reason'].includes(key)));
+      const hasSubmittedAt = Object.prototype.hasOwnProperty.call(body, 'submitted_at');
+      const hasSubmissionChannel = Object.prototype.hasOwnProperty.call(body, 'submission_channel');
+      const hasReceipt = Object.prototype.hasOwnProperty.call(body, 'receipt');
+      if (body.stage === 'submitted') {
+        assert.ok(hasSubmittedAt && typeof body.submitted_at === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(body.submitted_at), 'submitted confirmation must contain a timezone-bearing submitted_at');
+        assert.ok(hasSubmissionChannel && typeof body.submission_channel === 'string' && body.submission_channel.trim(), 'submitted confirmation must contain submission_channel');
+      } else {
+        assert.equal(hasSubmittedAt, false, 'submitted_at cannot be saved outside submitted confirmation');
+        assert.equal(hasSubmissionChannel, false, 'submission_channel cannot be saved outside submitted confirmation');
+        assert.equal(hasReceipt, false, 'receipt cannot be saved outside submitted confirmation');
+      }
+      if (body.stage === 'awaiting_result') assert.ok(activeFollowup.submitted_at && activeFollowup.submission_channel, 'awaiting_result requires an existing submission');
+      activeFollowup = { ...activeFollowup, ...body, is_following: true };
+      return route.fulfill({ json: activeFollowup });
+    }
     if (path.startsWith('/api/projects/1/followup/tasks/') && route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); payloads.task.push(body); assert.ok(Object.keys(body).every((key) => ['title', 'basis', 'owner', 'due_at', 'prerequisites', 'materials', 'status', 'completion_note', 'skipped_reason', 'reason'].includes(key))); return route.fulfill({ json: activeFollowup }); }
     if (path.startsWith('/api/projects/1/followup/materials/') && route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); payloads.material.push(body); assert.deepEqual(Object.keys(body), ['status']); return route.fulfill({ json: activeFollowup }); }
     if (path === '/api/status' && route.request().method() === 'GET') return route.fulfill({ json: { data_updated_at: project.updated_at, last_import_at: null, file_stale: false, import_pending: false, import_error: null, source_notes: 'mock', imports: [], jobs: [], job_counts: {}, reading_jobs: [{ id: 71, project_id: 1, status: 'failed', attempts: 2, error: 'mock reading failure', created_at: project.updated_at, updated_at: project.updated_at }], reading_job_counts: { failed: 1 }, ai_configured: true } });
@@ -135,16 +153,44 @@ function followup(isFollowing = false) {
   await page.getByRole('button', { name: '加入我的跟进' }).click();
   await page.getByText('跟进中').first().waitFor();
   assert.ok((await page.getByTestId('followup-panel').innerText()).includes('不等于已提交'));
+  const submissionFields = page.locator('.followup-submission input');
+  await submissionFields.nth(0).fill('2026-10-20T10:00');
+  await submissionFields.nth(1).fill('电子采购平台');
+  await submissionFields.nth(2).fill('R-2026-10-20');
+  assert.equal(payloads.followup.length, 0, 'submission drafts must not save on blur');
   await page.locator('.followup-task .followup-status-select').click();
   await page.getByText('已完成', { exact: true }).last().click();
   await page.locator('.ant-modal textarea').fill('已核对技术附件');
   await page.locator('.ant-modal').getByRole('button').last().click();
   await page.waitForTimeout(100);
   assert.deepEqual(payloads.task.at(-1), { status: 'done', completion_note: '已核对技术附件' });
+  assert.equal(await submissionFields.nth(0).inputValue(), '2026-10-20T10:00');
+  assert.equal(await submissionFields.nth(1).inputValue(), '电子采购平台');
+  assert.equal(await submissionFields.nth(2).inputValue(), 'R-2026-10-20');
   await page.locator('.followup-material .ant-select').click();
   await page.getByText('待核对', { exact: true }).last().click();
   await page.waitForTimeout(100);
   assert.deepEqual(payloads.material.at(-1), { status: 'pending_check' });
+  assert.equal(await submissionFields.nth(0).inputValue(), '2026-10-20T10:00');
+  assert.equal(await submissionFields.nth(1).inputValue(), '电子采购平台');
+  assert.equal(await submissionFields.nth(2).inputValue(), 'R-2026-10-20');
+  await page.locator('.followup-overview .ant-select').first().click();
+  await page.getByText('已提交', { exact: true }).last().click();
+  await page.getByText('确认真实提交', { exact: true }).waitFor();
+  await page.getByRole('dialog').getByRole('button', { name: '确认已提交' }).click();
+  await page.waitForTimeout(100);
+  const submittedPayload = payloads.followup.at(-1);
+  assert.equal(payloads.followup.length, 1);
+  assert.equal(submittedPayload.stage, 'submitted');
+  assert.match(submittedPayload.submitted_at, /(?:Z|[+-]\d{2}:\d{2})$/);
+  assert.equal(submittedPayload.submission_channel, '电子采购平台');
+  assert.equal(submittedPayload.receipt, 'R-2026-10-20');
+  assert.equal(await submissionFields.nth(0).isDisabled(), true);
+  assert.equal(await submissionFields.nth(1).isDisabled(), true);
+  await page.locator('.followup-overview .ant-select').first().click();
+  await page.getByText('等待结果', { exact: true }).last().click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(payloads.followup.at(-1), { stage: 'awaiting_result' });
   await page.screenshot({ path: path.join(screenshotDir, 'followup.png'), fullPage: true });
   await page.goto(`${base}/operations`);
   await page.getByRole('heading', { name: '处理状态' }).waitFor();
@@ -155,8 +201,9 @@ function followup(isFollowing = false) {
   assert.deepEqual(payloads.readingRetry.at(-1), { force: true });
   assert.equal(errors.length, 0, errors.join('\n'));
   assert.equal(payloads.adopt.length, 1);
+  assert.equal(payloads.followup.length, 2);
   assert.equal(payloads.task.length, 1);
   assert.equal(payloads.material.length, 1);
-  console.log(JSON.stringify({ passed: true, filters: ['category', 'region', 'buyer', 'stage', 'key_time'], sharedReading: true, tabs: 3, followupPreviewAndAdopt: true, payloads, screenshots: screenshotDir }));
+  console.log(JSON.stringify({ passed: true, filters: ['category', 'region', 'buyer', 'stage', 'key_time'], sharedReading: true, tabs: 3, followupPreviewAndAdopt: true, submissionConfirmationRoundtrip: true, payloads, screenshots: screenshotDir }));
   await browser.close();
 })().catch(async (error) => { console.error(error); process.exitCode = 1; });
