@@ -120,7 +120,7 @@ def _is_material_requirement(item: Mapping[str, Any], *, section: str) -> bool:
         return True
     if any(token in section_text for token in ("participation", "怎样参加", "参与", "费用", "fee")):
         return any(token in text for token in (
-            "证书", "证明", "营业执照", "授权", "资质", "资格", "材料", "文件", "清单", "报告",
+            "证书", "证明", "营业执照", "授权", "资质", "资格", "材料", "文件", "清单", "报告", "凭证", "回执",
         )) and not any(token in text for token in ("获取文件", "购买文件"))
     return False
 
