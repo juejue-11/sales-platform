@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS followups (
         CHECK (disposition IN ('following','paused','abandoned')),
     owner TEXT NOT NULL DEFAULT '',
     next_action TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
     outcome TEXT
         CHECK (outcome IS NULL OR outcome IN ('won','lost','abandoned','other')),
     submitted_at TEXT,
@@ -114,5 +115,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(followups)")}
     if "is_following" not in columns:
         conn.execute("ALTER TABLE followups ADD COLUMN is_following INTEGER NOT NULL DEFAULT 0")
+    if "note" not in columns:
+        conn.execute("ALTER TABLE followups ADD COLUMN note TEXT NOT NULL DEFAULT ''")
     conn.commit()
 

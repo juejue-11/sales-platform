@@ -131,6 +131,11 @@ def save_followup(
         changes["next_action"] = next_action
         events.append(("next_action_changed", {"next_action": next_action}))
 
+    note = _optional_text(payload, "note")
+    if note is not None and note != current["note"]:
+        changes["note"] = note
+        events.append(("note_changed", {"note": note}))
+
     outcome = payload.get("outcome", current["outcome"])
     outcome = _validate_outcome(outcome)
     if current["stage"] == "finished" and outcome != current["outcome"]:
@@ -300,6 +305,20 @@ def adopt_plan(
         repo.ensure(project_id)
     row = repo.followup_row(project_id, required=True)
     assert row is not None
+
+    # Route handlers often pass the decoded POST body as the third argument.
+    # Accept that envelope while retaining the direct ``plan`` contract.
+    if isinstance(plan, Mapping) and "tasks" not in plan and (
+        "plan" in plan or "plan_id" in plan or "owner" in plan or "reading" in plan
+    ):
+        request = dict(plan)
+        plan = request.get("plan")
+        plan_id = request.get("plan_id", plan_id)
+        owner = request.get("owner", owner)
+        source_fingerprint = request.get("source_fingerprint", source_fingerprint)
+        source_version = request.get("source_version", request.get("material_version", source_version))
+        procurement = request.get("procurement", procurement)
+        explanation = request.get("explanation", request.get("reading", explanation))
 
     source_document = procurement or explanation
     if source_document is not None and not isinstance(source_document, Mapping):
@@ -521,6 +540,14 @@ def update_material(
     row = repo.material_row(project_id, material_id, required=True)
     assert row is not None
     values = dict(patch)
+    ai_check = values.pop("ai_check", None)
+    if ai_check is not None:
+        if not isinstance(ai_check, Mapping):
+            raise FollowupValidationError("material.ai_check must be an object")
+        if "status" in ai_check:
+            values["ai_check_status"] = ai_check["status"]
+        if "note" in ai_check:
+            values["ai_check_note"] = ai_check["note"]
     if "check_status" in values and "ai_check_status" not in values:
         values["ai_check_status"] = values.pop("check_status")
     allowed = {"task_id", "name", "basis", "status", "ai_check_status", "ai_check_note", "provided_at", "note"}

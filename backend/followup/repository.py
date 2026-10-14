@@ -116,7 +116,7 @@ class FollowupRepository:
             return
         values["updated_at"] = now_iso()
         allowed = {
-            "is_following", "stage", "disposition", "owner", "next_action", "outcome", "submitted_at",
+            "is_following", "stage", "disposition", "owner", "next_action", "note", "outcome", "submitted_at",
             "submission_channel", "receipt_json", "plan_json", "plan_id", "plan_fingerprint",
             "source_fingerprint", "source_version", "needs_review", "changed_tasks_json", "updated_at",
         }
@@ -235,6 +235,7 @@ class FollowupRepository:
             "disposition": row["disposition"],
             "owner": row["owner"],
             "next_action": row["next_action"],
+            "note": row["note"],
             "outcome": row["outcome"],
             "submitted_at": row["submitted_at"],
             "submission_channel": row["submission_channel"],
@@ -344,7 +345,7 @@ def _event_public(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def empty_state() -> dict[str, Any]:
     return {
-        "is_following": False, "stage": "evaluating", "disposition": "following", "owner": "", "next_action": "", "outcome": None,
+        "is_following": False, "stage": "evaluating", "disposition": "following", "owner": "", "next_action": "", "note": "", "outcome": None,
         "submitted_at": None, "submission_channel": None, "receipt": None, "tasks": [], "materials": [],
         "events": [], "plan": None, "needs_review": False, "changed_tasks": [],
     }
