@@ -12,6 +12,7 @@ from backend.followup import (
     ensure_schema,
     generate_plan,
     get_followup,
+    merge_followup,
     note_material_change,
     save_followup,
     update_material,
@@ -332,4 +333,106 @@ def test_canonical_reading_activation_and_task_definition_audit() -> None:
     assert preserved["status"] == "done"
     assert preserved["title"] == completed["title"]
     assert preserved["completion_note"] == "已完成核对"
+
+
+def test_merge_followup_moves_source_history_without_committing(explanation: dict) -> None:
+    conn = _db()
+    source_plan = get_followup(conn, 30, explanation)["plan"]
+    source = adopt_plan(conn, 30, source_plan, owner="Alice")
+    task = source["tasks"][0]
+    material = source["materials"][0]
+    update_task(conn, 30, task["id"], {"status": "done", "completion_note": "source completed"})
+    update_material(conn, 30, material["id"], {"status": "provided", "provided_at": "2026-10-20T10:00:00+08:00"})
+    source = save_followup(
+        conn,
+        30,
+        {
+            "stage": "submitted",
+            "submitted_at": "2026-10-20T11:00:00+08:00",
+            "submission_channel": "portal",
+        },
+    )
+    source_event_types = [event["type"] for event in source["events"]]
+
+    # The merge participates in the caller's transaction and does not commit
+    # on its own.  Rollback proves that the source is still available for a
+    # caller that aborts the surrounding project merge.
+    conn.execute("BEGIN")
+    merged_preview = merge_followup(conn, 30, 31)
+    assert conn.in_transaction is True
+    assert merged_preview["stage"] == "submitted"
+    assert merged_preview["submitted_at"].startswith("2026-10-20T11:00:00")
+    assert merged_preview["submission_channel"] == "portal"
+    assert merged_preview["owner"] == "Alice"
+    assert merged_preview["needs_review"] is True
+    conn.rollback()
+    assert get_followup(conn, 30)["tasks"]
+    assert get_followup(conn, 31)["tasks"] == []
+
+    conn.execute("BEGIN")
+    merged = merge_followup(conn, 30, 31)
+    assert merged["needs_review"] is True
+    assert next(item for item in merged["tasks"] if item["id"] == task["id"])["status"] == "done"
+    assert next(item for item in merged["materials"] if item["id"] == material["id"])["status"] == "provided"
+    assert set(source_event_types).issubset({event["type"] for event in merged["events"]})
+    assert any(event["type"] == "followup_merged" for event in merged["events"])
+    assert get_followup(conn, 30)["tasks"] == []
+    assert conn.execute("SELECT COUNT(*) FROM followups WHERE project_id=30").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM followup_tasks WHERE project_id=30").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM followup_materials WHERE project_id=30").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM followup_events WHERE project_id=30").fetchone()[0] == 0
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.commit()
+
+
+def test_merge_followup_keeps_target_header_and_source_conflicts(explanation: dict) -> None:
+    conn = _db()
+    plan = get_followup(conn, 40, explanation)["plan"]
+    source = adopt_plan(conn, 40, plan, owner="Source owner")
+    target = adopt_plan(conn, 41, plan, owner="Target owner")
+    source_task = source["tasks"][0]
+    target_task = target["tasks"][0]
+    source_material = source["materials"][0]
+    update_task(conn, 40, source_task["id"], {"status": "done", "completion_note": "source done"})
+    update_material(conn, 40, source_material["id"], {"status": "provided", "provided_at": "2026-10-20"})
+    source = save_followup(
+        conn,
+        40,
+        {
+            "stage": "submitted",
+            "submitted_at": "2026-10-21T09:00:00+08:00",
+            "submission_channel": "email",
+        },
+    )
+    target = save_followup(conn, 41, {"stage": "working", "next_action": "target next step"})
+    target_event_types = [event["type"] for event in target["events"]]
+    source_event_types = [event["type"] for event in source["events"]]
+
+    merged = merge_followup(conn, 40, 41)
+    assert merged["owner"] == "Target owner"
+    assert merged["stage"] == "working"
+    assert merged["next_action"] == "target next step"
+    assert merged["needs_review"] is True
+    assert len(merged["tasks"]) == len(target["tasks"]) + len(source["tasks"])
+    assert len(merged["materials"]) == len(target["materials"]) + len(source["materials"])
+    assert next(item for item in merged["tasks"] if item["id"] == target_task["id"])["status"] == "todo"
+    source_copy = next(item for item in merged["tasks"] if item["id"].startswith("source-40-"))
+    assert source_copy["status"] == "done"
+    assert source_copy["completion_note"] == "source done"
+    source_material_copy = next(item for item in merged["materials"] if item["id"].startswith("source-40-"))
+    assert source_material_copy["status"] == "provided"
+    assert source_material_copy["task_id"] == source_copy["id"]
+    assert source_material_copy["id"] in source_copy["materials"]
+
+    merge_event = next(event for event in merged["events"] if event["type"] == "followup_merged")
+    source_header = merge_event["payload"]["source_header"]
+    assert source_header["owner"] == "Source owner"
+    assert source_header["submitted_at"].startswith("2026-10-21T09:00:00")
+    assert source_header["submission_channel"] == "email"
+    event_types = {event["type"] for event in merged["events"]}
+    assert set(target_event_types).issubset(event_types)
+    assert set(source_event_types).issubset(event_types)
+    assert get_followup(conn, 40)["tasks"] == []
+    assert conn.execute("SELECT COUNT(*) FROM followup_events WHERE project_id=40").fetchone()[0] == 0
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 

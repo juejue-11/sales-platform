@@ -14,6 +14,7 @@ from .schema import ensure_schema
 from .service import (
     adopt_plan,
     get_followup,
+    merge_followup,
     note_material_change,
     save_followup,
     update_material,
@@ -30,6 +31,7 @@ __all__ = [
     "ensure_schema",
     "generate_plan",
     "get_followup",
+    "merge_followup",
     "note_material_change",
     "save_followup",
     "update_material",
