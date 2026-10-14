@@ -295,7 +295,9 @@ def merge_followup(
     children are moved intact and the target is marked for review.  When both
     projects have rows, target header fields remain authoritative while every
     source task, material, and event is retained; colliding child ids receive
-    a stable source prefix and all task/material references are remapped.
+    a stable source prefix and all task/material references are remapped.  A
+    target row that is only an unadopted reading preview has no human progress
+    to protect and inherits the source header instead.
     """
 
     source_project_id = _project_id(source_project_id)
@@ -320,22 +322,29 @@ def merge_followup(
         "SELECT * FROM followup_materials WHERE project_id=? ORDER BY created_at,id",
         (source_project_id,),
     )
+    target_tasks = _merge_rows(
+        conn,
+        "SELECT * FROM followup_tasks WHERE project_id=? ORDER BY created_at,id",
+        (target_project_id,),
+    )
+    target_materials = _merge_rows(
+        conn,
+        "SELECT * FROM followup_materials WHERE project_id=? ORDER BY created_at,id",
+        (target_project_id,),
+    )
+    target_preview = target_row is not None and not _merge_has_human_progress(
+        target_row,
+        target_tasks,
+        target_materials,
+    )
     target_task_ids = {
         str(row["id"])
-        for row in _merge_rows(
-            conn,
-            "SELECT id FROM followup_tasks WHERE project_id=?",
-            (target_project_id,),
-        )
-    }
+        for row in target_tasks
+    } if not target_preview else set()
     target_material_ids = {
         str(row["id"])
-        for row in _merge_rows(
-            conn,
-            "SELECT id FROM followup_materials WHERE project_id=?",
-            (target_project_id,),
-        )
-    }
+        for row in target_materials
+    } if not target_preview else set()
     task_id_map = _merge_id_map(
         source_tasks,
         occupied=target_task_ids,
@@ -356,6 +365,13 @@ def merge_followup(
 
     if target_row is None:
         _insert_merged_header(
+            conn,
+            target_project_id,
+            source_row,
+            changed_tasks=review_task_ids,
+        )
+    elif target_preview:
+        _replace_preview_header(
             conn,
             target_project_id,
             source_row,
@@ -515,6 +531,63 @@ def _merge_task_ids(value: Any, mapping: Mapping[str, str]) -> list[str]:
     if not isinstance(values, list):
         return []
     return sorted({mapping.get(str(item), str(item)) for item in values})
+
+
+def _merge_has_human_progress(
+    row: Mapping[str, Any],
+    tasks: Sequence[Mapping[str, Any]],
+    materials: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Distinguish a generated preview row from an actual follow-up."""
+
+    if tasks or materials or bool(row.get("is_following")):
+        return True
+    if str(row.get("stage") or "") != "evaluating":
+        return True
+    if str(row.get("disposition") or "") != "following":
+        return True
+    for key in ("owner", "next_action", "note", "outcome", "submitted_at", "submission_channel", "receipt_json"):
+        if row.get(key) not in (None, "", "{}", "[]"):
+            return True
+    return False
+
+
+def _replace_preview_header(
+    conn: sqlite3.Connection,
+    target_project_id: int,
+    source_row: Mapping[str, Any],
+    *,
+    changed_tasks: list[str],
+) -> None:
+    """Replace an unadopted target proposal with the source's live header."""
+
+    conn.execute(
+        """UPDATE followups SET
+           is_following=?, stage=?, disposition=?, owner=?, next_action=?, note=?, outcome=?,
+           submitted_at=?, submission_channel=?, receipt_json=?, plan_json=?, plan_id=?, plan_fingerprint=?,
+           source_fingerprint=?, source_version=?, needs_review=1, changed_tasks_json=?, updated_at=?
+           WHERE project_id=?""",
+        (
+            source_row["is_following"],
+            source_row["stage"],
+            source_row["disposition"],
+            source_row["owner"],
+            source_row["next_action"],
+            source_row["note"],
+            source_row["outcome"],
+            source_row["submitted_at"],
+            source_row["submission_channel"],
+            source_row["receipt_json"],
+            source_row["plan_json"],
+            source_row["plan_id"],
+            source_row["plan_fingerprint"],
+            source_row["source_fingerprint"],
+            source_row["source_version"],
+            json_text(changed_tasks),
+            now_iso(),
+            target_project_id,
+        ),
+    )
 
 
 def _insert_merged_header(

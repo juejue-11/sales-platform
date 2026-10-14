@@ -436,3 +436,47 @@ def test_merge_followup_keeps_target_header_and_source_conflicts(explanation: di
     assert conn.execute("SELECT COUNT(*) FROM followup_events WHERE project_id=40").fetchone()[0] == 0
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
+
+def test_merge_followup_replaces_target_preview_with_live_source(explanation: dict) -> None:
+    conn = _db()
+    source_plan = get_followup(conn, 50, explanation)["plan"]
+    source = adopt_plan(conn, 50, source_plan, owner="Source owner")
+    source = save_followup(
+        conn,
+        50,
+        {
+            "stage": "submitted",
+            "next_action": "wait for result",
+            "submitted_at": "2026-10-22T09:00:00+08:00",
+            "submission_channel": "portal",
+        },
+    )
+
+    # GET on the target creates only a proposal row.  It has no human choice,
+    # task, owner, next action, or submission that should mask source progress.
+    target_preview = get_followup(conn, 51, explanation)
+    assert target_preview["is_following"] is False
+    assert target_preview["stage"] == "evaluating"
+    assert target_preview["owner"] == ""
+    assert target_preview["next_action"] == ""
+    assert target_preview["submitted_at"] is None
+    assert target_preview["tasks"] == []
+    preview_event_types = [event["type"] for event in target_preview["events"]]
+
+    conn.execute("BEGIN")
+    merged = merge_followup(conn, 50, 51)
+    assert conn.in_transaction is True
+    assert merged["is_following"] is True
+    assert merged["owner"] == "Source owner"
+    assert merged["stage"] == "submitted"
+    assert merged["next_action"] == "wait for result"
+    assert merged["submitted_at"].startswith("2026-10-22T09:00:00")
+    assert merged["submission_channel"] == "portal"
+    assert merged["needs_review"] is True
+    assert len(merged["tasks"]) == len(source["tasks"])
+    assert set(preview_event_types).issubset({event["type"] for event in merged["events"]})
+    assert any(event["type"] == "followup_merged" for event in merged["events"])
+    assert get_followup(conn, 50)["tasks"] == []
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.commit()
+
