@@ -401,7 +401,10 @@ def generate_plan(explanation: Mapping[str, Any]) -> dict[str, Any]:
             "materials": [],
             "status": "todo",
             "completion_note": "",
-            "source_ref": _source_ref(section_value),
+            "source_ref": _source_ref(section_value) or next(
+                (_source_ref(item) for item in requirements if isinstance(item, Mapping) and _source_ref(item)),
+                "",
+            ),
             "source_section": section_id,
         }
         for requirement_index, requirement in enumerate(requirements):
