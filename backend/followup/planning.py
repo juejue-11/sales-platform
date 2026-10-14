@@ -287,6 +287,8 @@ def generate_plan(explanation: Mapping[str, Any]) -> dict[str, Any]:
     if demand_type == "lead":
         lead = True
     confirmed = demand_type == "confirmed" or _bool(explanation.get("confirmed", explanation.get("is_confirmed", False)))
+    if not demand_type and procedure != "unspecified":
+        confirmed = True
     # The reading contract has already separated confirmed procurement from a
     # news/market lead.  A confirmed reading is sufficient even when its
     # procedure is absent; only explicit milestones/requirements are used.
