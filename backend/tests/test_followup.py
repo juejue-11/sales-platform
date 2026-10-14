@@ -479,4 +479,3 @@ def test_merge_followup_replaces_target_preview_with_live_source(explanation: di
     assert get_followup(conn, 50)["tasks"] == []
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.commit()
-

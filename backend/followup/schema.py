@@ -118,4 +118,3 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "note" not in columns:
         conn.execute("ALTER TABLE followups ADD COLUMN note TEXT NOT NULL DEFAULT ''")
     conn.commit()
-
