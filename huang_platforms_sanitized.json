@@ -1,0 +1,302 @@
+{
+  "source": "http://43.139.211.140/",
+  "snapshot_at": "2026-09-28 17:20:50",
+  "platforms": [
+    {
+      "pid": "pl-2643d68300",
+      "name": "南方电网阳光采购",
+      "url": "sunoa.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P0",
+      "depth": "L1",
+      "ownership": "央企·南方电网",
+      "scope": "南方电网体系"
+    },
+    {
+      "pid": "pl-71d0c27394",
+      "name": "华润守正",
+      "url": "shouzheng.crc.com.hk",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P0",
+      "depth": "L2",
+      "ownership": "央企·华润集团",
+      "scope": "华润体系（润盛/润丰/润信等）"
+    },
+    {
+      "pid": "pl-be4cbd065c",
+      "name": "鞍钢智慧招投标",
+      "url": "bid.ansteel.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L3",
+      "ownership": "央企·鞍钢集团",
+      "scope": "鞍钢集团矿业"
+    },
+    {
+      "pid": "pl-5c1520a3d8",
+      "name": "五矿鑫益采",
+      "url": "xinyicm.minmetals.com.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L4",
+      "ownership": "央企·中国五矿",
+      "scope": "中国五矿"
+    },
+    {
+      "pid": "pl-5ce12bb7f9",
+      "name": "河钢云供应链",
+      "url": "hebiig.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L4",
+      "ownership": "国企·河钢集团",
+      "scope": "河钢集团"
+    },
+    {
+      "pid": "pl-a3170cf1ad",
+      "name": "酒钢公共交易平台",
+      "url": "eps.jiugangbid.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L4",
+      "ownership": "国企·酒钢集团",
+      "scope": "酒钢集团（镜铁山矿业、肃南宏兴等）"
+    },
+    {
+      "pid": "pl-ae42a08255",
+      "name": "包钢电子采购平台",
+      "url": "ep.btsteel.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L4",
+      "ownership": "国企·包钢集团",
+      "scope": "包钢集团（白云鄂博铁矿）"
+    },
+    {
+      "pid": "pl-75c6b59c54",
+      "name": "华润集团守正电子招标平台",
+      "url": "szecp.crc.com.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L5",
+      "ownership": "央企·华润集团",
+      "scope": "华润集团（肇庆润信招标全在此发布）"
+    },
+    {
+      "pid": "pl-5f15b0b0ff",
+      "name": "江铜采购系统",
+      "url": "sso-ec.jxcc.com:9000",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L2",
+      "ownership": "国企·江西铜业",
+      "scope": "江铜集团"
+    },
+    {
+      "pid": "pl-afcc0efcac",
+      "name": "昆钢电子采购平台",
+      "url": "ec.kiscopec.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "国企·昆钢集团",
+      "scope": "昆钢集团（大红山铁矿）"
+    },
+    {
+      "pid": "pl-0826e30498",
+      "name": "中国电建设备物资集中采购平台",
+      "url": "bid.powerchina.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "央企·中国电建",
+      "scope": "中国电建（中电建广宁砂石项目）"
+    },
+    {
+      "pid": "pl-0a5847a0dc",
+      "name": "天山材料SRM采购平台",
+      "url": "srm.tsmaterials.cn",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "央企·中国建材（天山材料）",
+      "scope": "天山材料体系"
+    },
+    {
+      "pid": "pl-1a84290784",
+      "name": "欧冶工业品",
+      "url": "oy.ouyi360.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P3",
+      "depth": "L6",
+      "ownership": "央企·中国宝武",
+      "scope": "宝武系/欧冶平台"
+    },
+    {
+      "pid": "pl-d9a58650e8",
+      "name": "中国石化物资采购平台",
+      "url": "sinopec.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P3",
+      "depth": "L6",
+      "ownership": "央企·中石化",
+      "scope": "中石化系"
+    },
+    {
+      "pid": "pl-15feab1356",
+      "name": "中国黄金集团电子招标商务平台",
+      "url": "jzcg.chinagoldgroup.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L5",
+      "ownership": "央企·中国黄金集团",
+      "scope": "中国黄金集团（内蒙古矿业·乌努格吐山铜钼矿、金域黄金物资）"
+    },
+    {
+      "pid": "pl-2ae0a07843",
+      "name": "山东黄金供应链管理系统招标采购平台",
+      "url": "",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L5",
+      "ownership": "国企·山东黄金集团",
+      "scope": "山东黄金（山金昶泰矿业等）"
+    },
+    {
+      "pid": "pl-4f291cfc04",
+      "name": "宝华智慧招标共享平台",
+      "url": "baohuabidding.com",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P1",
+      "depth": "L5",
+      "ownership": "央企·中国宝武",
+      "scope": "宝武系（梅山矿业、西昌矿业）"
+    },
+    {
+      "pid": "pl-92ca3c0c46",
+      "name": "浙江交通集团电子招采系统",
+      "url": "",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "国企·浙江省交通投资集团",
+      "scope": "浙江交通资源投资集团"
+    },
+    {
+      "pid": "pl-ce7f9d7d91",
+      "name": "能化阳光采购平台",
+      "url": "",
+      "category": "官方采购平台",
+      "kind": "owner",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "国企·福建能化集团",
+      "scope": "福能新型建材等建材/水泥客户"
+    },
+    {
+      "pid": "pl-cc8c39695b",
+      "name": "吉林大黑山钼业官网·招标公告栏",
+      "url": "jldhsmy.com",
+      "category": "第三方招标平台",
+      "kind": "public",
+      "tier": "P2",
+      "depth": "L5",
+      "ownership": "民企·矿主官网直采",
+      "scope": "吉林大黑山钼业"
+    },
+    {
+      "pid": "pl-df09cd2378",
+      "name": "采招网",
+      "url": "bidcenter.com.cn",
+      "category": "第三方招标平台",
+      "kind": "public",
+      "tier": "P1",
+      "depth": "渠道",
+      "ownership": "民企·第三方聚合",
+      "scope": "大黑山钼业等"
+    },
+    {
+      "pid": "pl-21821b6fca",
+      "name": "千里马",
+      "url": "qianlima.com",
+      "category": "第三方招标平台",
+      "kind": "public",
+      "tier": "P1",
+      "depth": "渠道",
+      "ownership": "民企·第三方聚合",
+      "scope": "含多省项目"
+    },
+    {
+      "pid": "pl-5904b57d4a",
+      "name": "中国招标投标公共服务平台",
+      "url": "www.cebpubservice.com",
+      "category": "公共公示平台",
+      "kind": "public",
+      "tier": "P2",
+      "depth": "渠道",
+      "ownership": "政府·法定公示",
+      "scope": "全国"
+    },
+    {
+      "pid": "pl-e6a1c02f5f",
+      "name": "比比招标网",
+      "url": "bibenet.com",
+      "category": "第三方招标平台",
+      "kind": "public",
+      "tier": "P3",
+      "depth": "渠道",
+      "ownership": "民企·第三方聚合",
+      "scope": "—"
+    }
+  ],
+  "patrol": [
+    {
+      "frequency": "每日",
+      "keyword": "偏心套 / 破碎机",
+      "platform": "bid.ansteel.cn（鞍钢）"
+    },
+    {
+      "frequency": "每日",
+      "keyword": "偏心套 / 破碎机",
+      "platform": "shouzheng.crc.com.hk（华润）"
+    },
+    {
+      "frequency": "每周",
+      "keyword": "偏心套",
+      "platform": "五矿鑫益采 / 河钢云供应链"
+    },
+    {
+      "frequency": "每周",
+      "keyword": "偏心套 / 旋回破碎机",
+      "platform": "eps.jiugangbid.com（酒钢）"
+    },
+    {
+      "frequency": "每周",
+      "keyword": "旋回破碎机 偏心套",
+      "platform": "bidcenter.com.cn / qianlima.com"
+    },
+    {
+      "frequency": "按需",
+      "keyword": "破碎机 偏心套",
+      "platform": "sunoa.cn（南方电网）"
+    }
+  ]
+}
