@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.ai import AIError, build_messages, validate_judgment
-from backend.db import connect
-from backend.service import ScreeningService
-from backend.utils import source_quote, source_quote_hint
+from backend.analysis.ai import AIError, build_messages, validate_judgment
+from backend.storage.db import connect
+from backend.application.service import ScreeningService
+from backend.core.utils import source_quote, source_quote_hint
 from backend.tests.test_backend import Provider
 
 

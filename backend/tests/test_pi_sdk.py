@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-import backend.ai as ai_module
-from backend.ai import AIError, PiSDKProvider, _safe_error_code, _safe_progress_event
-from backend.service import ScreeningService
-from backend.utils import json_text, sha256_text
+import backend.analysis.ai as ai_module
+from backend.analysis.ai import AIError, PiSDKProvider, _safe_error_code, _safe_progress_event
+from backend.application.service import ScreeningService
+from backend.core.utils import json_text, sha256_text
 
 
 NODE = shutil.which("node")

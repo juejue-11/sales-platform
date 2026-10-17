@@ -5,8 +5,8 @@ import json
 
 import httpx
 
-from backend.db import connect
-from backend.project_research import ResearchSession
+from backend.storage.db import connect
+from backend.research.project_research import ResearchSession
 
 
 def test_empty_search_records_actual_portals_and_uncovered_project_origin(tmp_path):

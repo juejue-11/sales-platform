@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from backend.ai import AIError
+from backend.analysis.ai import AIError
 from backend.main import create_app
-from backend.service import ConflictError, ScreeningService, ServiceError
-from backend.utils import SHANGHAI
-from backend.ai import validate_judgment
+from backend.application.service import ConflictError, ScreeningService, ServiceError
+from backend.core.utils import SHANGHAI
+from backend.analysis.ai import validate_judgment
 
 
 def row(record_id: int = 1, *, body: str = "采购破碎机，截止时间：2099-12-31 09:00。", deadline: str | None = "2099-12-31 09:00"):
@@ -442,7 +442,7 @@ def test_api_key_is_write_only_and_archive_path_is_constrained(tmp_path: Path):
 def test_deadline_date_uses_shanghai_timezone(tmp_path: Path):
     service = make_service(tmp_path, [row(deadline="2026-10-08")])
     # The date-only deadline expires at the end of the Asia/Shanghai business day.
-    from backend.rules import evaluate_record
+    from backend.analysis.rules import evaluate_record
     record = service._records_for_project(1)[0]
     from datetime import datetime
     gate, _ = evaluate_record(record, service.get_settings(), now=datetime(2026, 10, 8, 12, tzinfo=SHANGHAI))

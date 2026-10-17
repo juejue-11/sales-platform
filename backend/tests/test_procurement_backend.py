@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-import backend.service as service_module
-from backend.ai import AIError, PiSDKProvider, validate_judgment
-from backend.briefing import build_briefing
-from backend.procurement_facts import extract_announcement_facts
-from backend.service import ScreeningService
+import backend.application.service as service_module
+from backend.analysis.ai import AIError, PiSDKProvider, validate_judgment
+from backend.analysis.briefing import build_briefing
+from backend.procurement.facts import extract_announcement_facts
+from backend.application.service import ScreeningService
 
 
 NODE = shutil.which("node")

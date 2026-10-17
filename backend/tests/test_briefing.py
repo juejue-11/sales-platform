@@ -4,8 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from backend.briefing import build_briefing, normalize_source_text
-from backend.service import ScreeningService
+from backend.analysis.briefing import build_briefing, normalize_source_text
+from backend.application.service import ScreeningService
 
 
 def procurement_body() -> str:

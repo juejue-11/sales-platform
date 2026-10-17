@@ -21,6 +21,11 @@ $screeningRunnerPath = [regex]::Escape((Join-Path $screeningRoot 'agent-runtime\
 foreach ($screeningOwnerId in $screeningOwnedPythonIds) {
     $screeningAgentChildren = Get-CimInstance Win32_Process -Filter "ParentProcessId = $screeningOwnerId"
     foreach ($screeningAgentChild in $screeningAgentChildren) {
+        # A platform-owned collection may itself own document converters. Stop
+        # only this verified child tree; an independent scheduled run is left alone.
+        if ($screeningAgentChild.Name -eq 'python.exe' -and $screeningAgentChild.CommandLine -match '\s-m\s+collector(?:\.control)?(?:\s|$)') {
+            & taskkill.exe /PID $screeningAgentChild.ProcessId /T /F 2>$null | Out-Null
+        }
         if ($screeningAgentChild.Name -eq 'node.exe' -and $screeningAgentChild.CommandLine -match $screeningRunnerPath) {
             Stop-Process -Id $screeningAgentChild.ProcessId -ErrorAction SilentlyContinue
         }

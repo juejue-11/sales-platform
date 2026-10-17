@@ -2,12 +2,19 @@ import type {
   AgentRun,
   DashboardData,
   ProcurementData,
+  ProcurementDocumentSnapshot,
+  FollowupData,
+  FollowupMaterial,
+  FollowupTask,
+  ProcurementReadingCorrection,
   ProjectDetail,
   ProjectSummary,
   ProjectsResponse,
   ResearchSourceVersionResponse,
   SettingsData,
   StatusData,
+  CollectionData,
+  CollectionTask,
 } from './types'
 
 const API_PREFIX = '/api'
@@ -77,6 +84,13 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  documentSnapshot: (projectId: number, documentId: number | string, sha256?: string | null) => {
+    const query = sha256 ? `?sha256=${encodeURIComponent(sha256)}` : ''
+    return request<ProcurementDocumentSnapshot>(
+      `/projects/${projectId}/documents/${encodeURIComponent(String(documentId))}/snapshot${query}`,
+    )
+  },
+  uploadedFileUrl: (projectId: number, documentId: number | string) => `${API_PREFIX}/projects/${projectId}/documents/${encodeURIComponent(String(documentId))}/uploaded-file`,
   analyze: (id: number, force = false) => request<{ job_id: number | null; status: string; message: string }>(`/projects/${id}/analyze`, {
     method: 'POST',
     body: JSON.stringify({ force }),
@@ -99,6 +113,10 @@ export const api = {
     body: JSON.stringify(body),
   }),
   status: () => request<StatusData>('/status'),
+  refreshReading: (id: number) => request<{ message: string }>(`/projects/${id}/reading`, {
+    method: 'POST',
+    body: JSON.stringify({ force: true }),
+  }),
   importNow: () => request<{ inserted: number; updated: number; unchanged: number; total: number; message: string }>('/import', {
     method: 'POST',
     body: JSON.stringify({}),
@@ -111,5 +129,44 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  collection: () => request<CollectionData>('/collection'),
+  runCollection: (sourceId: string | null = null) => request<{ message: string; task: CollectionTask }>('/collection/run', {
+    method: 'POST',
+    body: JSON.stringify({ source_id: sourceId }),
+  }),
+  setCollectionSourceEnabled: (sourceId: string, enabled: boolean) => request<{ message: string }>(`/collection/sources/${encodeURIComponent(sourceId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  }),
+  saveCollectionSchedule: (body: { enabled: boolean; at: string }) => request<{ message: string }>('/collection/schedule', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }),
   archiveUrl: (recordId: number) => `${API_PREFIX}/records/${recordId}/archive`,
+  followup: (id: number) => request<FollowupData>(`/projects/${id}/followup`),
+  updateFollowup: (id: number, body: Partial<FollowupData>) => request<FollowupData>(`/projects/${id}/followup`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }),
+  adoptFollowupPlan: (id: number, planId?: string | number | null) => request<FollowupData>(`/projects/${id}/followup/adopt`, {
+    method: 'POST',
+    body: JSON.stringify(planId == null ? {} : { plan_id: planId }),
+  }),
+  updateFollowupTask: (id: number, taskId: string | number, body: Partial<FollowupTask>) => request<FollowupData>(`/projects/${id}/followup/tasks/${encodeURIComponent(String(taskId))}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  }),
+  updateFollowupMaterial: (id: number, materialId: string | number, body: Partial<FollowupMaterial>) => request<FollowupData>(`/projects/${id}/followup/materials/${encodeURIComponent(String(materialId))}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  }),
+  supplementDocument: (id: number, body: { record_id: number; name: string; content_base64: string }) => request<{ document: ProcurementDocumentSnapshot; message: string }>(`/projects/${id}/documents/supplement`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
+  readingCorrections: (id: number) => request<{ corrections: ProcurementReadingCorrection[] }>(`/projects/${id}/reading/corrections`),
+  addReadingCorrection: (id: number, body: { requirement_id: string; text: string; reason: string }) => request<{ corrections: ProcurementReadingCorrection[]; message: string }>(`/projects/${id}/reading/corrections`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
 }

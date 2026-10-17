@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from backend.public_documents import DocumentError, _download, discover_attachments, parse_document, validate_public_url
+from backend.documents.public_documents import DocumentError, _download, discover_attachments, parse_document, validate_public_url
 
 
 class PublicDocumentTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class PublicDocumentTests(unittest.TestCase):
     def test_source_host_and_private_ip_rejected(self):
         with self.assertRaises(DocumentError):
             asyncio.run(validate_public_url("https://evil.example/f.pdf", "https://bid.example/n"))
-        with patch("backend.public_documents.socket.getaddrinfo", return_value=[(2,1,6,'',('127.0.0.1',443))]):
+        with patch("backend.documents.public_documents.socket.getaddrinfo", return_value=[(2,1,6,'',('127.0.0.1',443))]):
             with self.assertRaisesRegex(DocumentError, "non_public_source"):
                 asyncio.run(validate_public_url("https://bid.example/f.pdf", "https://bid.example/n"))
 
@@ -33,8 +33,8 @@ class PublicDocumentTests(unittest.TestCase):
             self.assertEqual(content, b'%PDF-converted')
             document.update(status='parsed', pages=2, text='采购方案正文',
                             page_texts=[{'page': 1, 'text': '采购方案正文'}])
-        with patch('backend.public_documents.convert_legacy_word', return_value=b'%PDF-converted') as convert, \
-                patch('backend.public_documents._pdf', side_effect=read_pdf):
+        with patch('backend.documents.public_documents.convert_legacy_word', return_value=b'%PDF-converted') as convert, \
+                patch('backend.documents.public_documents._pdf', side_effect=read_pdf):
             doc = parse_document(raw, record_id=174, url='https://bid.example/f.doc',
                                  mime_type='application/msword')
         convert.assert_called_once_with(raw)
@@ -45,8 +45,8 @@ class PublicDocumentTests(unittest.TestCase):
         self.assertEqual(doc['mime_type'], 'application/msword')
 
     def test_doc_conversion_failure_has_specific_reason(self):
-        from backend.legacy_word import WordConversionError
-        with patch('backend.public_documents.convert_legacy_word', side_effect=WordConversionError('conversion_timeout')):
+        from backend.documents.legacy_word import WordConversionError
+        with patch('backend.documents.public_documents.convert_legacy_word', side_effect=WordConversionError('conversion_timeout')):
             doc = parse_document(b'old doc', record_id=174, url='https://bid.example/f.doc')
         self.assertEqual(doc['status'], 'unreadable')
         self.assertEqual(doc['error'], 'conversion_timeout')
@@ -100,7 +100,7 @@ class PublicDocumentTests(unittest.TestCase):
                 self.urls.append(url)
                 return Response()
         client = Client()
-        with patch('backend.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+        with patch('backend.documents.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
             with self.assertRaisesRegex(DocumentError,'attachment_outside_source'):
                 asyncio.run(_download(client,'https://bid.example/file.pdf','https://bid.example/notice'))
         self.assertEqual(len(client.urls),1)
@@ -116,7 +116,7 @@ class PublicDocumentTests(unittest.TestCase):
                 yield b'second'
         class Client:
             def stream(self,*args,**kwargs): return Response()
-        with patch('backend.public_documents.MAX_BYTES',8), patch('backend.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+        with patch('backend.documents.public_documents.MAX_BYTES',8), patch('backend.documents.public_documents.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
             with self.assertRaisesRegex(DocumentError,'attachment_too_large'):
                 asyncio.run(_download(Client(),'https://bid.example/file.pdf','https://bid.example/notice'))
 

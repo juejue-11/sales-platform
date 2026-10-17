@@ -1,5 +1,33 @@
 # 筛选平台接口约定
 
+## 2026-10-14 采购工作台扩展
+
+项目列表与详情新增 `procurement_reading`，采购说明独立于研判保存。字段包括 `version`、`material_version`、`status`、`stale`、`summary`、`demand_type`、`stage`、`buyer`、`region`、`category`、`sections`、`milestones`、`coverage`、`conflicts`、`unresolved`。采购类型为 `confirmed|lead|unknown`；处理状态为 `pending|complete|partial|failed|not_configured`。
+
+每章 `sections:[{id,title,requirements:[{id,text,explanation,sources,lot?,status?}]}]` 保留原始要求与解释；sources 使用采购来源协议。时间节点 `milestones:[{id,kind,label,at,sources}]` 的 kind 为 `document_access|registration|question|submission|opening|other`，获取文件截止和提交截止分别保存。卡片与详情使用同一说明；旧 `procurement`、`briefing` 仍兼容返回。
+
+新生成的每条要求必须包含非空字符串 `text`（要求正文）；`explanation` 只作补充解释，不能代替正文，缺少有效 `text` 的模型结果按格式错误处理。历史结果曾因输出字段约定不明确而只保存了解释；页面在这些旧条目的 `text` 为空时显示已有 `explanation`，不重复展示，也不改写历史数据。
+
+`GET /api/projects` 新增 `category`、`region`、`buyer`、`procurement_stage`、`demand_type`、`followup_stage` 筛选。关键截止使用有来源且没有未解决冲突的提交节点，不把获取文件截止当投标截止。
+
+采购需求目录支持 `published_days=0..365`（0 为不限），按上海时区的公告发布日期统计今天及此前 N−1 个日历日；缺失、无效或未来发布日期不进入限定区间。`sort=published` 在分页前按发布日期降序排列，缺失日期排在最后；`updated`、`deadline` 排序继续支持。`GET /api/dashboard` 的 `active_demand_counts` 返回当前有效项目按阅读 `demand_type` 分类的计数；“已研判”使用 `ai_counts.succeeded`，对应列表筛选 `ai_status=succeeded`。
+
+| 方法与路径（以下均以 `/api/projects/{project_id}` 为前缀） | 输入与行为 |
+| --- | --- |
+| `GET /followup` | 返回用户跟进状态及当前建议计划；查看不等于采用计划 |
+| `PUT /followup` | 更新阶段、跟进选择、负责人、下一步、结束原因；提交须填写实际时间及渠道 |
+| `POST /followup/adopt` | `{plan_id?,owner?}` 采用服务器计划，重复采用不覆盖用户操作 |
+| `PATCH /followup/tasks/{task_id}` | 编辑任务负责人、时间、状态、完成说明；跳过必须理由 |
+| `PATCH /followup/materials/{material_id}` | 编辑材料准备与核对状态，不自动形成外部提交 |
+| `POST /documents/supplement` | `{record_id,name,content_base64}`，本项目资料记录、PDF/DOCX/DOC/UTF-8 TXT、最多 12 MiB |
+| `GET /documents/{document_id}/uploaded-file` | 下载本项目用户补充文件的原始字节 |
+| `GET /reading/corrections` | 返回人工纠正历史 |
+| `POST /reading/corrections` | `{requirement_id,text,reason}`；要求 ID 必须存在，遗漏使用 `omission`，追加留痕并触发重新核对 |
+
+跟进阶段为 `evaluating|working|submitted|awaiting_result|finished`，跟进选择为 `following|paused|abandoned`，结束原因 `won|lost|abandoned|other`。材料状态为 `not_prepared|preparing|provided|pending_check|needs_supplement`；任务状态为 `todo|doing|done|skipped`。来源必办、路径条件、额外建议分别用 `required|conditional|suggested` 标识。
+
+工作台输入错误返回 400，项目、任务或材料不属于请求项目返回 404，进度冲突返回 409，HTTP 结构错误返回 422。用户不能通过提交自定义 plan/reading 把无来源任务冒充服务器生成的计划。采购资料变化标记复核并保留用户完成动作及提交记录。
+
 本文件是实现约定。采集系统与原报告只读。前后端实现分别由独立 worktree 完成。所有时间使用带时区 ISO 字符串，业务日期用 Asia/Shanghai。
 
 ## 运行
@@ -174,3 +202,21 @@ Investigation = {policy_version,status:'not_started'|'running'|'completed'|'limi
 ## 验收
 
 重复导入无重复；字段缺失不淘汰；疑似重复不合并；规则可恢复；模型未配置不伪造判断；失败可重试；正文/结构化重要字段/关联/配置变化使旧AI结果待复核；仅网页模板变化不触发AI；人工选择不被覆盖；选择过期方案拒绝；前端真实API并展示空/加载/失败状态；浏览器完成筛选、详情、选择/记录决定、配置和任务重试。
+## 采集管理接口（2026-10-16）
+
+原有接口保持兼容。新增接口均位于 `/api/collection`：
+
+| 请求 | 行为 |
+| --- | --- |
+| `GET /api/collection` | 返回接入状态、来源、最近采集运行、Windows 自动采集设置与平台当前任务 |
+| `POST /api/collection/run` | 输入 `{source_id?: string|null}`，异步执行全部启用来源或指定来源，返回 `{message, task}` |
+| `PATCH /api/collection/sources/{source_id}` | 输入 `{enabled: boolean}`，由采集控制入口原子更新单个来源 |
+| `PUT /api/collection/schedule` | 输入 `{enabled: boolean, at: "HH:MM"}`，由采集模块管理既有 Windows 每日任务 |
+
+状态返回 `{available, message, running, sources, runs, schedule, task}`。来源包含配置、最近成功/失败时间、最近错误及 `last_run`；执行历史含 `id/started_at/finished_at/status/stats`。`schedule` 包含 `available/registered/enabled/at/state/message`。
+
+状态另含 `import_connected:boolean`，表示当前平台导入路径与采集输出一致。模块可用但此值为 `false` 时，来源管理仍可使用，采集按钮禁用并引导到数据接入设置；不能把模块可用当作采集流程已连接。仅更改数据接入设置不会自动启动采集。
+
+`task` 含 `id/status/source_id/started_at/finished_at/error/log_tail/import_result`。状态为 `running/succeeded/partial/failed`；`import_result` 保留现有导入入口的统计。采集部分成功也导入已取得资料；导入失败须与采集结果分别说明。繁忙返回 409；缺失模块、无效来源和计划任务权限错误返回明确消息。控制接口不接受任意命令或任意来源 URL。
+
+`task.status=running` 时 `import_result` 也可已有结果：手动采集过程中持续导入原子发布的已提交快照。`inserted/updated` 累计本次任务的导入变更次数，`total/unchanged` 表示最近一次快照，不累计快照总行数。后续采集失败、超时或单个来源中断不会清除此前导入结果。采购列表和首页后台刷新，不以模型阅读/研判是否完成为出现条件。

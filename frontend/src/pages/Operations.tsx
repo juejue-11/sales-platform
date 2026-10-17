@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type { TableProps } from 'antd'
 import { CloudDownloadOutlined, DatabaseOutlined, ExperimentOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { StatusData, StatusJob } from '../types'
+import type { ReadingJob, StatusData, StatusJob } from '../types'
 import { ErrorBlock, formatDate, formatFreshness, LoadingBlock } from '../components/Common'
 
 const { Title, Text, Paragraph } = Typography
@@ -93,6 +93,7 @@ export function OperationsPage() {
   if (error || !status) return <div className="page-stack"><ErrorBlock error={error} onRetry={() => void loadStatus()} /></div>
 
   const jobs = status.jobs ?? []
+  const readingJobs = status.reading_jobs ?? []
   const jobColumns: TableProps<StatusJob>['columns'] = [
     { title: '任务', dataIndex: 'id', key: 'id', width: 84, render: (value: number) => `#${value}` },
     { title: '项目', dataIndex: 'project_id', key: 'project_id', width: 90, render: (value: number | null) => value ? <Button type="link" onClick={() => navigate(`/projects/${value}`)}>项目 #{value}</Button> : '批量任务' },
@@ -102,10 +103,20 @@ export function OperationsPage() {
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150, render: (value: string) => formatDate(value, true) },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: (value: string) => formatDate(value, true) },
   ]
+  const readingJobColumns: TableProps<ReadingJob>['columns'] = [
+    { title: '阅读任务', dataIndex: 'id', key: 'id', width: 90, render: (value: number) => `#${value}` },
+    { title: '采购项目', dataIndex: 'project_id', key: 'project_id', width: 120, render: (value: number) => <Button type="link" onClick={() => navigate(`/projects/${value}`)}>项目 #{value}</Button> },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: (value: string) => <Tag color={jobColor(value)}>{jobLabel(value)}</Tag> },
+    { title: '尝试次数', dataIndex: 'attempts', key: 'attempts', width: 90 },
+    { title: '失败说明', dataIndex: 'error', key: 'error', render: (value: string | null) => value ? <span title={value}>{value}</span> : <Text type="secondary">—</Text> },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: (value: string) => formatDate(value, true) },
+    { title: '操作', key: 'actions', width: 110, render: (_: unknown, record: ReadingJob) => <Button size="small" icon={<ReloadOutlined />} loading={action === `reading-${record.project_id}`} onClick={() => void run(`reading-${record.project_id}`, () => api.refreshReading(record.project_id))}>重试该项目</Button> },
+  ]
 
   return (
     <div className="page-stack operations-page">
       <div className="page-heading"><div><Title level={2}>处理状态</Title><Paragraph>确认资料是否同步，以及 AI 分析是否完成。</Paragraph></div><Space wrap><Text type="secondary">{formatFreshness(status.data_updated_at)}</Text><Button icon={<ReloadOutlined />} onClick={() => void loadStatus()}>刷新</Button></Space></div>
+      <Alert type="info" showIcon icon={<DatabaseOutlined />} message="来源采集已独立管理" description="在信息采集中查看来源访问状态、启动采集并设置每日自动任务。" action={<Button size="small" type="link" onClick={() => navigate('/collection')}>打开信息采集</Button>} />
       {status.import_error && <Alert type="error" showIcon message="最近一次导入未成功" description={status.import_error} />}
       {status.file_stale && <Alert type="warning" showIcon message="采集文件超过 48 小时未更新，或文件不存在" description="请检查采集系统和导入路径。" />}
       {status.import_pending && <Alert type="info" showIcon message="新采集数据尚未导入" description="可点击“立即导入 records.jsonl”更新项目。" />}
@@ -119,6 +130,9 @@ export function OperationsPage() {
       {!status.ai_configured && <Alert type="info" showIcon message="模型尚未配置，可先查看和处理项目" action={<Button size="small" type="link" onClick={() => navigate('/settings')}>配置模型</Button>} />}
       <Card className="task-ledger" title={<span>分析任务 <Text type="secondary">（最近 {jobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">每 10 秒自动更新</span>}>
         {jobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有分析任务，配置模型后会开始处理候选项目" /> : <Table<StatusJob> rowKey="id" columns={jobColumns} dataSource={jobs} size="middle" scroll={{ x: 820 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
+      </Card>
+      <Card className="task-ledger reading-job-ledger" title={<span>采购阅读任务 <Text type="secondary">（最近 {readingJobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">阅读失败可按项目重试</span>}>
+        {readingJobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采购阅读任务" /> : <Table<ReadingJob> rowKey="id" columns={readingJobColumns} dataSource={readingJobs} size="middle" scroll={{ x: 920 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
       </Card>
       <Collapse className="source-details" items={[
         { key: 'coverage', label: '查看来源覆盖与采集说明', children: status.source_notes ? <Paragraph className="source-note-text">{status.source_notes}</Paragraph> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未读取来源说明" /> },

@@ -54,8 +54,9 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
 .app-content { min-width: 0; padding: 28px 30px 42px; }
 .workspace-home .app-header { display: none; }
 .workspace-home .app-content { padding-top: 16px; }
+.workspace-record { --project-header-height: 44px; }
 .workspace-record, .workspace-record .app-content { background: #FFFFFF; }
-.workspace-record .app-header { height: 44px; }
+.workspace-record .app-header { position: sticky; top: 0; z-index: 6; height: var(--project-header-height); }
 .workspace-record .app-content { padding-top: 16px; }
 @media (max-width: 760px) {
   .workspace-home .app-header { display: flex; height: 40px; }
@@ -93,30 +94,6 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
 .history-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .mobile-drawer .ant-drawer-body { padding: 0; background: #172D48; }
 .drawer-close { margin: 18px 24px; }
-/* Configuration is a working form: roomy capability notes, compact controls. */
-.settings-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, .85fr); gap: 22px; align-items: start; }
-.settings-main, .settings-side { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-.settings-page .settings-panel { border: 1px solid var(--line); border-radius: 7px; box-shadow: none; }
-.settings-page .settings-panel .ant-card-head { background: #FFFFFF; }
-.settings-page .model-panel { border-top: 3px solid var(--accent); }
-.settings-section-nav { display: flex; flex-wrap: wrap; gap: 22px; padding: 0 0 16px; border-bottom: 1px solid #D1DEE0; }
-.settings-section-nav a { color: var(--muted); font-size: 13px; }
-.settings-section-nav a:hover { color: var(--accent); }
-.settings-analysis-goal { margin: 0; }
-.settings-analysis-goal .ant-alert-description { display: flex; flex-direction: column; gap: 4px; }
-.settings-page .ant-form-item-label { padding-bottom: 7px; }
-.settings-page .ant-form-item-label label { color: #39545B; font-size: 13px; }
-.settings-page .ant-form-item { margin-bottom: 20px; }
-.settings-page .ant-form-item-extra { margin-top: 5px; color: #788C91; font-size: 11px; }
-.settings-intro { max-width: 64ch; color: var(--muted); font-size: 13px; line-height: 1.8; }
-.settings-help { padding: 12px 14px; color: #7C602B; background: #FBF7ED; border-left: 2px solid #CCA35E; font-size: 12px; line-height: 1.8; }
-.settings-help p { margin: 0; }
-.settings-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
-.settings-switch-row p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
-.clear-key-label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.settings-alert { margin-top: 18px; }
-.settings-key-state { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; font-size: 12px; }
-.settings-bottom-note { margin: 0; color: var(--muted); font-size: 12px; }
 /* Operations keeps the task ledger in view, with source details below it. */
 .operation-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: #FFFFFF; border: 1px solid var(--line); border-radius: 5px; }
 .operation-stat-card { padding: 18px 20px; min-width: 0; }
@@ -142,7 +119,6 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
   .sidebar-bottom { left: 14px; right: 14px; justify-content: center; }
   .app-content { padding: 24px; }
   .app-header { padding: 0 24px; }
-  .settings-grid { grid-template-columns: minmax(0, 1fr) minmax(300px, .85fr); gap: 18px; }
 }
 @media (max-width: 840px) {
   .desktop-sider { display: none; }
@@ -151,8 +127,6 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
   .header-context time { display: none; }
   .header-location { gap: 9px; }
   .app-content { padding: 22px 16px 30px; }
-  .settings-grid { grid-template-columns: 1fr; }
-  .settings-main { order: 0; }
   .operation-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .operation-stat-card:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
   .operation-stat-card:nth-child(4) { border-top: 1px solid var(--line); }
@@ -170,11 +144,40 @@ h2.ant-typography, h3.ant-typography, h4.ant-typography { font-family: var(--fon
   .operation-stat-value { font-size: 16px; }
   .operation-toolbar .ant-space { gap: 8px !important; }
   .operation-toolbar .ant-btn { font-size: 12px; }
-  .settings-section-nav { gap: 15px; }
-  .settings-page .ant-card-body { padding: 18px; }
   .structured-field { grid-template-columns: 1fr; gap: 3px; }
   .history-facts { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Application chrome follows the procurement workbench reference. */
+:root { --ink:#102747; --accent:#2167ff; --navy:#102b49; --blue:#2167ff; --surface:#f5f8fc; }
+.app-sider.ant-layout-sider { background:#102b49; }
+.app-sider .ant-layout-sider-children { background:linear-gradient(150deg,#0c233e,#112e4e); }
+.brand-block { min-height:68px; padding:16px 22px; gap:10px; }
+.brand-copy strong { font-size:18px; font-weight:700; white-space:nowrap; }
+.sidebar-nav { gap:9px; padding:15px 12px; }
+.nav-item { min-height:46px; padding:12px 15px; gap:16px; border-radius:5px; }
+.nav-copy strong { font-weight:400; font-size:14px; }
+.nav-item-active { background:#173f88; box-shadow:inset 3px 0 #2879ff; }
+.nav-item-active .nav-copy strong { font-weight:600; }
+.nav-item:focus-visible { outline-color:#82afff; }
+.mobile-drawer .ant-drawer-body { background:#102b49; }
+.app-header,.workspace-record .app-header { position:sticky; top:0; z-index:10; height:52px; padding:0 28px; border-bottom:1px solid #eaf0f7; box-shadow:0 2px 10px #28457503; }
+.workspace-home .app-header { display:flex; }
+.header-location { gap:14px; font-size:12px; }
+.header-location a { color:#8090a8; }
+.header-chevron { color:#b4bfd1; font-size:10px; }
+.shell-menu-button.ant-btn { color:#526c8d; padding-inline:0; margin-right:8px; }
+.header-context { gap:12px; }
+.header-search { width:300px; }
+.header-search .ant-input-affix-wrapper,.header-search .ant-input-search-button { border-color:#e5ebf5; background:#fcfdff; box-shadow:none; }
+.workspace-avatar { display:grid; place-items:center; width:30px; height:30px; margin-left:12px; border-radius:50%; background:#2167ff; color:white; font-size:13px; }
+.workspace-name { color:#233e60; font-size:12px; }
+.workspace-record,.workspace-record .app-content { --project-header-height:52px; background:#f5f8fc; }
+.app-content,.workspace-record .app-content { padding:22px 30px 40px; }
+.workspace-home .app-content { padding-top:24px; }
+@media (max-width:1100px) { .brand-block { padding-inline:0; justify-content:center; } .app-content,.workspace-record .app-content { padding:22px; } .header-search { width:230px; } }
+@media (max-width:840px) { .app-header,.workspace-record .app-header { padding-inline:16px; } .app-content,.workspace-record .app-content { padding:18px 16px 30px; } .header-search { width:200px; } .workspace-name { display:none; } .mobile-drawer .brand-block { padding-inline:22px; justify-content:flex-start; } }
+@media (max-width:600px) { .header-context { display:none; } .header-location { gap:10px; } .header-location > span:first-of-type { display:inline; } .header-location a { display:none; } .header-location a + .header-chevron { display:none; } .workspace-home .app-header { height:52px; } }

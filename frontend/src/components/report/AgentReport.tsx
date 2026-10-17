@@ -1,5 +1,6 @@
 import { Alert, Table, Tag, Typography } from 'antd'
 import { useId } from 'react'
+import { ExpandableText } from '../ExpandableText'
 import type { ReactNode } from 'react'
 import type {
   AgentOpportunity,
@@ -19,6 +20,8 @@ export interface AgentReportProps {
   /** Let the detail page reuse its existing record/document/source citation renderer. */
   renderEvidence?: (evidence: AgentReportBlockEvidence, key: string) => ReactNode
   className?: string
+  /** Put risks and actionable opportunities before the detailed report. */
+  overviewFirst?: boolean
 }
 
 const gapStatusMeta: Record<AgentReportGapStatus, { label: string; color?: string }> = {
@@ -64,7 +67,7 @@ function EvidenceList({ evidence, renderEvidence }: { evidence: AgentReportBlock
 
 function ReportBlockView({ block, renderEvidence }: { block: AgentReportBlock; renderEvidence?: AgentReportProps['renderEvidence'] }) {
   if (block.type === 'paragraph') {
-    return <div className="agent-report-block agent-report-paragraph"><Paragraph>{block.text || '—'}</Paragraph><EvidenceList evidence={block.evidence ?? []} renderEvidence={renderEvidence} /></div>
+    return <div className="agent-report-block agent-report-paragraph"><ExpandableText text={block.text || '—'} limit={280} /><EvidenceList evidence={block.evidence ?? []} renderEvidence={renderEvidence} /></div>
   }
   if (block.type === 'list') {
     return <div className="agent-report-block agent-report-list"><ul>{(block.items ?? []).map((item, index) => <li key={`${item.text}-${index}`}><span>{item.text || '—'}</span><EvidenceList evidence={item.evidence ?? []} renderEvidence={renderEvidence} /></li>)}</ul></div>
@@ -100,17 +103,18 @@ function GapCard({ gap }: { gap: AgentReportGap }) {
   )
 }
 
-export function AgentReport({ report, renderEvidence, className = '' }: AgentReportProps) {
+export function AgentReport({ report, renderEvidence, className = '', overviewFirst = false }: AgentReportProps) {
   const reportId = useId().replace(/:/g, '')
   const headingId = `${reportId}-heading`
   const opportunitiesHeadingId = `${reportId}-opportunities-heading`
   const gapsHeadingId = `${reportId}-gaps-heading`
+  const sections = (report.sections?.length > 0 && <div className="agent-report-sections">{report.sections.map((section, sectionIndex) => <section className="agent-report-section" key={`${section.id || 'section'}-${sectionIndex}`}><h3>{section.title || '未命名章节'}</h3>{(section.blocks ?? []).map((block, blockIndex) => <ReportBlockView block={block} renderEvidence={renderEvidence} key={`${section.id || sectionIndex}-${block.type}-${blockIndex}`} />)}</section>)}</div>)
+  const opportunities = (report.opportunities?.length > 0 && <section className="agent-report-opportunities" aria-labelledby={opportunitiesHeadingId}><div className="agent-report-subheading"><h3 id={opportunitiesHeadingId}>机会判断</h3><Text type="secondary">明确采购与潜在线索分开显示</Text></div><div className="agent-report-opportunity-list">{report.opportunities.map((opportunity, index) => <OpportunityCard key={`${opportunity.id || opportunity.title}-${index}`} opportunity={opportunity} renderEvidence={renderEvidence} />)}</div></section>)
+  const gaps = (report.gaps?.length > 0 && <section className="agent-report-gaps" aria-labelledby={gapsHeadingId}><div className="agent-report-subheading"><h3 id={gapsHeadingId}>信息缺口</h3><Text type="secondary">状态来自资料读取与适用性判断</Text></div><div className="agent-report-gap-list">{report.gaps.map((gap, index) => <GapCard gap={gap} key={`${gap.id || gap.description}-${index}`} />)}</div></section>)
   return (
-    <section className={`agent-report ${className}`.trim()} aria-labelledby={headingId}>
-      <div className="agent-report-heading"><div><h2 id={headingId}>Agent 研判报告</h2><p>按本项目实际情况组织的章节、机会判断与证据。</p></div></div>
-      {report.sections?.length > 0 && <div className="agent-report-sections">{report.sections.map((section, sectionIndex) => <section className="agent-report-section" key={`${section.id || 'section'}-${sectionIndex}`}><h3>{section.title || '未命名章节'}</h3>{(section.blocks ?? []).map((block, blockIndex) => <ReportBlockView block={block} renderEvidence={renderEvidence} key={`${section.id || sectionIndex}-${block.type}-${blockIndex}`} />)}</section>)}</div>}
-      {report.opportunities?.length > 0 && <section className="agent-report-opportunities" aria-labelledby={opportunitiesHeadingId}><div className="agent-report-subheading"><h3 id={opportunitiesHeadingId}>机会判断</h3><Text type="secondary">明确采购与潜在线索分开显示</Text></div><div className="agent-report-opportunity-list">{report.opportunities.map((opportunity, index) => <OpportunityCard key={`${opportunity.id || opportunity.title}-${index}`} opportunity={opportunity} renderEvidence={renderEvidence} />)}</div></section>}
-      {report.gaps?.length > 0 && <section className="agent-report-gaps" aria-labelledby={gapsHeadingId}><div className="agent-report-subheading"><h3 id={gapsHeadingId}>信息缺口</h3><Text type="secondary">状态来自资料读取与适用性判断</Text></div><div className="agent-report-gap-list">{report.gaps.map((gap, index) => <GapCard gap={gap} key={`${gap.id || gap.description}-${index}`} />)}</div></section>}
+    <section className={`agent-report ${overviewFirst ? 'agent-report-overview-first' : ''} ${className}`.trim()} aria-labelledby={headingId}>
+      <div className="agent-report-heading"><div><h2 id={headingId}>{overviewFirst ? '风险与行动建议' : 'Agent 研判报告'}</h2>{!overviewFirst && <p>按本项目实际情况组织的章节、机会判断与证据。</p>}</div></div>
+      {overviewFirst ? <>{gaps}{opportunities}{sections}</> : <>{sections}{opportunities}{gaps}</>}
       {!report.sections?.length && !report.opportunities?.length && !report.gaps?.length && <Alert type="info" showIcon message="本次报告没有可展示的内容" />}
     </section>
   )

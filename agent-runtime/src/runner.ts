@@ -15,6 +15,13 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+  RuntimeBoundaryError,
+  StreamBoundaryTrace,
+  parseStrictToolArguments,
+  validateFinalReport,
+  type BoundaryCode,
+} from "./json-boundary.js";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -111,6 +118,8 @@ const RPC_ERROR_CODES = new Set([
   "source_unreadable",
   "relation_unconfirmed",
 ]);
+const READING_SYSTEM_INSTRUCTION =
+  "本次任务是采购资料阅读，不是市场研判。只依据 host 传入的 versioned procurement material，逐段覆盖公告正文和附件，输出阅读协议要求的采购说明 JSON；不得调用工具、编造来源、合并不同包或把获取截止与提交截止合并。";
 const MARKET_SYSTEM_INSTRUCTION =
   "默认判断范围是市场关注价值，不是企业资格：保留正文已知事实，识别有依据的潜在线索，按实际影响说明缺口和下一步；客户关注偏好只调整重点，用户自填企业资料只用于其能够支持的具体匹配，不得推断未提供的能力；不按公告类别套固定分析模板。";
 const DUPLEX_SYSTEM_INSTRUCTION =
@@ -162,6 +171,7 @@ export interface RuntimeLimits {
 
 export interface RuntimeRequest {
   protocol: 1 | 2;
+  task_kind: "market" | "reading";
   config: RuntimeConfig;
   messages: RuntimeMessage[];
   context: RuntimeContext;
@@ -188,7 +198,9 @@ interface ProgressEvent {
 interface ResultEvent {
   type: "result";
   engine: "pi_sdk";
+  task_kind: "market" | "reading";
   content: string;
+  finish_reason: "stop";
   usage: RuntimeUsage;
 }
 
@@ -198,6 +210,11 @@ interface ErrorEvent {
     | "INVALID_INPUT"
     | "MODEL_CONFIG"
     | "MODEL_ERROR"
+    | "MODEL_FORMAT_ERROR"
+    | "STREAM_INTERRUPTED"
+    | "TOOL_ARGUMENT_JSON"
+    | "TOOL_SCHEMA"
+    | "TOOL_PARSER_ERROR"
     | "OUTPUT_TOKEN_LIMIT"
     | "TIMEOUT"
     | "TURN_LIMIT"
@@ -418,9 +435,14 @@ function parseRequest(value: unknown): RuntimeRequest {
     : explicitCompanyProfilePresent && derivedCompanyProfilePresent;
   const relatedProjects = normalizeRecordList(context.related_projects, "context.related_projects");
   const research = normalizeResearchContext(context.research);
+  const taskKind = input.task_kind === undefined ? "market" : input.task_kind;
+  if (taskKind !== "market" && taskKind !== "reading") {
+    throw new ProtocolError("invalid task_kind");
+  }
 
   return {
     protocol: input.protocol as 1 | 2,
+    task_kind: taskKind,
     config: { base_url: baseUrl, model, api_key: apiKey },
     messages,
     context: {
@@ -1038,6 +1060,52 @@ function validateSearchResearchContent(value: unknown): SearchResearchContentArg
   };
 }
 
+function validateRawToolSchema(toolName: string, value: unknown): void {
+  try {
+    switch (toolName) {
+      case "read_project_records": {
+        const args = assertKnownFields(value, ["record_id", "query"]);
+        if (args.record_id !== undefined && (typeof args.record_id !== "string" && typeof args.record_id !== "number")) {
+          throw new ToolArgumentError();
+        }
+        if (args.query !== undefined && typeof args.query !== "string") throw new ToolArgumentError();
+        return;
+      }
+      case "read_company_capability": {
+        const args = assertKnownFields(value, ["topic"]);
+        if (args.topic !== undefined && typeof args.topic !== "string") throw new ToolArgumentError();
+        return;
+      }
+      case "read_related_records": {
+        const args = assertKnownFields(value, ["project_id"]);
+        if (args.project_id !== undefined && (typeof args.project_id !== "string" && typeof args.project_id !== "number")) {
+          throw new ToolArgumentError();
+        }
+        return;
+      }
+      case "fetch_project_documents":
+        validateFetchProjectDocuments(value);
+        return;
+      case "search_project_sources":
+        validateSearchProjectSources(value);
+        return;
+      case "read_research_source":
+        validateReadResearchSource(value);
+        return;
+      case "assess_source_relation":
+        validateAssessSourceRelation(value);
+        return;
+      case "search_research_content":
+        validateSearchResearchContent(value);
+        return;
+      default:
+        throw new ToolArgumentError();
+    }
+  } catch {
+    throw new RuntimeBoundaryError("TOOL_SCHEMA", "Tool arguments did not satisfy the runtime schema.", { tool_name: toolName });
+  }
+}
+
 function invalidResearchToolResult(source: string) {
   return { ...textResult({ status: "tool_invalid", error: "invalid_arguments" }, source), isError: true };
 }
@@ -1474,7 +1542,31 @@ function modelDefinition(config: RuntimeConfig, maxOutputTokens: number): Model<
   };
 }
 
+function isRetryableTransportFailure(message: AssistantMessage | undefined, trace: StreamBoundaryTrace): boolean {
+  if (trace.hasFinishReason) return false;
+  if (!message) return true;
+  if (message.stopReason !== "error") return false;
+  const detail = `${message.errorMessage ?? ""} ${message.rawStopReason ?? ""}`;
+  return /fetch failed|network|econn|etimedout|eai_again|socket|stream ended|stream closed|connection reset|connection closed|request aborted|unexpected end|premature|eof|incomplete/iu.test(detail);
+}
+
 function normalizeError(error: unknown): ErrorEvent {
+  if (error instanceof RuntimeBoundaryError) {
+    const messages: Record<BoundaryCode, string> = {
+      MODEL_FORMAT_ERROR: "The model returned invalid final JSON.",
+      MODEL_ERROR: "The model request failed.",
+      STREAM_INTERRUPTED: "The model stream ended before a complete response.",
+      OUTPUT_TOKEN_LIMIT: "The model output token limit was reached.",
+      TURN_LIMIT: "The model turn limit was exceeded.",
+      TOOL_LIMIT: "The tool call limit was exceeded.",
+      TIMEOUT: "The runtime deadline was exceeded.",
+      RPC_ERROR: "The tool bridge failed.",
+      TOOL_ARGUMENT_JSON: "The model returned invalid JSON tool arguments.",
+      TOOL_SCHEMA: "The model returned tool arguments outside the runtime schema.",
+      TOOL_PARSER_ERROR: "The model tool-call stream could not be assembled safely.",
+    };
+    return { type: "error", code: error.code, message: messages[error.code] };
+  }
   if (error instanceof Error && error.message === "OUTPUT_TOKEN_LIMIT") {
     return { type: "error", code: "OUTPUT_TOKEN_LIMIT", message: "The model output token limit was reached." };
   }
@@ -1484,7 +1576,7 @@ function normalizeError(error: unknown): ErrorEvent {
   if (error instanceof LimitError) {
     if (error.kind === "timeout") return { type: "error", code: "TIMEOUT", message: "The runtime deadline was exceeded." };
     if (error.kind === "turn") return { type: "error", code: "TURN_LIMIT", message: "The model turn limit was exceeded." };
-    if (error.kind === "output") return { type: "error", code: "MODEL_ERROR", message: "The model request failed." };
+    if (error.kind === "output") return { type: "error", code: "OUTPUT_TOKEN_LIMIT", message: "The model output token limit was reached." };
     return { type: "error", code: "TOOL_LIMIT", message: "The tool call limit was exceeded." };
   }
   if (error instanceof RpcError) {
@@ -1500,6 +1592,36 @@ function normalizeError(error: unknown): ErrorEvent {
     return { type: "error", code: "MODEL_ERROR", message: "The model request failed." };
   }
   return { type: "error", code: "INTERNAL", message: "The agent runtime failed." };
+}
+
+function traceCodeForFailure(
+  error: unknown,
+  limitError: LimitError | undefined,
+  rpcError: RpcError | undefined,
+): BoundaryCode {
+  if (error instanceof RuntimeBoundaryError) return error.code;
+  if (error instanceof Error && error.message === "OUTPUT_TOKEN_LIMIT") return "OUTPUT_TOKEN_LIMIT";
+  if (limitError) {
+    if (limitError.kind === "timeout") return "TIMEOUT";
+    if (limitError.kind === "turn") return "TURN_LIMIT";
+    if (limitError.kind === "tool") return "TOOL_LIMIT";
+    return "OUTPUT_TOKEN_LIMIT";
+  }
+  if (rpcError || error instanceof RpcError) return "RPC_ERROR";
+  return "MODEL_ERROR";
+}
+
+function traceFailureDetails(
+  error: unknown,
+  assistant: AssistantMessage | undefined,
+): Record<string, unknown> {
+  return {
+    error_name: error instanceof Error ? error.name : typeof error,
+    error_message: error instanceof Error ? error.message : String(error),
+    sdk_error_message: assistant?.errorMessage,
+    stop_reason: assistant?.stopReason,
+    raw_stop_reason: assistant?.rawStopReason,
+  };
 }
 
 export async function runRequest(
@@ -1539,14 +1661,20 @@ export async function runRequest(
   const systemPrompt = [
     request.messages[0].content,
     runtimeContextInstruction(request.context),
-    MARKET_SYSTEM_INSTRUCTION,
-    request.protocol === DUPLEX_PROTOCOL_VERSION ? DUPLEX_SYSTEM_INSTRUCTION : undefined,
-    `本次最多 ${request.limits.max_turns} 轮模型调用，最后一轮专用于生成完整 JSON 报告，届时工具将关闭。已有事实可支持结论时提前结束；不得为了凑齐潜在线索追查页面导航中的无关公告。`,
+    request.task_kind === "reading" ? READING_SYSTEM_INSTRUCTION : MARKET_SYSTEM_INSTRUCTION,
+    request.task_kind === "market" && request.protocol === DUPLEX_PROTOCOL_VERSION ? DUPLEX_SYSTEM_INSTRUCTION : undefined,
+    request.task_kind === "reading"
+      ? `本次最多 ${request.limits.max_turns} 轮模型调用，最后输出完整采购阅读 JSON；不得调用任何工具。`
+      : `本次最多 ${request.limits.max_turns} 轮模型调用，最后一轮专用于生成完整 JSON 报告，届时工具将关闭。已有事实可支持结论时提前结束；不得为了凑齐潜在线索追查页面导航中的无关公告。`,
   ].filter((value): value is string => Boolean(value)).join("\n\n");
   const resourceLoader = emptyResourceLoader(systemPrompt);
   let limitError: LimitError | undefined;
   let rpcError: RpcError | undefined;
   let abortSession: (() => void) | undefined;
+  let boundaryError: RuntimeBoundaryError | undefined;
+  let toolRepairAttempts = 0;
+  const handledInvalidToolCalls = new Set<string>();
+  const streamTrace = new StreamBoundaryTrace();
   const reserveToolCall = (): boolean => {
     if (usage.tool_calls >= request.limits.max_tool_calls) {
       limitError ??= new LimitError("tool");
@@ -1556,13 +1684,15 @@ export async function runRequest(
     usage.tool_calls += 1;
     return true;
   };
-  const tools = makeTools(request.context, reserveToolCall, request.protocol === DUPLEX_PROTOCOL_VERSION ? rpc : undefined);
+  const tools = request.task_kind === "reading"
+    ? []
+    : makeTools(request.context, reserveToolCall, request.protocol === DUPLEX_PROTOCOL_VERSION ? rpc : undefined);
   const { session } = await createAgentSession({
     cwd: "sales-screening-agent",
     agentDir: "sales-screening-agent",
     modelRuntime,
     model: selectedModel,
-    thinkingLevel: selectedModel.reasoning ? "low" : "off",
+    thinkingLevel: selectedModel.reasoning && request.task_kind !== "reading" ? "low" : "off",
     settingsManager,
     sessionManager,
     resourceLoader,
@@ -1575,13 +1705,78 @@ export async function runRequest(
   // createAgentSession options. This public SDK API is the authoritative
   // activation path when a session starts from seeded messages.
   session.setActiveToolsByName(tools.map((tool) => tool.name));
-  if (new URL(request.config.base_url).hostname === "api.deepseek.com") {
-    // The official endpoint supports JSON Output together with thinking and
-    // tools. Keep arbitrary compatible providers on their existing contract.
-    session.agent.onPayload = (payload) => isObject(payload)
-      ? { ...payload, response_format: { type: "json_object" } }
-      : undefined;
-  }
+  const previousOnPayload = session.agent.onPayload;
+  session.agent.onPayload = async (payload, modelValue) => {
+    const transformed = await previousOnPayload?.(payload, modelValue);
+    const effectivePayload = transformed === undefined ? payload : transformed;
+    if (new URL(request.config.base_url).hostname === "api.deepseek.com" && isObject(effectivePayload)) {
+      // The official endpoint supports JSON Output together with thinking and
+      // tools. Keep arbitrary compatible providers on their existing contract.
+      const deepSeekPayload = { ...effectivePayload, response_format: { type: "json_object" } };
+      streamTrace.captureRequestMetadata(deepSeekPayload);
+      return deepSeekPayload;
+    }
+    streamTrace.captureRequestMetadata(effectivePayload);
+    return effectivePayload;
+  };
+  const previousOnProviderStreamEvent = session.agent.onProviderStreamEvent;
+  session.agent.onProviderStreamEvent = async (data, modelValue) => {
+    // Capture before any extension callback can inspect or mutate the object.
+    // pi-ai documents this as the parsed provider event, not raw HTTP bytes.
+    streamTrace.captureProviderEvent(data);
+    await previousOnProviderStreamEvent?.(data, modelValue);
+  };
+  const previousBeforeToolCall = session.agent.beforeToolCall;
+  session.agent.beforeToolCall = async (toolContext, signal) => {
+    streamTrace.setAssistantMessage(toolContext.assistantMessage);
+    const rawArguments = streamTrace.readToolArguments(
+      toolContext.toolCall.id,
+      toolContext.toolCall.name,
+      toolContext.toolCall.arguments,
+    );
+    let invalid: RuntimeBoundaryError | undefined;
+    if (rawArguments instanceof RuntimeBoundaryError) {
+      invalid = rawArguments;
+    } else {
+      try {
+        // JSON.parse is deliberately applied to the raw concatenation. The SDK's
+        // parseStreamingJson result is only a UI/progressive value and may have
+        // silently supplied missing closing braces.
+        parseStrictToolArguments(rawArguments.raw);
+        validateRawToolSchema(toolContext.toolCall.name, rawArguments.value);
+      } catch (error) {
+        invalid = error instanceof RuntimeBoundaryError
+          ? error
+          : new RuntimeBoundaryError("TOOL_SCHEMA", "Tool arguments did not satisfy the runtime schema.", {
+            tool_name: toolContext.toolCall.name,
+          });
+      }
+    }
+    if (invalid) {
+      streamTrace.recordBoundary(invalid.code, {
+        tool_name: toolContext.toolCall.name,
+        tool_call_id: toolContext.toolCall.id,
+        attempt: toolRepairAttempts + 1,
+      });
+      handledInvalidToolCalls.add(toolContext.toolCall.id);
+      toolRepairAttempts += 1;
+      const terminate = toolRepairAttempts > 1;
+      if (terminate) {
+        boundaryError = invalid;
+        abortSession?.();
+      }
+      return {
+        block: true,
+        terminate,
+        reason: terminate
+          ? "Tool arguments remained invalid after one repair attempt."
+          : invalid.code === "TOOL_SCHEMA"
+            ? "invalid_request: tool arguments were outside the runtime schema; re-issue the tool call with complete arguments."
+            : "Tool arguments were invalid JSON or could not be assembled; re-issue the tool call with complete arguments.",
+      };
+    }
+    return previousBeforeToolCall?.(toolContext, signal);
+  };
 
   abortSession = () => {
     void session.abort();
@@ -1599,6 +1794,7 @@ export async function runRequest(
   let outputBytes = 0;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "turn_start") {
+      streamTrace.resetTurn();
       // A bounded investigation still needs one request to synthesize what
       // was learned. The SDK refreshes its tool loadout before each request.
       if (request.limits.max_turns === 1) {
@@ -1630,11 +1826,47 @@ export async function runRequest(
       }
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       lastRunAssistant = event.message;
+      streamTrace.setAssistantMessage(event.message);
       addUsage(usage, event.message);
     } else if (event.type === "tool_execution_start" && TOOL_NAME_SET.has(event.toolName)) {
       const tool = event.toolName as ToolName;
       emit(progress("tool_start", TOOL_PROGRESS_LABELS[tool], tool));
     } else if (event.type === "tool_execution_end" && TOOL_NAME_SET.has(event.toolName)) {
+      // SDK schema failures happen before beforeToolCall and therefore do not
+      // reach that hook. Count those failed preparations for the same one
+      // repair budget, while durationMs distinguishes them from a real tool
+      // execution that returned an error.
+      if (event.isError && event.durationMs === undefined && !handledInvalidToolCalls.has(event.toolCallId)) {
+        const rawArguments = streamTrace.readToolArguments(event.toolCallId, event.toolName);
+        let invalid: RuntimeBoundaryError | undefined;
+        if (rawArguments instanceof RuntimeBoundaryError) {
+          invalid = rawArguments;
+        } else {
+          try {
+            parseStrictToolArguments(rawArguments.raw);
+            validateRawToolSchema(event.toolName, rawArguments.value);
+          } catch (error) {
+            invalid = error instanceof RuntimeBoundaryError
+              ? error
+              : new RuntimeBoundaryError("TOOL_SCHEMA", "Tool arguments did not satisfy the runtime schema.", {
+                tool_name: event.toolName,
+              });
+          }
+        }
+        if (invalid) {
+          streamTrace.recordBoundary(invalid.code, {
+            tool_name: event.toolName,
+            tool_call_id: event.toolCallId,
+            attempt: toolRepairAttempts + 1,
+          });
+          handledInvalidToolCalls.add(event.toolCallId);
+          toolRepairAttempts += 1;
+          if (toolRepairAttempts > 1) {
+            boundaryError = invalid;
+            abortSession?.();
+          }
+        }
+      }
       const tool = event.toolName as ToolName;
       emit(progress("tool_end", TOOL_PROGRESS_LABELS[tool], tool, undefined, event.isError === true));
     }
@@ -1645,21 +1877,96 @@ export async function runRequest(
     void session.abort();
   }, request.limits.timeout_ms);
   try {
-    await session.prompt(prompt, { expandPromptTemplates: false, source: "rpc" });
-    if (limitError) throw limitError;
-    if (lastRunAssistant?.stopReason === "length") throw new Error("OUTPUT_TOKEN_LIMIT");
-    if (!lastRunAssistant || lastRunAssistant.stopReason !== "stop") throw new Error("MODEL_ERROR");
-    const content = session.getLastAssistantText()?.trim();
-    if (!content) throw new Error("NO_FINAL");
-    if (Buffer.byteLength(content, "utf8") > MAX_OUTPUT_BYTES || content.includes(request.config.api_key)) {
-      throw new Error("MODEL_ERROR");
+    let networkRetries = 0;
+    let content = "";
+    for (;;) {
+      lastRunAssistant = undefined;
+      streamTrace.resetTurn();
+      try {
+        await session.prompt(prompt, { expandPromptTemplates: false, source: "rpc" });
+      } catch (promptError) {
+        if (boundaryError) throw boundaryError;
+        if (limitError) throw limitError;
+        if (rpcError) throw rpcError;
+        const detail = promptError instanceof Error ? promptError.message : String(promptError);
+        const retryable = /fetch failed|network|econn|etimedout|eai_again|socket|stream ended|connection reset|connection closed|request aborted/iu.test(detail);
+        if (retryable && usage.tool_calls === 0 && usage.model_calls < request.limits.max_turns && networkRetries < 1) {
+          networkRetries += 1;
+          continue;
+        }
+        throw promptError;
+      }
+      if (boundaryError) throw boundaryError;
+      if (rpcError) throw rpcError;
+      if (limitError) throw limitError;
+      const runAssistant = lastRunAssistant as AssistantMessage | undefined;
+      if (runAssistant?.stopReason === "length") throw new Error("OUTPUT_TOKEN_LIMIT");
+      if (!runAssistant || runAssistant.stopReason !== "stop") {
+        if (usage.tool_calls === 0 && usage.model_calls < request.limits.max_turns && networkRetries < 1
+          && isRetryableTransportFailure(runAssistant, streamTrace)) {
+          networkRetries += 1;
+          continue;
+        }
+        if (!streamTrace.hasFinishReason && isRetryableTransportFailure(runAssistant, streamTrace)) {
+          throw new RuntimeBoundaryError("STREAM_INTERRUPTED", "The model stream ended before a complete response.", {
+            stop_reason: runAssistant?.stopReason,
+            raw_stop_reason: runAssistant?.rawStopReason,
+          });
+        }
+        throw new Error("MODEL_ERROR");
+      }
+      content = session.getLastAssistantText()?.trim() ?? "";
+      if (Buffer.byteLength(content, "utf8") > MAX_OUTPUT_BYTES || content.includes(request.config.api_key)) {
+        throw new Error("MODEL_ERROR");
+      }
+      const contentParserError = streamTrace.compareFinalContent(content);
+      if (contentParserError) {
+        streamTrace.recordBoundary(contentParserError.code, contentParserError.details);
+        throw contentParserError;
+      }
+      try {
+        validateFinalReport(content);
+      } catch (error) {
+        if (!(error instanceof RuntimeBoundaryError)) throw error;
+        // Keep the original draft available to the host for its one strict
+        // correction pass; the trace records the format failure and position.
+        await streamTrace.write(error.code, {
+          ...error.details,
+          stop_reason: runAssistant.stopReason,
+          raw_stop_reason: runAssistant.rawStopReason,
+        }, request.config.api_key);
+      }
+      if (streamTrace.hasBoundaryEvents) {
+        await streamTrace.write(streamTrace.latestBoundaryCode ?? "TOOL_ARGUMENT_JSON", {
+          outcome: "tool_repaired_before_execution",
+          stop_reason: runAssistant.stopReason,
+          raw_stop_reason: runAssistant.rawStopReason,
+        }, request.config.api_key);
+      }
+      break;
     }
     emit(progress("completed", "完成分析"));
-    return { type: "result", engine: "pi_sdk", content, usage };
+    return { type: "result", engine: "pi_sdk", task_kind: request.task_kind,
+      content, finish_reason: "stop", usage };
   } catch (error) {
     // Preserve billed usage even when no acceptable final report was emitted.
     // Successful requests already return these counters in their result.
     if (usage.model_calls > 0) emit({ type: "usage", usage: { ...usage } });
+    const failedAssistant = lastRunAssistant as AssistantMessage | undefined;
+    if (error instanceof RuntimeBoundaryError) {
+      await streamTrace.write(error.code, {
+        ...error.details,
+        ...traceFailureDetails(error, failedAssistant),
+      }, request.config.api_key);
+      throw error;
+    }
+    // Every post-session failure gets its own original runtime classification.
+    // Repaired tool boundaries remain in boundary_events; they must not turn a
+    // later provider error, limit, or RPC failure into a misleading parser code.
+    await streamTrace.write(traceCodeForFailure(error, limitError, rpcError), {
+      outcome: "runtime_failure",
+      ...traceFailureDetails(error, failedAssistant),
+    }, request.config.api_key);
     if (limitError) throw limitError;
     if (rpcError) throw rpcError;
     if (error instanceof RpcError) throw error;

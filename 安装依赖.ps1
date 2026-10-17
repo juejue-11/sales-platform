@@ -11,6 +11,28 @@ if (-not (Test-Path -LiteralPath $screeningPython)) {
 }
 & $screeningPython -m pip install -r (Join-Path $screeningRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw '后端依赖安装失败。' }
+# Keep the collector independently runnable while preparing it from one entry.
+$collectorRoot = if ($env:SCREENING_COLLECTOR_ROOT) { [System.IO.Path]::GetFullPath($env:SCREENING_COLLECTOR_ROOT) } else { Join-Path (Split-Path -Parent $screeningRoot) '销售平台信息采集系统' }
+$collectorRequirements = Join-Path $collectorRoot 'requirements.txt'
+if (Test-Path -LiteralPath $collectorRequirements) {
+    $collectorPythonFile = Join-Path $collectorRoot 'data\python_path.txt'
+    if ($env:SCREENING_COLLECTOR_PYTHON) { $collectorPython = $env:SCREENING_COLLECTOR_PYTHON }
+    elseif (Test-Path -LiteralPath $collectorPythonFile) { $collectorPython = (Get-Content -LiteralPath $collectorPythonFile -Raw -Encoding UTF8).Trim() }
+    else {
+        $collectorPython = Join-Path $collectorRoot '.venv\Scripts\python.exe'
+        if (-not (Test-Path -LiteralPath $collectorPython)) {
+            & $screeningPython -m venv (Join-Path $collectorRoot '.venv')
+            if ($LASTEXITCODE -ne 0) { throw '创建采集模块Python环境失败。' }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $collectorPython)) { throw '采集模块Python路径无效，请检查其 data\python_path.txt 或 SCREENING_COLLECTOR_PYTHON。' }
+    & $collectorPython -m pip install -r $collectorRequirements
+    if ($LASTEXITCODE -ne 0) { throw '采集模块依赖安装失败。' }
+    if (-not (Test-Path -LiteralPath $collectorPythonFile)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $collectorPythonFile) -Force | Out-Null
+        $collectorPython | Set-Content -LiteralPath $collectorPythonFile -Encoding UTF8
+    }
+} else { Write-Warning '未找到采集模块；平台仍可浏览已有资料，采集页会显示接入状态。' }
 & (Join-Path $screeningRoot '安装文档转换器.ps1')
 $screeningNodeDirectory = Join-Path $screeningRuntime 'node\bin'
 if (Test-Path -LiteralPath (Join-Path $screeningNodeDirectory 'node.exe')) { $env:PATH = "$screeningNodeDirectory;$env:PATH" }
@@ -34,4 +56,4 @@ try {
     & $screeningPnpm build
     if ($LASTEXITCODE -ne 0) { throw '前端构建失败。' }
 } finally { Pop-Location }
-Write-Host '后端、Pi SDK分析组件与前端已准备好。运行 启动平台.ps1 即可。'
+Write-Host '采集模块、平台后端、Pi SDK分析组件与前端已准备好。运行 启动平台.ps1 即可。'

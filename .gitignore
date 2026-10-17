@@ -10,3 +10,4 @@ agent-runtime/dist/
 .pytest_cache/
 *.log
 *.pid
+tmp/

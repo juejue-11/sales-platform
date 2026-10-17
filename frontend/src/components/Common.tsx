@@ -89,7 +89,8 @@ export function formatDate(value: string | null | undefined, withTime = false): 
   if (!value) return '—'
   const date = dayjs(value)
   if (!date.isValid()) return value
-  return date.format(withTime ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD')
+  const hasTime = /[T\s]\d{2}:\d{2}/.test(value)
+  return date.format(withTime && hasTime ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD')
 }
 
 export function formatFreshness(value: string | null | undefined): string {
