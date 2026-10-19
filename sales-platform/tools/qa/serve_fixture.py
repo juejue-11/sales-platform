@@ -35,9 +35,9 @@ def main() -> None:
                                archive_root=db_path.parent, provider=FixtureProvider())
     service.update_settings({'ai': {'enabled': False}, 'import': {'auto_import': False}})
     asyncio.run(service.import_file())
-    material = service._reading_material(224)
+    material = service.reading_store.reading_material(224)
     reading = normalize_reading(payload, material)
-    service._save_procurement_reading(224, reading, material_version=material['material_version'], config={})
+    service.reading_store.save_procurement_reading(224, reading, material_version=material['material_version'], config={})
     from backend.main import create_app
     app = create_app(service)
 
