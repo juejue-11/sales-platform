@@ -1,0 +1,44 @@
+.followup-panel { display: grid; gap: 18px; color: var(--ink); }
+.followup-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+.followup-kicker { color: #60728a; font-size: 12px; }
+.followup-header h2 { margin: 3px 0 6px; color: #193c78; font-size: 20px; }
+.followup-header p { max-width: 78ch; margin: 0; color: #65758a; line-height: 1.7; }
+.followup-header > .ant-tag { margin: 0; flex: 0 0 auto; }
+.followup-loading { padding: 50px 12px; color: #65758a; text-align: center; }
+.followup-empty { display: grid; justify-items: center; gap: 5px; padding: 32px 15px; border: 1px dashed #d1dce9; }
+.followup-empty .ant-btn { margin-top: 8px; }
+.followup-start-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.followup-preview { display: grid; justify-items: start; gap: 12px; padding: 18px; border: 1px solid #e1e8f0; background: #fff; }
+.followup-preview h3 { margin: 0 0 4px; color: #193c78; font-size: 16px; }
+.followup-overview, .followup-submission, .followup-tasks, .followup-materials { display: grid; gap: 13px; padding: 15px; border: 1px solid #e1e8f0; background: #fff; }
+.followup-stage-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding-bottom: 13px; border-bottom: 1px solid #edf1f5; }
+.followup-stage-strip span { padding: 8px 5px; color: #7b899b; background: #f6f8fb; text-align: center; font-size: 12px; }
+.followup-stage-strip span.active { color: #fff; background: #193c78; }
+.followup-field-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
+.followup-field-grid label { display: grid; gap: 5px; min-width: 0; color: #65758a; font-size: 12px; }
+.followup-field-grid .ant-input, .followup-field-grid .ant-select { width: 100%; }
+.followup-section-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.followup-section-heading h3 { margin: 0; color: #193c78; font-size: 16px; }
+.followup-section-heading .ant-tag { margin: 0; }
+.followup-task-list, .followup-material-list { display: grid; gap: 8px; }
+.followup-task { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 12px; background: #f7f9fc; }
+.followup-task-main { display: grid; gap: 4px; min-width: 0; }
+.followup-task-main > strong { overflow-wrap: anywhere; line-height: 1.5; }
+.followup-task-meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.followup-task-meta .ant-tag { margin: 0; font-size: 10px; line-height: 19px; }
+.followup-task-edit { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 7px; margin-top: 7px; }
+.followup-task-edit label, .followup-completion-note { display: grid; gap: 4px; color: #7b899b; font-size: 11px; }
+.followup-completion-note { max-width: 520px; margin-top: 7px; }
+.followup-task-main > .ant-typography { font-size: 11px; }
+.followup-status-select { flex: 0 0 104px; }
+.followup-material { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 9px 12px; border-bottom: 1px solid #edf1f5; font-size: 13px; }
+.followup-material:last-child { border-bottom: 0; }
+.followup-material span { overflow-wrap: anywhere; }
+.followup-material .ant-select { flex: 0 0 120px; }
+.followup-plan { max-height: 360px; margin: 0; padding: 12px; overflow: auto; color: #49647f; background: #f7f9fc; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; }
+.followup-events { display: grid; gap: 8px; margin: 0; padding-left: 20px; color: #49647f; font-size: 12px; }
+.followup-events li { display: flex; gap: 12px; }
+.followup-save-note { color: #65758a; font-size: 11px; }
+.followup-save-note .anticon { margin-right: 4px; color: #397453; }
+@media (max-width: 900px) { .followup-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .followup-stage-strip { grid-template-columns: 1fr; } .followup-stage-strip span { text-align: left; padding-inline: 10px; } .followup-field-grid { grid-template-columns: 1fr; } .followup-task { flex-direction: column; } .followup-task-edit { grid-template-columns: 1fr; } .followup-status-select { flex-basis: auto; width: 100%; } .followup-material { align-items: flex-start; flex-direction: column; } .followup-material .ant-select { flex-basis: auto; width: 100%; } }

@@ -1,0 +1,98 @@
+.settings-center { --settings-ink:#162e48; --settings-muted:#697a8f; --settings-line:#e7ecf2; max-width:1240px; margin:0 auto; color:var(--settings-ink); }
+.settings-layout .app-header { height:64px; }
+.settings-layout .app-content { padding:30px 36px 48px; background:#f5f7fb; }
+.settings-layout .app-sider .ant-layout-sider-children { background:#082b3c; }
+.settings-layout .brand-block { min-height:77px; padding-inline:24px; }
+.settings-layout .brand-copy strong { font-size:20px; }
+.settings-layout .sidebar-nav { padding-top:22px; gap:13px; }
+.settings-layout .nav-item { min-height:51px; gap:19px; }
+.settings-layout .nav-item-active { background:#07518c; box-shadow:inset 3px 0 #069bff; }
+.settings-layout .nav-copy strong { font-size:15px; }
+.settings-center-page-heading { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-bottom:30px; }
+.settings-center-page-heading h1 { margin:0 0 8px; color:#102c46; font-size:28px; font-weight:650; line-height:1.4; letter-spacing:.2px; }
+.settings-center-page-heading p { margin:0; color:var(--settings-muted); font-size:13px; line-height:1.8; }
+.settings-center-overview { display:flex; align-items:center; gap:10px; flex-shrink:0; color:#77889a; font-size:12px; }
+.settings-center-overview > .ant-btn { color:#74859a; }
+.settings-center-overview .has-changes { color:#a36a1b; }
+.settings-center-layout { display:grid; grid-template-columns:185px minmax(0,1fr); gap:30px; align-items:start; }
+.settings-center-sidebar { position:sticky; top:90px; padding-top:3px; }
+.settings-center-sidebar nav { display:flex; flex-direction:column; gap:5px; }
+.settings-center-sidebar nav > button { display:flex; align-items:center; gap:11px; width:100%; min-height:43px; padding:10px 13px; border:0; border-radius:6px; background:transparent; color:#596c81; text-align:left; font-size:13px; line-height:1.6; cursor:pointer; }
+.settings-center-sidebar nav > button:hover { color:#1d50a2; background:#edf1f7; }
+.settings-center-sidebar nav > button[aria-current=page] { color:#205fda; background:#e9effb; font-weight:600; }
+.settings-center-sidebar nav > button:disabled { cursor:wait; }
+.settings-center-nav-icon { display:grid; place-items:center; width:17px; flex-shrink:0; color:#7b8c9f; font-size:15px; }
+.settings-center-sidebar nav > button[aria-current=page] .settings-center-nav-icon { color:#2167ee; }
+.settings-center-nav-dot { width:5px; height:5px; margin-left:auto; border-radius:50%; background:#b48030; flex-shrink:0; }
+.settings-center-sidebar > p { max-width:20ch; margin:26px 13px 0; color:#78899c; font-size:11px; line-height:1.9; }
+.settings-center-panel { min-width:0; overflow:hidden; border:1px solid #e2e8f0; border-radius:10px; background:white; }
+.settings-center-panel-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:26px 30px 23px; border-bottom:1px solid var(--settings-line); }
+.settings-center-panel-heading h2 { margin:0 0 7px; color:#162f4a; font-size:19px; font-weight:600; line-height:1.5; }
+.settings-center-panel-heading p { max-width:66ch; margin:0; color:var(--settings-muted); font-size:12px; line-height:1.8; }
+.settings-center-section-state { display:flex; align-items:center; gap:5px; flex-shrink:0; padding-top:4px; color:#77899b; font-size:11px; line-height:1.8; }
+.settings-center-section-state.has-changes { color:#a16b22; }
+.settings-center-panel-body { padding:27px 30px 30px; }
+.settings-center-form .ant-form-item { margin-bottom:22px; }
+.settings-center-form .ant-form-item-label { padding-bottom:8px; }
+.settings-center-form .ant-form-item-label > label { height:auto; color:#344c65; font-size:13px; font-weight:500; }
+.settings-center-form .ant-form-item-extra { min-height:0; margin-top:6px; color:#748399; font-size:11px; line-height:1.8; }
+.settings-center-form .ant-input,.settings-center-form .ant-input-affix-wrapper,.settings-center-form .ant-select-selector,.settings-center-form .ant-input-number,.settings-center-form .ant-input-number-group-addon { border-color:#dce3ed; border-radius:6px; font-size:13px; }
+.settings-center-form .ant-input,.settings-center-form .ant-input-affix-wrapper { min-height:37px; }
+.settings-center-form textarea.ant-input { padding:8px 11px; line-height:1.65; }
+.settings-center-form .ant-input-affix-wrapper .ant-input { min-height:0; }
+.settings-center-form .ant-input::placeholder,.settings-center-form .ant-select-selection-placeholder { color:#8997a9; font-size:12px; }
+.settings-center-form .ant-select { width:100%; min-height:37px; }
+.settings-center-form .ant-select-selector { min-height:37px; }
+.settings-center-form .ant-select-multiple .ant-select-selector { padding:4px 7px; }
+.settings-center-form .ant-select-multiple .ant-select-selection-item { margin-block:3px; border:0; border-radius:4px; background:#edf2fa; color:#415e80; font-size:12px; }
+.settings-center-form .ant-select-multiple .ant-select-selection-overflow { gap:1px 2px; }
+.settings-center-form .ant-select-multiple .ant-select-selection-search { min-height:24px; }
+.settings-center-form .ant-input-number { min-height:37px; }
+.settings-center-form .ant-input-number-input { height:35px; font-size:13px; }
+.settings-center-form .ant-input-prefix { margin-right:8px; color:#8091a3; }
+.settings-center-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:24px; align-items:start; }
+.settings-center-note { margin:4px 0 0; color:#718195; font-size:11px; line-height:1.9; }
+.settings-center-note a { margin-inline:3px; }
+.settings-center-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:24px; padding-bottom:22px; margin-bottom:24px; border-bottom:1px solid var(--settings-line); }
+.settings-center-toggle-row label { color:#344c65; font-size:13px; font-weight:500; }
+.settings-center-toggle-row p { margin:6px 0 0; color:#748399; font-size:11px; line-height:1.7; }
+.settings-center-connection { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 18px; margin:0 0 24px; padding:13px 15px; border-radius:6px; background:#f5f8fc; color:#5e728c; font-size:12px; }
+.settings-center-connection > div { display:flex; align-items:center; gap:8px; }
+.settings-center-connection strong { font-weight:500; }
+.settings-center-connection > a { font-size:11px; }
+.settings-center-connection > p { flex-basis:100%; margin:0; color:#718196; font-size:11px; line-height:1.8; }
+.settings-center-status-dot { width:6px; height:6px; border-radius:50%; background:#8498b1; }
+.settings-center-status-dot.is-warning { background:#bd8b3e; }
+.settings-center-key-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:-7px; padding-bottom:25px; color:#718196; font-size:11px; }
+.settings-center-key-row > span { display:flex; align-items:center; gap:6px; }
+.settings-center-key-row .ant-checkbox-wrapper { color:#6b7e94; font-size:12px; }
+.settings-center-runtime { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px; padding-top:20px; border-top:1px solid var(--settings-line); color:#7b8b9e; font-size:11px; }
+.settings-center-runtime strong { color:#4d6380; font-size:12px; font-weight:500; }
+.settings-center-runtime + .ant-alert { margin-top:16px; font-size:12px; }
+.settings-center-poll.ant-form-item { max-width:260px; }
+.settings-center-goal { max-width:70ch; padding-bottom:5px; }
+.settings-center-readonly { display:flex; align-items:center; gap:6px; margin-bottom:17px; color:#6a7f96; font-size:11px; }
+.settings-center-goal h3 { margin:0 0 14px; color:#26435f; font-size:17px; font-weight:600; line-height:1.65; }
+.settings-center-goal > p { margin:0; color:#52697f; font-size:13px; line-height:2; }
+.settings-center-policy { margin-top:29px; padding-top:23px; border-top:1px solid var(--settings-line); }
+.settings-center-policy h4 { margin:0 0 18px; color:#405a76; font-size:12px; font-weight:600; }
+.settings-center-policy dl { display:grid; gap:15px; margin:0; }
+.settings-center-policy dl > div { display:grid; grid-template-columns:98px minmax(0,1fr); gap:12px; font-size:12px; line-height:1.9; }
+.settings-center-policy dt { color:#516c86; }
+.settings-center-policy dd { margin:0; color:#748399; }
+.settings-center-panel-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; min-height:80px; padding:19px 30px; border-top:1px solid var(--settings-line); background:#fcfdff; }
+.settings-center-save-status { display:flex; flex-direction:column; gap:4px; color:#728398; font-size:11px; line-height:1.7; }
+.settings-center-save-status > small { color:#9b782d; font-size:11px; }
+.settings-center-save-status .is-saved { display:flex; align-items:center; gap:6px; color:#33785e; }
+.settings-center-footer-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.settings-center-footer-actions .ant-btn { height:35px; min-width:67px; padding-inline:15px; border-radius:6px; font-size:12px; }
+.settings-center-footer-actions .ant-btn-primary { min-width:96px; }
+.settings-center-restored { margin:-2px 0 20px; color:#58789e; font-size:12px; }
+.settings-center-remote-notice { margin-bottom:20px; }
+.settings-center-save-error { margin-top:22px; }
+.settings-center-save-error .ant-alert-message { font-size:13px; }
+.settings-center-save-error .ant-alert-description { font-size:12px; }
+@media (max-width:1200px) { .settings-layout .app-content { padding:27px 26px 40px; }.settings-center-layout { grid-template-columns:165px minmax(0,1fr); gap:22px; }.settings-center-sidebar nav > button { padding-inline:11px; gap:9px; }.settings-center-panel-heading { padding:24px; }.settings-center-panel-body { padding:24px; }.settings-center-panel-footer { padding:18px 24px; }.settings-center-form-grid { column-gap:20px; } }
+@media (max-width:1100px) { .settings-layout .brand-block { padding-inline:0; } }
+@media (max-width:840px) { .settings-layout .app-content { padding:24px 20px 36px; }.settings-center-layout { grid-template-columns:150px minmax(0,1fr); gap:18px; }.settings-center-page-heading { margin-bottom:24px; }.settings-center-panel-heading { gap:13px; }.settings-center-section-state { white-space:nowrap; }.settings-center-form-grid { grid-template-columns:minmax(0,1fr); }.settings-center-policy dl > div { grid-template-columns:minmax(0,1fr); gap:3px; }.settings-center-panel-footer { gap:12px; }.settings-center-page-heading h1 { font-size:26px; }.settings-center-sidebar > p { margin-inline:11px; } }
+@media (max-width:650px) { .settings-layout .app-header { height:52px; }.settings-layout .app-content { padding:21px 15px 30px; }.settings-center-page-heading { align-items:flex-start; gap:15px; margin-bottom:20px; }.settings-center-page-heading h1 { font-size:25px; margin-bottom:6px; }.settings-center-page-heading p { font-size:12px; max-width:23ch; }.settings-center-overview { gap:0; font-size:10px; padding-top:7px; }.settings-center-overview .ant-btn { width:28px; height:28px; font-size:12px; }.settings-center-layout { grid-template-columns:minmax(0,1fr); gap:16px; }.settings-center-sidebar { position:static; padding-top:0; }.settings-center-sidebar nav { flex-direction:row; gap:5px; overflow-x:auto; padding-bottom:4px; scrollbar-width:thin; }.settings-center-sidebar nav > button { width:auto; flex-shrink:0; min-height:37px; padding:8px 11px; font-size:12px; gap:7px; white-space:nowrap; }.settings-center-nav-icon { width:15px; font-size:14px; }.settings-center-nav-dot { margin-left:0; }.settings-center-sidebar > p { margin:8px 0 0; max-width:none; font-size:10px; }.settings-center-panel { border-radius:8px; }.settings-center-panel-heading { padding:21px 19px 19px; }.settings-center-panel-heading h2 { font-size:18px; }.settings-center-panel-heading p { font-size:11px; }.settings-center-section-state { font-size:10px; }.settings-center-panel-body { padding:22px 19px 24px; }.settings-center-panel-footer { flex-wrap:wrap; padding:17px 19px; gap:13px; }.settings-center-footer-actions { margin-left:auto; }.settings-center-form .ant-form-item { margin-bottom:21px; }.settings-center-connection { padding:12px; }.settings-center-key-row { align-items:flex-start; flex-direction:column; gap:14px; }.settings-center-goal h3 { font-size:16px; }.settings-center-goal > p { font-size:12px; } }

@@ -1,0 +1,188 @@
+.agent-report {
+  display: grid;
+  gap: 20px;
+  padding: 22px;
+  border: 1px solid #d8e1ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.agent-report-heading,
+.agent-report-subheading,
+.agent-report-opportunity-heading,
+.agent-report-gap-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-report-heading h2,
+.agent-report-heading p,
+.agent-report-subheading h3,
+.agent-report-subheading span,
+.agent-report-opportunity-heading h3,
+.agent-report-gap-heading strong {
+  margin: 0;
+}
+
+.agent-report-heading p,
+.agent-report-subheading span {
+  color: #62748a;
+  font-size: 13px;
+}
+
+.agent-report-sections,
+.agent-report-opportunities,
+.agent-report-gaps {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-report-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid #edf1f5;
+}
+
+.agent-report-section h3 {
+  margin: 0;
+  color: #193c78;
+  font-size: 16px;
+}
+
+.agent-report-block,
+.agent-report-opportunity,
+.agent-report-gap {
+  min-width: 0;
+}
+
+.agent-report-block p,
+.agent-report-opportunity p,
+.agent-report-gap p {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.agent-report-list ul,
+.agent-report-opportunity-field ul,
+.legacy-judgment-field ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.agent-report-list li {
+  margin: 4px 0;
+}
+
+.agent-report-evidence-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 2px solid #d8e1ed;
+}
+
+.agent-report-evidence-label {
+  font-size: 12px;
+}
+
+.agent-report-evidence q {
+  display: block;
+  color: #52677e;
+  line-height: 1.55;
+}
+
+.agent-report-evidence-fallback {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.agent-report-evidence-fallback span {
+  color: #193c78;
+}
+
+.agent-report-table-evidence {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.agent-report-opportunity-list,
+.agent-report-gap-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-report-opportunity,
+.agent-report-gap {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #d8e1ed;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.agent-report-opportunity-explicit_demand {
+  border-left: 3px solid #397453;
+}
+
+.agent-report-opportunity-potential_opportunity {
+  border-left: 3px solid #1c8395;
+}
+
+.agent-report-opportunity-field {
+  display: grid;
+  gap: 3px;
+}
+
+.agent-report-opportunity-field p {
+  color: #52677e;
+}
+
+.agent-report-gap-heading {
+  align-items: center;
+}
+
+.legacy-judgment-report {
+  display: grid;
+  gap: 16px;
+}
+
+.legacy-judgment-field {
+  display: grid;
+  gap: 6px;
+}
+
+.legacy-judgment-reasons {
+  display: grid;
+  gap: 12px;
+}
+
+.legacy-judgment-reasons article {
+  padding: 10px 12px;
+  border: 1px solid #edf1f5;
+  border-radius: 5px;
+}
+
+@media (max-width: 720px) {
+  .agent-report {
+    padding: 16px;
+  }
+
+  .agent-report-opportunity-list,
+  .agent-report-gap-list {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-report-heading,
+  .agent-report-subheading,
+  .agent-report-opportunity-heading,
+  .agent-report-gap-heading {
+    flex-direction: column;
+  }
+}
