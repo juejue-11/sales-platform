@@ -11,15 +11,10 @@ from .errors import FollowupConflictError, FollowupError, FollowupNotFoundError,
 from .planning import generate_plan
 from .repository import FollowupRepository
 from .schema import ensure_schema
-from .service import (
-    adopt_plan,
-    get_followup,
-    merge_followup,
-    note_material_change,
-    save_followup,
-    update_material,
-    update_task,
-)
+from .adoption import adopt_plan
+from .merge import merge_followup
+from .progress import update_material, update_task
+from .service import get_followup, note_material_change, save_followup
 
 __all__ = [
     "FollowupConflictError",

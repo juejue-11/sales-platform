@@ -1,8 +1,9 @@
 """Small persistence adapter for follow-up records.
 
 The adapter keeps SQL and JSON decoding in one place.  Business invariants
-live in :mod:`backend.followup.service`, so callers can use this class for
-read-only inspection without importing the screening service.
+live in the follow-up lifecycle, adoption, progress, merge, and validation
+modules, so callers can use this class for read-only inspection without
+importing the screening service.
 """
 
 from __future__ import annotations
