@@ -18,6 +18,7 @@ data/
 .venv/
 venv/
 node_modules/
+.toolchain/
 dist/
 __pycache__/
 *.pyc

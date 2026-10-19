@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ from .errors import (
 MAX_INPUT_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_OUTPUT_LINE_BYTES = 512 * 1024
+MAX_STDERR_LOG_CHARS = 1000
+_logger = logging.getLogger(__name__)
 DEFAULT_LIMITS = {
     "max_turns": 6,
     "max_tool_calls": 12,
@@ -74,6 +77,34 @@ def _runner_path() -> Path | None:
     return None
 
 
+def _workspace_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _bundled_node_candidates(names: list[str]) -> Iterator[Path]:
+    """Yield a Node runtime provisioned alongside the workspace.
+
+    The workspace carries its own Node runtime under ``.toolchain`` (the Linux
+    counterpart of the runtime the Windows launcher prefers).  A Node taken
+    from PATH may be older than the SDK requires, which makes the runner fail
+    before it can speak the protocol, so the bundled copy wins.
+    """
+    toolchain = _workspace_root() / ".toolchain"
+    try:
+        entries = sorted(toolchain.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            is_directory = entry.is_dir()
+        except OSError:
+            continue
+        if not is_directory or not entry.name.lower().startswith("node-v"):
+            continue
+        for name in names:
+            yield entry / "bin" / name
+
+
 def _node_candidates() -> Iterator[Path]:
     """Yield runtime candidates in priority order without eager filesystem scans."""
     runtime = _runtime_root()
@@ -86,6 +117,7 @@ def _node_candidates() -> Iterator[Path]:
                 yield configured_path / name
         else:
             yield configured_path
+    yield from _bundled_node_candidates(names)
     found = shutil.which("node")
     if found:
         yield Path(found)
@@ -260,12 +292,30 @@ class PiSDKProvider:
             return
 
     @staticmethod
-    async def _drain_stderr(stream: asyncio.StreamReader | None) -> None:
+    def _safe_stderr_text(text: str, secrets: tuple[str, ...]) -> str:
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[redacted]")
+        return " ".join(text.split())[:MAX_STDERR_LOG_CHARS]
+
+    async def _drain_stderr(self, stream: asyncio.StreamReader | None,
+                            secrets: tuple[str, ...] = ()) -> None:
+        """Surface child diagnostics in the service log instead of discarding them.
+
+        A runner that dies before emitting any protocol event (for example a
+        Node.js version that cannot load the SDK) otherwise leaves only its
+        exit code behind, which the bridge cannot explain.
+        """
         if stream is None:
             return
         try:
-            while await stream.read(8192):
-                pass
+            while True:
+                chunk = await stream.read(8192)
+                if not chunk:
+                    break
+                text = self._safe_stderr_text(chunk.decode("utf-8", "replace"), secrets)
+                if text:
+                    _logger.warning("Pi SDK runtime stderr: %s", text)
         except (asyncio.CancelledError, Exception):
             return
 
@@ -351,7 +401,7 @@ class PiSDKProvider:
             process = await await_with_deadline(
                 asyncio.create_subprocess_exec(str(node), str(runner), **spawn_options)
             )
-            stderr_task = asyncio.create_task(self._drain_stderr(process.stderr))
+            stderr_task = asyncio.create_task(self._drain_stderr(process.stderr, (api_key,)))
             if process.stdin is None or process.stdout is None:
                 raise AIError("Pi SDK进程管道不可用")
             try:
