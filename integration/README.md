@@ -2,7 +2,7 @@
 
 ## 数据入口
 
-- 文件：`C:\Users\cgr\Desktop\new\销售平台信息采集系统\data\export\records.jsonl`
+- 文件：采集模块内的 `data/export/records.jsonl`；从仓库根目录访问时为 `procurement-collector/data/export/records.jsonl`。
 - 格式：UTF-8 JSONL，每行一条 JSON；采集开始及每条记录提交后原子更新，内容为全量记录的最新版本。接收方按 ID 更新，不将每份快照视为新增整批资料。
 - 当前接口是文件读取；尚无 HTTP API。判断平台部署在其他机器时，需要同步该文件或另行提供只读 API。
 - 真实样例：[sample-record.json](sample-record.json)。
@@ -38,7 +38,8 @@
 import json
 from pathlib import Path
 
-path = Path(r"C:\Users\cgr\Desktop\new\销售平台信息采集系统\data\export\records.jsonl")
+# 在仓库根目录执行。
+path = Path("procurement-collector/data/export/records.jsonl")
 with path.open(encoding="utf-8") as f:
     for line in f:
         record = json.loads(line)

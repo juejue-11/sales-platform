@@ -49,7 +49,7 @@ python -m collector run --source ccteg_materials
 
 编辑 `sources.json`。每个来源需要独立 ID、名称、类别（`procurement` 或 `news`）、入口、适配器、访问状态及频率。现有 `post_json_list` 用于鞍钢、酒钢的公开搜索接口；`html_list` 使用 `item_selector`、`link_selector`、`date_selector` 和详情 `content_selector`；`rss` 读取 RSS/Atom。`allowed_hosts` 限制详情链接主机。`manual` 保留未接入来源并在日报报告覆盖缺口。公开列表如发生布局变化，采集会报错，不会把失败误报为零条新闻。
 
-已从黄总平台只读获取 24 个来源及巡检规则，见 [黄总平台来源清单.md](黄总平台来源清单.md)。首批公开实测接入鞍钢、酒钢两家甲方平台；华润历史域名失效、现域名有安全验证，五矿和河钢在本机不可访问，均保留为覆盖缺口。中国煤科物资/工程采购是补充来源；原自然资源部矿业权与酒钢集团官网新闻来源现已按设备采购范围停用。中国政府采购网在本机返回 403、全国公共资源交易平台在本机无法通过代理连接，故处于禁用状态。详见 [来源盘点.md](来源盘点.md)。
+已从黄总平台只读获取 24 个来源及巡检规则，见 [platform-sources.md](platform-sources.md)。首批公开实测接入鞍钢、酒钢两家甲方平台；华润历史域名失效、现域名有安全验证，五矿和河钢在本机不可访问，均保留为覆盖缺口。中国煤科物资/工程采购是补充来源；原自然资源部矿业权与酒钢集团官网新闻来源现已按设备采购范围停用。中国政府采购网在本机返回 403、全国公共资源交易平台在本机无法通过代理连接，故处于禁用状态。详见 [source-inventory.md](source-inventory.md)。
 
 字段按明确规则提取；缺失字段保留空值。设备和型号使用关键词及上下文规则。新闻对扩产、技改、检修、设备更新生成保守的需求推测，始终标记“待核实”并附原文摘录。可选的 AI 抽取采用 [OpenAI Responses API 结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs)；只有同时设置 `OPENAI_API_KEY` 与 `OPENAI_MODEL` 才会调用。模型结果必须附能在保存正文中找到的原文片段，否则丢弃；调用失败保留规则结果并在日报标出 `ai_fallback`。当前机器未配置这两个环境变量，所以首次实采使用规则结果。
 
@@ -69,7 +69,7 @@ python -m collector run --source ccteg_materials
 - 同站同 URL 是同一记录；同站同编号、同标题和类型也归同一记录。跨站综合规范化链接、编号、采购方、标题与正文识别重复；证据不足时只标为疑似重复并分别保留。
 - 更正、中标与前序公告用来源、采购方和归一化项目标题形成 `project_key` 线索；不凭模糊相似度自动合并原文。
 - PDF 文本可提取；扫描版被标为 `needs_ocr`，原件仍存档并在日报报异常。该版本未内置 OCR。
-- `.doc` 附件自动通过后台 LibreOffice 转换为 PDF 并提取文字、页码，`.docx` 自动提取段落和表格；存档和哈希保留原 Word 文件。Windows部署运行 `安装文档转换器.ps1` 自动准备转换组件（筛选平台的安装依赖脚本也会安装）；Linux需安装LibreOffice，也可用 `LIBREOFFICE_PATH` 指定启动器。每次转换最多90秒、单批附件最多180秒，加密、损坏、超限或组件缺失会记录具体错误。
+- `.doc` 附件自动通过后台 LibreOffice 转换为 PDF 并提取文字、页码，`.docx` 自动提取段落和表格；存档和哈希保留原 Word 文件。Windows部署运行 `install-document-converter.ps1` 自动准备转换组件（筛选平台的安装依赖脚本也会安装）；Linux需安装LibreOffice，也可用 `LIBREOFFICE_PATH` 指定启动器。每次转换最多90秒、单批附件最多180秒，加密、损坏、超限或组件缺失会记录具体错误。
 - 发布时间只从列表或详情明确的“发布时间/发布日期/公告日期”获取，不从正文任意日期推断。
 
 ## 验证
