@@ -169,7 +169,7 @@ def test_real_host_investigation_preserves_versions_and_only_cited_dependencies(
 
         job_id = service.queue_project(1, force=True)["job_id"]
         session = ResearchSession(service.db, project_id=1, job_id=job_id, records=[source_record],
-                                  sources_path=service._research_sources_path, client=client)
+                                  sources_path=service.state.research_sources_path, client=client)
         # A candidate search alone is not a new input version.
         asyncio.run(session.execute("search_project_sources", {"purpose": "再次查找", "query": "P-100"}))
         assert service.project_detail(1)["judgment"]["stale"] is False
@@ -190,7 +190,7 @@ def test_research_history_routes_enforce_project_scope(tmp_path):
     try:
         configure_ai(service)
         job_id = service.queue_project(1)["job_id"]
-        run_id = service._new_agent_run(job_id, 1)
+        run_id = service.agent_runs.new_agent_run(job_id, 1)
         with service.db:
             service.db.execute("UPDATE agent_runs SET investigation_json=? WHERE id=?", (
                 json.dumps({"status": "limited", "policy_version": "test", "events": [], "sources": [],

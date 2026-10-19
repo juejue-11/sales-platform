@@ -395,9 +395,9 @@ def test_related_context_truncates_body_and_tail_change_stales_judgment(tmp_path
         assert service.summary(2)["ai_status"] == "queued"
         assert service.project_detail(2)["judgment_history"][0]["stale"] is True
         current_project = service.project_detail(2)
-        current_context, current_related = service._analysis_context(2, service._section("business"))
-        current_fingerprint = service._analysis_fingerprint(
-            current_project, service._section("business"), service._ai_config(), current_related
+        current_context, current_related = service.analysis_context.analysis_context(2, service.settings.section("business"))
+        current_fingerprint = service.analysis_context.analysis_fingerprint(
+            current_project, service.settings.section("business"), service.settings.ai_config(), current_related
         )
         assert current_fingerprint != old_fingerprint
         assert current_context["related_projects"][0]["records"][0]["body_text_sha256"] == sha256_text(records[0]["body_text"])
@@ -445,12 +445,12 @@ def test_settings_engine_and_sdk_ready_are_read_only(tmp_path: Path, monkeypatch
                                archive_root=tmp_path, provider=ProgressProvider())
     try:
         before = service.get_settings()["ai"]
-        before_section = service._section("ai")
+        before_section = service.settings.section("ai")
         service.update_settings({"ai": {"engine": "single_call", "sdk_ready": not before["sdk_ready"]}})
         after = service.get_settings()["ai"]
         assert after["engine"] == "pi_sdk"
         assert after["sdk_ready"] == before["sdk_ready"]
-        assert service._section("ai") == before_section
+        assert service.settings.section("ai") == before_section
     finally:
         service.close()
 

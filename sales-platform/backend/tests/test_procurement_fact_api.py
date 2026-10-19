@@ -7,7 +7,7 @@ import json
 
 import httpx
 
-import backend.application.service as service_module
+import backend.application.documents as document_module
 from backend.application.service import ScreeningService
 from backend.main import create_app
 
@@ -63,7 +63,7 @@ def test_procurement_facts_round_trip_without_model_or_source_mutation(tmp_path,
         async def complete(self, **kwargs):
             raise AssertionError("Procurement reads must not invoke a model")
 
-    monkeypatch.setattr(service_module, "fetch_record_documents", fetch_documents)
+    monkeypatch.setattr(document_module, "fetch_record_documents", fetch_documents)
     service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
                                archive_root=tmp_path, provider=NoModel())
     service.update_settings({"ai": {"enabled": False}, "import": {"auto_import": False}})

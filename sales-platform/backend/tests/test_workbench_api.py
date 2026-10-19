@@ -140,7 +140,7 @@ def test_importer_project_merge_retains_submissions_uploads_and_reading_history(
         'body_text': '另一项目采购设备。', 'notice_number': 'P225', 'project_key': 'separate-225',
     }), encoding='utf-8')
     asyncio.run(service.import_file())
-    assert service._project_for_record_id(225) == 225
+    assert service.records.project_for_record_id(225) == 225
     state = request(app, 'GET', '/api/projects/224/followup').json()
     state = request(app, 'POST', '/api/projects/224/followup/adopt', json={'plan_id': state['plan']['id']}).json()
     task_id = state['tasks'][0]['id']

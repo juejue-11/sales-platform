@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from ..application.service import ConflictError, NotFoundError, ServiceError
+from ..application.errors import ConflictError, NotFoundError, ServiceError
 from ..procurement.supplements import SupplementError
 from ..followup import FollowupConflictError, FollowupNotFoundError, FollowupValidationError
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-import backend.application.service as service_module
+import backend.application.analysis_jobs as analysis_job_module
 from backend.analysis.ai import (AIError, PiSDKProvider, _safe_error_code, _safe_error_metadata,
                                  build_messages, correction_messages, validate_judgment)
 from backend.analysis.provider_finalizer import (
@@ -512,7 +512,7 @@ def test_service_uses_one_yaml_finalizer_without_restarting_agent(
             usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 2, "output_tokens": 3},
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -544,7 +544,7 @@ def test_service_formats_valid_json_with_an_invalid_report_shape(tmp_path: Path,
         calls.append(kwargs)
         return StrictFinalizerResult(content=json.dumps(_valid_final_payload(source)), usage={"model_calls": 1})
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -575,7 +575,7 @@ def test_service_corrects_semantics_without_restarting_json_agent(
             usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 5, "output_tokens": 7},
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -624,7 +624,7 @@ def test_service_does_not_store_when_semantic_finalizer_fails(
             usage=finalizer_usage,
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -665,7 +665,7 @@ def test_service_allows_semantic_correction_after_format_repair(
             usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 5, "output_tokens": 7},
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -710,7 +710,7 @@ def test_service_does_not_repeat_format_repair_after_semantic_correction(
             usage=finalizer_usage,
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -746,7 +746,7 @@ def test_service_keeps_non_format_correction_failure_terminal(
             usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 5, "output_tokens": 7},
         )
 
-    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", fake_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -770,7 +770,7 @@ def test_yaml_finalizer_failure_does_not_store_judgment(
     async def failing_finalizer(**kwargs):
         raise AIError("YAML document end marker is missing", code="STREAM_INTERRUPTED")
 
-    monkeypatch.setattr(service_module, "strict_format_report", failing_finalizer)
+    monkeypatch.setattr(analysis_job_module, "strict_format_report", failing_finalizer)
     try:
         asyncio.run(service.run_job(job_id))
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()

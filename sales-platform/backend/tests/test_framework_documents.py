@@ -10,7 +10,7 @@ import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
-from backend.application.service import NotFoundError
+from backend.application.errors import NotFoundError
 from backend.main import create_app
 from backend.tests.test_backend import Provider, make_service, row
 
@@ -36,7 +36,7 @@ def test_failed_refresh_preserves_successful_content_and_attempt(tmp_path, monke
     async def fetch(_record):
         return responses.pop(0)
 
-    monkeypatch.setattr("backend.application.service.fetch_record_documents", fetch)
+    monkeypatch.setattr("backend.application.documents.fetch_record_documents", fetch)
     service = make_service(tmp_path, [row()])
     try:
         asyncio.run(service.refresh_project_documents(1))
@@ -90,7 +90,7 @@ def test_agent_reuses_verified_collector_archive_and_saves_its_snapshot(tmp_path
                                                  "quote": "附件明确采购破碎机。"}]
             return {"content": json.dumps(result, ensure_ascii=False)}
 
-    monkeypatch.setattr("backend.application.service.fetch_record_documents", fetch)
+    monkeypatch.setattr("backend.application.documents.fetch_record_documents", fetch)
     service = make_service(tmp_path, [record], Agent())
     try:
         service.update_settings({"ai": {"enabled": True, "base_url": "https://mock.local/v1",
@@ -125,7 +125,7 @@ def test_agent_reads_pages_without_repeated_download_and_retains_read_citations(
                                                  "page": 1, "quote": "第一页面采购破碎机。"}]
             return {"content": json.dumps(result, ensure_ascii=False), "usage": {"model_calls": 2}}
 
-    monkeypatch.setattr("backend.application.service.fetch_record_documents", fetch)
+    monkeypatch.setattr("backend.application.documents.fetch_record_documents", fetch)
     service = make_service(tmp_path, [row()], Agent())
     try:
         service.update_settings({"ai": {"enabled": True, "base_url": "https://mock.local/v1",

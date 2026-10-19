@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from backend.analysis.ai import AIError
-import backend.application.service as service_module
+import backend.application.documents as document_module
+from backend.core.utils import now_iso
 from backend.application.reading import READING_BATCH_CHARS, _merge_batch_readings, invoke_reading
 from backend.application.service import ScreeningService
 from backend.procurement.reading import build_material, material_version, normalize_reading, segment_text
@@ -310,7 +311,7 @@ def test_service_fetches_attachment_before_explicit_reading_and_does_not_refetch
             return {"version": 1, "summary": "read", "demand_type": "confirmed", "stage": "confirmed",
                     "sections": [], "milestones": []}
 
-    monkeypatch.setattr(service_module, "fetch_record_documents", fetch)
+    monkeypatch.setattr(document_module, "fetch_record_documents", fetch)
     service = ScreeningService(db_path=tmp_path / "db.sqlite3", source_path=source, archive_root=tmp_path,
                                provider=Reader())
     try:
@@ -383,8 +384,8 @@ def _reading_restart_service(tmp_path: Path) -> ScreeningService:
 
 
 def _save_reading_state(service: ScreeningService, status: str) -> None:
-    version = str(service._reading_material(1)["material_version"])
-    service._save_procurement_reading(
+    version = str(service.reading_store.reading_material(1)["material_version"])
+    service.reading_store.save_procurement_reading(
         1, {"version": 1, "status": status, "summary": status, "demand_type": "unknown",
             "stage": "", "buyer": "", "region": "", "category": [], "sections": [],
             "milestones": [], "coverage": [], "conflicts": [], "unresolved": []},
@@ -431,7 +432,7 @@ def test_restart_recovers_only_the_latest_pending_reading(tmp_path):
 def test_restart_reuses_followup_instead_of_resuming_old_running_reading(tmp_path):
     service = _reading_restart_service(tmp_path)
     _save_reading_state(service, "pending")
-    now = service_module.now_iso()
+    now = now_iso()
     with service.db:
         service.db.execute(
             "INSERT INTO procurement_reading_jobs(project_id,force,status,created_at,updated_at) VALUES (1,0,'running',?,?)",
@@ -490,7 +491,7 @@ def test_material_changes_while_reading_keep_one_followup_for_latest_version(tmp
                                      "enabled": True, "api_key": "test-key"}})
 
     async def scenario():
-        old_version = str(service._reading_material(1)["material_version"])
+        old_version = str(service.reading_store.reading_material(1)["material_version"])
         service.queue_reading(1, schedule=True)
         await asyncio.wait_for(reader.first_started.wait(), timeout=2)
 
@@ -523,7 +524,7 @@ def test_material_changes_while_reading_keep_one_followup_for_latest_version(tmp
             await asyncio.sleep(0.01)
         assert await finished()
         assert reader.calls == ["old material", "latest material"]
-        latest_version = str(service._reading_material(1)["material_version"])
+        latest_version = str(service.reading_store.reading_material(1)["material_version"])
         assert latest_version != old_version
         versions = [row["material_version"] for row in service.db.execute(
             "SELECT material_version FROM procurement_readings WHERE project_id=1 ORDER BY id"
@@ -534,5 +535,5 @@ def test_material_changes_while_reading_keep_one_followup_for_latest_version(tmp
     try:
         asyncio.run(scenario())
     finally:
-        if not service._closed:
+        if not service.state.closed:
             service.close()

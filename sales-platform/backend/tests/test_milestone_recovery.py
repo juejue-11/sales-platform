@@ -38,13 +38,13 @@ def test_saved_empty_reading_recovers_current_notice_dates_without_model_or_db_w
                                archive_root=tmp_path, provider=object())
     try:
         asyncio.run(service.import_file())
-        project_id = service._project_for_record_id(224)
-        version = service._reading_material(project_id)['material_version']
-        service._save_procurement_reading(project_id, {'version': 1, 'status': 'partial',
+        project_id = service.records.project_for_record_id(224)
+        version = service.reading_store.reading_material(project_id)['material_version']
+        service.reading_store.save_procurement_reading(project_id, {'version': 1, 'status': 'partial',
             'summary': 'saved explanation', 'sections': [], 'milestones': [], 'unresolved': []},
             material_version=version)
         before = service.db.total_changes
-        reading = service._procurement_reading_for_project(project_id)
+        reading = service.reading_store.procurement_reading_for_project(project_id)
         assert reading['summary'] == 'saved explanation'
         assert {(m['kind'], m['at']) for m in reading['milestones']} >= {
             ('document_access', '2026-10-19T16:00:00+08:00'),
@@ -53,7 +53,7 @@ def test_saved_empty_reading_recovers_current_notice_dates_without_model_or_db_w
         }
         assert all(s['quote'] in record['body_text'] for m in reading['milestones'] for s in m['sources'])
         assert service.db.total_changes == before
-        assert service._procurement_reading_for_project(project_id)['milestones'] == reading['milestones']
+        assert service.reading_store.procurement_reading_for_project(project_id)['milestones'] == reading['milestones']
     finally:
         service.close()
 

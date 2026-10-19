@@ -10,7 +10,8 @@ import pytest
 
 from backend.analysis.ai import AIError, build_messages, input_fingerprint, validate_judgment
 from backend.analysis.analysis_policy import ANALYSIS_POLICY_VERSION, analysis_context
-from backend.application.service import ConflictError, ScreeningService
+from backend.application.service import ScreeningService
+from backend.application.errors import ConflictError
 from backend.tests.test_backend import Provider, make_service, row
 
 
@@ -38,7 +39,7 @@ def test_empty_identity_and_preferences_allow_market_analysis(tmp_path: Path, bu
             "semantic_version": ANALYSIS_POLICY_VERSION, "decision_scope": "market",
             "company_match": "not_evaluated",
         }
-        context, _ = service._analysis_context(1, business)
+        context, _ = service.analysis_context.analysis_context(1, business)
         message_input = json.loads(build_messages(service.project_detail(1), business)[1]["content"])
         for key in ("analysis_goal", "customer_preferences", "company_capability_card", "company_profile_present"):
             assert context[key] == message_input[key]
@@ -167,7 +168,7 @@ def test_agent_failure_keeps_evidenced_body_judgment(tmp_path: Path, monkeypatch
     async def failed_fetch(record):
         raise RuntimeError("isolated document failure")
 
-    monkeypatch.setattr("backend.application.service.fetch_record_documents", failed_fetch)
+    monkeypatch.setattr("backend.application.documents.fetch_record_documents", failed_fetch)
     agent = Agent()
     service = make_service(tmp_path, [row()], agent)
     try:

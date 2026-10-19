@@ -9,6 +9,7 @@ import pytest
 
 from backend.analysis.ai import AIError, build_messages, validate_judgment
 from backend.storage.db import connect
+from backend.application.agent_runs import AgentRuns
 from backend.application.service import ScreeningService
 from backend.core.utils import source_quote, source_quote_hint
 from backend.tests.test_backend import Provider
@@ -198,7 +199,7 @@ def test_table_report_evidence_enters_research_dependency_trace() -> None:
             return [{"source_ref": "research_2", "source_version": "v1", "relation": "same_procurement",
                      "relation_status": "verified"}]
 
-    dependencies = ScreeningService._cited_research_dependencies(judgment, Session())
+    dependencies = AgentRuns.cited_research_dependencies(judgment, Session())
     assert [(item["source_ref"], item["source_version"]) for item in dependencies] == [("research_2", "v1")]
 
 

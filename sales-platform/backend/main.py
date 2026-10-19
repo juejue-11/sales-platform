@@ -9,7 +9,8 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .application.service import ConflictError, NotFoundError, ScreeningService, ServiceError
+from .application.service import ScreeningService
+from .application.errors import ConflictError, NotFoundError, ServiceError
 from .collection.manager import CollectionManager
 from .routes.collection import router as collection_router
 from .application.workbench import WorkbenchApplication
@@ -75,7 +76,7 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
     app.state.service = screening
     app.state.collection = CollectionManager(screening)
     app.state.workbench = WorkbenchApplication(
-        db=screening.db, lock=screening._db_lock, read_project=screening.project_detail,
+        db=screening.db, lock=screening.state.lock, read_project=screening.project_detail,
         request_reading=lambda project_id: screening.queue_reading(project_id, force=True, schedule=True),
     )
     app.include_router(workbench_router)
@@ -198,14 +199,14 @@ def create_app(service: ScreeningService | None = None) -> FastAPI:
 
     @app.post("/api/analyze-pending")
     async def analyze_pending() -> dict[str, Any]:
-        if not app.state.service._ai_config()["configured"]:
+        if not app.state.service.settings.ai_config()["configured"]:
             return {"queued": 0, "message": "AI 未配置，已保留项目"}
         queued = app.state.service.queue_pending(schedule=True)
         return {"queued": queued, "message": "已排队" if queued else "没有可排队的项目"}
 
     @app.post("/api/jobs/retry-failed")
     async def retry_failed() -> dict[str, Any]:
-        if not app.state.service._ai_config()["configured"]:
+        if not app.state.service.settings.ai_config()["configured"]:
             return {"queued": 0, "message": "AI 未配置，无法重试"}
         queued = app.state.service.retry_failed()
         return {"queued": queued, "message": "失败任务已重新排队" if queued else "没有可重试任务"}

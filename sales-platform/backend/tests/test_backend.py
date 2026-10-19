@@ -11,7 +11,8 @@ import pytest
 
 from backend.analysis.ai import AIError
 from backend.main import create_app
-from backend.application.service import ConflictError, ScreeningService, ServiceError
+from backend.application.service import ScreeningService
+from backend.application.errors import ConflictError, ServiceError
 from backend.core.utils import SHANGHAI
 from backend.analysis.ai import validate_judgment
 
@@ -443,7 +444,7 @@ def test_deadline_date_uses_shanghai_timezone(tmp_path: Path):
     service = make_service(tmp_path, [row(deadline="2026-10-08")])
     # The date-only deadline expires at the end of the Asia/Shanghai business day.
     from backend.analysis.rules import evaluate_record
-    record = service._records_for_project(1)[0]
+    record = service.records.records_for_project(1)[0]
     from datetime import datetime
     gate, _ = evaluate_record(record, service.get_settings(), now=datetime(2026, 10, 8, 12, tzinfo=SHANGHAI))
     assert gate == "candidate"

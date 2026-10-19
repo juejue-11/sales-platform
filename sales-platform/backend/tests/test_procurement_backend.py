@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import backend.application.service as service_module
+import backend.application.documents as document_module
 from backend.analysis.ai import AIError, PiSDKProvider, validate_judgment
 from backend.analysis.briefing import build_briefing
 from backend.procurement.facts import extract_announcement_facts
@@ -41,7 +41,7 @@ def _record(record_id: int = 174, *, attachments: list[dict] | None = None) -> d
 def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fetcher):
     source = tmp_path / "records.jsonl"
     source.write_text(json.dumps(_record(), ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(service_module, "fetch_record_documents", fetcher)
+    monkeypatch.setattr(document_module, "fetch_record_documents", fetcher)
     service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
                                archive_root=tmp_path, provider=object())
     asyncio.run(service.import_file())
@@ -138,7 +138,7 @@ def test_announcement_body_facts_survive_empty_attachment_refresh(tmp_path: Path
     record["attachments"] = []
     source = tmp_path / "records.jsonl"
     source.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(service_module, "fetch_record_documents", fetch)
+    monkeypatch.setattr(document_module, "fetch_record_documents", fetch)
     service = ScreeningService(db_path=tmp_path / "screening.sqlite3", source_path=source,
                                archive_root=tmp_path, provider=object())
     asyncio.run(service.import_file())
