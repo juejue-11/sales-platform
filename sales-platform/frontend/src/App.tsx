@@ -86,7 +86,7 @@ function Shell() {
     navigate(`/?${params.toString()}`)
   }
   return <Layout className={`app-layout${isHomeOverview ? ' home-overview-layout' : ''}${isCatalog ? ' catalog-layout' : ''}${isFollowing ? ' following-layout' : ''}${isSettings ? ' settings-layout' : ''}${isCollection ? ' collection-layout' : ''}${isProcurementContent ? ' procurement-content-layout' : ''}`}>
-    <Sider className="app-sider desktop-sider" width={isCatalog || isSettings ? 224 : 192} collapsedWidth={72} collapsed={collapsed} trigger={null}>
+    <Sider className="app-sider desktop-sider" width={192} collapsedWidth={72} collapsed={collapsed} trigger={null}>
       <Brand compact={collapsed} /><Navigation compact={collapsed} onNavigate={closeMobileMenu} />
       <div className="sidebar-bottom"><span>{!collapsed && '内部销售工作台'}</span><Button type="text" className="sider-collapse" icon={collapsed ? <RightOutlined /> : <LeftOutlined />} onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? '展开导航' : '收起导航'} /></div>
     </Sider>

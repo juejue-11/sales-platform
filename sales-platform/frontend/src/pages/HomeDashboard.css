@@ -92,8 +92,6 @@
 .home-header-notification { margin-right:10px; color:#547496; font-size:20px; }
 .home-overview-layout .workspace-avatar { width:34px; height:34px; background:#0874ff; }
 .home-overview-layout .workspace-name { font-size:13px; }
-.home-overview-layout .app-sider .ant-layout-sider-children { background:linear-gradient(120deg,#0c2940,#09263e); }
-.home-overview-layout .nav-item-active { background:linear-gradient(100deg,#0754a2,#063e7c); box-shadow:inset 3px 0 #0093ff; }
 .home-overview-layout .app-content { padding-top:18px; }
 @media (max-width:600px) { .home-overview-layout .header-location { gap:15px; }.home-overview-layout .header-context { display:none; }.home-header-search.ant-input-affix-wrapper { width:100%; } }
 .home-overview-layout .header-location .home-header-search.ant-input-affix-wrapper { display:inline-flex; flex:0 1 426px; min-width:0; }
