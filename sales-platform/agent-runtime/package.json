@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/runner.test.js"
+    "test": "node --test dist/basic.test.js dist/boundary.test.js dist/limits.test.js dist/duplex.test.js dist/research.test.js"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.1.0",
