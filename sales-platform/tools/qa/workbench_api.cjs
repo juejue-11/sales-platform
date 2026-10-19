@@ -17,21 +17,26 @@ const screenshots = outputDir('workbench-api');
     assert.deepEqual(await environment.json(), { fixture: 'notice-224', isolated: true });
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.goto(base);
+    await page.goto(`${base}/?view=all`);
     await page.getByTestId('opportunity-item').waitFor();
     const card = await page.getByTestId('opportunity-item').innerText();
-    assert.ok(card.includes('2026-10-23 13:30'), card);
+    assert.ok(card.includes('2026-10-23'), card);
+    assert.equal(await page.getByTestId('opportunity-item').locator('time[datetime="2026-10-23T13:30:00+08:00"]').count(), 1);
     assert.ok(card.includes('明确采购'), card);
     await page.screenshot({ path: path.join(screenshots, 'home.png'), fullPage: true });
-    await page.getByTestId('opportunity-item').click();
+    await page.getByTestId('opportunity-item').getByRole('link', { name: '查看详情', exact: true }).click();
+    const detailTabs = page.locator('.detail-tabs > .detail-tab-bar').getByRole('tab');
+    assert.equal(await detailTabs.count(), 7);
+    await page.getByRole('tab', { name: '采购内容', exact: true }).click();
     await page.getByTestId('procurement-reading').waitFor();
-    assert.equal(await page.getByRole('tab').count(), 3);
-    const text = await page.getByTestId('procurement-reading').innerText();
-    for (const phrase of ['02包', '首台（套）', '2026-10-19 16:00', '2026-10-23 13:30']) {
-      assert.ok(text.includes(phrase), phrase);
-    }
+    assert.ok((await page.getByTestId('procurement-reading').innerText()).includes('02包'));
+    await page.getByRole('tab', { name: '资格要求', exact: true }).click();
+    assert.ok((await page.getByRole('tabpanel', { name: '资格要求', exact: true }).innerText()).includes('首台（套）'));
+    await page.getByRole('tab', { name: '时间节点', exact: true }).click();
+    const schedule = await page.getByRole('tabpanel', { name: '时间节点', exact: true }).innerText();
+    for (const phrase of ['2026-10-19 16:00', '2026-10-23 13:30']) assert.ok(schedule.includes(phrase), phrase);
     await page.screenshot({ path: path.join(screenshots, 'reading.png'), fullPage: true });
-    await page.getByRole('tab', { name: '跟进', exact: true }).click();
+    await page.getByRole('tab', { name: '跟进记录', exact: true }).click();
     await page.getByTestId('followup-panel').waitFor();
     let state = await (await page.request.get(`${base}/api/projects/224/followup`)).json();
     if (!state.is_following) {
@@ -71,7 +76,7 @@ const screenshots = outputDir('workbench-api');
     assert.equal(following.total, 1);
     await page.screenshot({ path: path.join(screenshots, 'followup.png'), fullPage: true });
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ passed: true, backend: 'real isolated API', tabs: 3, sourcedDates: true, lotAndException: true, realSubmissionRoundtrip: true, screenshots }));
+    console.log(JSON.stringify({ passed: true, backend: 'real isolated API', tabs: 7, sourcedDates: true, lotAndException: true, realSubmissionRoundtrip: true, screenshots }));
   } finally {
     await browser.close();
   }
