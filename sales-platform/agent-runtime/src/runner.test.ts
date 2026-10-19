@@ -1822,7 +1822,7 @@ test("protocol 2 completes a search, read, relation, and content research loop",
   const fake = await startFakeServer((body, response) => {
     const requestNumber = fake.requests.length;
     const system = String((body.messages as Array<Record<string, unknown>>)[0]?.content);
-    assert.match(system, /不可信resources/u);
+    assert.match(system, /不可信资料/u);
     if (requestNumber === 1) {
       streamResponse(response, [
         assistantResearchToolCallChunk("search_project_sources", "call-search", {
