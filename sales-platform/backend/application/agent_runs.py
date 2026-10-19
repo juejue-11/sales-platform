@@ -5,8 +5,10 @@ from typing import Any, TYPE_CHECKING
 
 import re
 import sqlite3
-from ..analysis.ai import sanitize_ai_error
-from ..research.project_research import ResearchSession, configuration_fingerprint, current_dependencies, read_saved_source
+from ..analysis.errors import sanitize_ai_error
+from ..research.session import ResearchSession
+from ..research.config import configuration_fingerprint
+from ..research.storage import current_dependencies, read_saved_source
 from ..analysis.agent_report import iter_report_evidence
 from ..core.utils import json_text, json_value, now_iso
 from .state import ApplicationState
@@ -97,7 +99,7 @@ class AgentRuns:
             return int(row[0])
 
     @staticmethod
-    def agent_public_event(event: Any) -> dict[str, Any] | None:
+    def _agent_public_event(event: Any) -> dict[str, Any] | None:
         labels = {
             "started": "智能体已启动", "model": "模型调用", "tool_start": "工具调用开始",
             "tool_end": "工具调用完成", "completed": "方案已通过校验",
@@ -136,7 +138,7 @@ class AgentRuns:
         return value
 
     def record_agent_event(self, agent_run_id: int, event: Any) -> None:
-        clean = self.agent_public_event(event)
+        clean = self._agent_public_event(event)
         if clean is None:
             return
         try:

@@ -16,7 +16,7 @@ from ..documents.document_access import (
     DocumentAccessError,
     validate_document_access_arguments,
 )
-from ..research.project_research import RESEARCH_TOOLS, validate_research_arguments
+from ..research.config import RESEARCH_TOOLS, validate_research_arguments
 from .errors import (
     AIError,
     _runtime_error_message,

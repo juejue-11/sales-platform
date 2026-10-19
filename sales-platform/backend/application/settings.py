@@ -6,7 +6,7 @@ from typing import Any, Callable
 import copy
 import os
 from pathlib import Path
-from ..analysis.ai import PiSDKProvider
+from ..analysis.runtime_bridge import PiSDKProvider
 from ..analysis.analysis_policy import ANALYSIS_POLICY_VERSION, DEFAULT_MARKET_GOAL, analysis_context, current_analysis_meta
 from ..core.config import DEFAULT_SETTINGS, env_archive_root
 from ..core.utils import json_text, json_value, now_iso
@@ -60,13 +60,13 @@ class ApplicationSettings:
         value = json_value(row[0], {}) if row else {}
         return value if isinstance(value, dict) else {}
 
-    def stored_api_key(self) -> str:
+    def _stored_api_key(self) -> str:
         value = self.section("ai").get("api_key")
         if isinstance(value, str) and value:
             return value
         return os.getenv("OPENAI_API_KEY", "")
 
-    def ai_engine(self, ai: dict[str, Any] | None = None) -> str:
+    def _ai_engine(self, ai: dict[str, Any] | None = None) -> str:
         # The environment switch is intentionally explicit.  It provides a
         # stable escape hatch for the legacy HTTP tests while the default is
         # always the embedded Pi SDK.
@@ -83,8 +83,8 @@ class ApplicationSettings:
         base_url = str(ai.get("base_url") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
         model = str(ai.get("model") or os.getenv("OPENAI_MODEL", ""))
         enabled = bool(ai.get("enabled", True))
-        api_key = self.stored_api_key()
-        engine = self.ai_engine(ai)
+        api_key = self._stored_api_key()
+        engine = self._ai_engine(ai)
         sdk_is_ready = PiSDKProvider.sdk_ready()
         provider_is_pi = isinstance(self.state.provider, PiSDKProvider) or callable(getattr(self.state.provider, "analyze", None))
         runtime_ready = (self.state.injected_provider or engine != "pi_sdk" or not provider_is_pi
@@ -107,9 +107,9 @@ class ApplicationSettings:
             ai.setdefault(key, copy.deepcopy(default))
         # Never expose the actual secret, including through arbitrary extra keys.
         ai.pop("api_key", None)
-        ai["has_api_key"] = bool(self.stored_api_key())
+        ai["has_api_key"] = bool(self._stored_api_key())
         ai["enabled"] = bool(ai.get("enabled"))
-        ai["engine"] = self.ai_engine(ai)
+        ai["engine"] = self._ai_engine(ai)
         ai["sdk_ready"] = PiSDKProvider.sdk_ready()
         version = int(self.get_meta("settings_version") or 1)
         return {"business": business, "ai": ai, "import": import_settings, "version": version,

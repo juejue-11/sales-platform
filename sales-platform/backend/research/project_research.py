@@ -1,4 +1,4 @@
-"""Public compatibility surface for project-scoped research.
+"""Public interface for project-scoped research.
 
 The implementations live in modules named for their responsibilities:
 configuration, network access, parsing, SQLite evidence storage, source

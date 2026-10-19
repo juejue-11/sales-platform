@@ -29,7 +29,7 @@ backend/
 | `backend/procurement/` | 采购资料模型、阅读、事实校验与补充资料 | `model`、`facts`、`reading`、`milestones` 纯计算；`supplements` 单独管理文件及纠正持久化。均不依赖 `service.py` |
 | `backend/procurement/facts.py` | 从公告正文提取明确采购事实 | 不将未核实推测写成采购事实 |
 | `backend/documents/` | 公开附件读取、归档复用、片段读取权限与文档转换 | 保留来源、哈希、页码和访问限制 |
-| `backend/research/` | 项目调查及历史证据 | 后续拆分其内部网络与持久化职责，保持任务授权和证据版本 |
+| `backend/research/` | 项目调查及历史证据 | 会话组合检索、读取、关系核实与证据存储；网络传输单独维护，保持任务授权和证据版本 |
 | `backend/analysis/`、`agent-runtime/` | 分析策略、报告、规则、摘要、模型调用及 Agent 执行 | 通过已有进程协议通信；密钥不进入命令行 |
 | `backend/storage/` | SQLite 结构与连接 | 数据位置仍由项目配置指定 |
 | `backend/core/` | 项目路径、配置与共同基础函数 | 不依赖应用编排；不把业务职责继续堆进通用函数 |
@@ -46,6 +46,35 @@ backend/
 | `tmp/` | 临时验证产物 | 不作为程序代码或文档的长期入口 |
 
 根目录保留 README、依赖清单、接口约定、启动/停止/安装脚本。不要为了目录整齐搬动运行入口。`node_modules/`、`dist/`、`.venv/` 是依赖或构建产物，不放业务代码。
+
+## 内部模块与依赖方向
+
+`application/service.py` 是应用组合与生命周期入口，负责接线、导入及唤醒唯一的持久队列工作器。具体业务由以下模块拥有，不再放回入口类：
+
+| 模块 | 拥有的职责 |
+| --- | --- |
+| `application/settings.py` | 配置持久化、密钥遮蔽、模型就绪状态与配置失效 |
+| `application/records.py` | 项目归属、公告及采购资料查询 |
+| `application/reading_store.py` | 资料版本、阅读结果保存和基于采购说明的门槛 |
+| `application/reading_jobs.py` | 阅读任务排队与模型阅读执行 |
+| `application/documents.py` | 附件获取、归档复用、更新和受控快照 |
+| `application/analysis_context.py` | 有界输入快照、关联资料和依赖指纹 |
+| `application/analysis_jobs.py` | 分析执行、输出纠正和校验后的结果保存 |
+| `application/agent_runs.py` | 活动、用量、调查证据与运行历史 |
+| `application/projects.py`、`source_status.py` | 项目展示查询、筛选、汇总与来源新鲜度 |
+| `application/decisions.py` | 人工决定、门槛覆盖和项目关联 |
+
+`ApplicationState` 只持有进程资源、可变路径、模型依赖和任务生命周期状态；领域资料仍保存在 SQLite。模块通过明确依赖组合，不接收整个 `ScreeningService`，不使用 mixin 或动态方法转发共享所有实现。排队与唤醒回调由应用入口接线。共享应用错误放在 `application/errors.py`。依赖方向由 `tests/test_module_boundaries.py` 检查。
+
+`analysis/providers.py` 管理直接模型适配，`runtime_bridge.py` 管理 Node 子进程协议，`prompts.py` 管理提示词和输入指纹，`validation.py` 管理报告及证据校验，`errors.py` 管理错误分类和脱敏。内部调用者直接导入对应模块。
+
+`research/session.py` 组合单次授权调查；`search.py`、`reading.py`、`relations.py` 分别实现检索、读取和关系核实；`network.py` 负责网络限制，`storage.py` 负责证据持久化，`evidence.py` 负责证据读取记录和关系政策，`config.py`、`parsing.py` 分别管理配置与来源解析。下层模块不反向导入会话入口。
+
+`agent-runtime/src/runner.ts` 保留进程入口；请求规范化、RPC、工具参数、工具执行、上下文和 Agent 执行分别放在对应模块。协议类型独立存放，业务模块不反向依赖 `runner.ts`。
+
+`followup/service.py` 拥有跟进头部、阶段和真实提交记录；`adoption.py` 处理用户采用计划，`progress.py` 处理任务及材料进度，`merge.py` 处理项目合并中的人工历史保留，`validation.py` 统一业务输入及状态迁移规则。包级入口直接导出实际实现，下层模块不反向依赖入口。
+
+新增功能先确定所属职责。文件变长时复查职责和依赖；拆分必须移除被替代的实现，并用行为回归验证，不能仅增加目录、转发层或私有兼容导出。
 
 ## 验证和切换
 

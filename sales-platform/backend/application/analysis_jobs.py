@@ -7,8 +7,13 @@ import asyncio
 import copy
 import inspect
 import sqlite3
-from ..analysis.ai import AIError, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult, build_messages, correction_messages, extract_content, sanitize_ai_error, validate_judgment
-from ..research.project_research import RESEARCH_POLICY_VERSION, RESEARCH_TOOLS, ResearchSession, configuration_fingerprint
+from ..analysis.errors import AIError, sanitize_ai_error
+from ..analysis.providers import OpenAICompatibleProvider
+from ..analysis.runtime_bridge import PiSDKProvider, PiSDKResult
+from ..analysis.prompts import build_messages, correction_messages
+from ..analysis.validation import extract_content, validate_judgment
+from ..research.config import RESEARCH_POLICY_VERSION, RESEARCH_TOOLS, configuration_fingerprint
+from ..research.session import ResearchSession
 from ..analysis.provider_finalizer import deepseek_formatter_endpoint, strict_format_report
 from ..core.utils import json_text, now_iso, sha256_text
 from ..procurement import procurement_fingerprint

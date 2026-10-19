@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable, TYPE_CHECKING
 
 import asyncio
-from ..analysis.ai import AIError
+from ..analysis.errors import AIError
 from ..documents.document_access import DocumentAccessError, build_document_view, validate_document_access_arguments
 from ..core.utils import json_text, now_iso, sha256_text
 from ..documents.public_documents import fetch_record_documents, read_archived_documents
@@ -33,7 +33,7 @@ class ProjectDocuments:
         self.settings = settings
         self.queue_reading = queue_reading
 
-    async def refresh_record_documents(self, project_id: int, records: list[dict[str, Any]], *,
+    async def _refresh_record_documents(self, project_id: int, records: list[dict[str, Any]], *,
                                         preloaded: dict[int, list[dict[str, Any]]] | None = None,
                                         queue_reading: bool = True) -> dict[str, Any]:
         """Fetch and persist attachment documents without invoking an AI provider."""
@@ -162,13 +162,13 @@ class ProjectDocuments:
             if marker is None or int(marker["record_version"] or 0) != int(record.get("current_version") or 1):
                 pending.append(record)
         if pending:
-            await self.refresh_record_documents(int(project_id), pending, queue_reading=False)
+            await self._refresh_record_documents(int(project_id), pending, queue_reading=False)
 
     async def refresh_project_documents(self, project_id: int) -> dict[str, Any]:
         project_id = int(self.records.project_row(project_id)["id"])
         records = self.records.records_for_project(project_id)
         try:
-            procurement = await self.refresh_record_documents(project_id, records)
+            procurement = await self._refresh_record_documents(project_id, records)
             message = "采购附件刷新完成"
         except ServiceError as exc:
             with self.state.lock, self.state.db:
@@ -220,10 +220,10 @@ class ProjectDocuments:
             attachments = record.get("attachments", [])
             if (archived and isinstance(attachments, list) and len(archived) == len(attachments)
                     and all(document["status"] == "parsed" for document in archived)):
-                await self.refresh_record_documents(project_id, [record], preloaded={int(record["id"]): archived})
+                await self._refresh_record_documents(project_id, [record], preloaded={int(record["id"]): archived})
                 cache[int(record["id"])] = self.records.document_sources_for_records([int(record["id"])])
             else:
-                await self.refresh_record_documents(project_id, [record])
+                await self._refresh_record_documents(project_id, [record])
                 cache[int(record["id"])] = self.records.document_sources_for_records([int(record["id"])])
         documents = [document for record in targets for document in cache[int(record["id"])]]
         try:

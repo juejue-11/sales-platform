@@ -9,12 +9,13 @@ import os
 import sqlite3
 from pathlib import Path
 import httpx
-from ..analysis.ai import AIProvider, OpenAICompatibleProvider, PiSDKProvider
+from ..analysis.providers import AIProvider, OpenAICompatibleProvider
+from ..analysis.runtime_bridge import PiSDKProvider
 from ..analysis.analysis_policy import current_analysis_meta
 from ..core.config import env_archive_root, env_source_path
 from ..storage.db import connect
 from .ingest import ImportErrorDetail, import_records
-from ..research.project_research import RESEARCH_POLICY_VERSION
+from ..research.config import RESEARCH_POLICY_VERSION
 from ..core.utils import json_text, json_value, now_iso
 from .errors import ServiceError
 from .state import ApplicationState

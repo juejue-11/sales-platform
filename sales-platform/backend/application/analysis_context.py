@@ -5,10 +5,11 @@ from typing import Any, TYPE_CHECKING
 
 import copy
 import sqlite3
-from ..analysis.ai import MAX_CONTEXT_BODY_CHARS, bounded_context_body, input_fingerprint
+from ..analysis.prompts import MAX_CONTEXT_BODY_CHARS, bounded_context_body, input_fingerprint
 from ..analysis.analysis_policy import analysis_context
 from ..core.citations import citation_fragments
-from ..research.project_research import RESEARCH_POLICY_VERSION, configuration_fingerprint, list_sources
+from ..research.config import RESEARCH_POLICY_VERSION, configuration_fingerprint
+from ..research.storage import list_sources
 from ..documents.document_access import build_procurement_context
 from ..core.utils import json_text, now_iso, sha256_text
 from ..procurement import procurement_fingerprint
@@ -27,7 +28,7 @@ class AnalysisContext:
         self.records = records
 
     @staticmethod
-    def analysis_record(record: dict[str, Any]) -> dict[str, Any]:
+    def _analysis_record(record: dict[str, Any]) -> dict[str, Any]:
         # Keep the context self-contained while avoiding collector payloads and
         # local archive paths.  ``record_id`` is explicit because it is the
         # citation identity used by the Pi agent.
@@ -94,7 +95,7 @@ class AnalysisContext:
                     saved["read_fragments"].append(value)
         return list(registry.values())
 
-    def analysis_project_snapshot(self, project_id: int, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def _analysis_project_snapshot(self, project_id: int, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         project_row = self.records.project_row(project_id)
         records = records if records is not None else self.records.records_for_project(project_id)
         latest = records[0] if records else {}
@@ -112,7 +113,7 @@ class AnalysisContext:
             "record_ids": [int(record["id"]) for record in records if record.get("id") is not None],
             "gate_status": gate,
             "gate_reasons": gate_reasons,
-            "records": [self.analysis_record(record) for record in records],
+            "records": [self._analysis_record(record) for record in records],
             # The aggregate contains only server-parsed facts and document
             # metadata. Full text remains available through the trusted tool.
             "procurement": build_procurement_context(procurement),
@@ -125,7 +126,7 @@ class AnalysisContext:
             "updated_at": project_row["updated_at"],
         }
 
-    def analysis_related_context(self, project_id: int,
+    def _analysis_related_context(self, project_id: int,
                                   records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         """Build bounded context only from explicit record refs and active links."""
         records = records if records is not None else self.records.records_for_project(project_id)
@@ -159,7 +160,7 @@ class AnalysisContext:
                 "id": related_id,
                 "title": latest.get("title") or f"项目 {related_id}",
                 "relation": ",".join(sorted(related[related_id])),
-                "records": [self.analysis_record(record) for record in selected],
+                "records": [self._analysis_record(record) for record in selected],
             })
             record_count += len(selected)
         return output
@@ -216,7 +217,7 @@ class AnalysisContext:
         fingerprints: dict[int, str] = {}
         for project_id in project_ids:
             try:
-                related = self.analysis_related_context(int(project_id))
+                related = self._analysis_related_context(int(project_id))
             except (NotFoundError, sqlite3.Error):
                 continue
             fingerprints[int(project_id)] = sha256_text(json_text(related))
@@ -238,9 +239,9 @@ class AnalysisContext:
     def analysis_context(self, project_id: int, capability: dict[str, Any],
                           records: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         records = records if records is not None else self.records.records_for_project(project_id)
-        related = self.analysis_related_context(project_id, records)
+        related = self._analysis_related_context(project_id, records)
         return {
-            "project": self.analysis_project_snapshot(project_id, records),
+            "project": self._analysis_project_snapshot(project_id, records),
             **analysis_context(capability),
             "related_projects": copy.deepcopy(related),
             "research": {"policy_version": RESEARCH_POLICY_VERSION,

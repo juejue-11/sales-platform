@@ -24,7 +24,7 @@ class ProcurementReadings:
         self.records = records
         self.settings = settings
 
-    def reading_corrections(self, project_id: int) -> list[dict[str, Any]]:
+    def _reading_corrections(self, project_id: int) -> list[dict[str, Any]]:
         """Read optional human corrections without coupling to supplements.py.
 
         The corrections table is created by the supplements workstream.  This
@@ -47,7 +47,7 @@ class ProcurementReadings:
         records = self.records.records_for_project(int(project_id))
         documents = self.records.document_sources_for_records([int(record["id"]) for record in records
                                                          if record.get("id") is not None])
-        corrections = self.reading_corrections(int(project_id))
+        corrections = self._reading_corrections(int(project_id))
         version = reading_material_version(records, documents, corrections)
         return build_material(records, documents, version=version, corrections=corrections)
 
@@ -63,7 +63,7 @@ class ProcurementReadings:
         ).fetchone()
 
     @staticmethod
-    def reading_json(value: Any, default: Any) -> Any:
+    def _reading_json(value: Any, default: Any) -> Any:
         parsed = json_value(value, default)
         return parsed if isinstance(parsed, type(default)) else default
 
@@ -81,12 +81,12 @@ class ProcurementReadings:
             "material_version": str(row["material_version"] or ""), "status": status, "stale": stale,
             "summary": str(row["summary"] or ""), "demand_type": str(row["demand_type"] or "unknown"),
             "stage": str(row["stage"] or ""), "buyer": str(row["buyer"] or ""),
-            "region": str(row["region"] or ""), "category": self.reading_json(row["category_json"], []),
-            "sections": self.reading_json(row["sections_json"], []),
-            "milestones": self.reading_json(row["milestones_json"], []),
-            "coverage": self.reading_json(row["coverage_json"], []),
-            "conflicts": self.reading_json(row["conflicts_json"], []),
-            "unresolved": self.reading_json(row["unresolved_json"], []),
+            "region": str(row["region"] or ""), "category": self._reading_json(row["category_json"], []),
+            "sections": self._reading_json(row["sections_json"], []),
+            "milestones": self._reading_json(row["milestones_json"], []),
+            "coverage": self._reading_json(row["coverage_json"], []),
+            "conflicts": self._reading_json(row["conflicts_json"], []),
+            "unresolved": self._reading_json(row["unresolved_json"], []),
             "error": str(row["error"] or "") if row["error"] else None,
             "updated_at": row["updated_at"],
         }

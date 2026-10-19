@@ -1,5 +1,5 @@
 """Trusted agent tool names and execution budgets."""
-from ..research.project_research import RESEARCH_TOOLS
+from ..research.config import RESEARCH_TOOLS
 
 DEFAULT_AGENT_LIMITS = {
     "max_turns": 6,

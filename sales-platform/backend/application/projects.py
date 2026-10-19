@@ -7,7 +7,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from ..analysis.briefing import build_briefing
 from ..analysis.analysis_policy import current_analysis_meta
-from ..research.project_research import RESEARCH_POLICY_VERSION, configuration_fingerprint, list_sources
+from ..research.config import RESEARCH_POLICY_VERSION, configuration_fingerprint
+from ..research.storage import list_sources
 from ..core.utils import SHANGHAI, json_text, json_value, parse_timestamp, sha256_text
 from ..procurement import procurement_fingerprint
 from .workbench import followup_summary
@@ -39,18 +40,18 @@ class ProjectQueries:
         self.settings = settings
         self.source_status = source_status
 
-    def all_project_summaries(self) -> list[dict[str, Any]]:
+    def _all_project_summaries(self) -> list[dict[str, Any]]:
         return [self.summary(int(row["id"])) for row in self.state.db.execute("SELECT id FROM projects ORDER BY id").fetchall()]
 
     @staticmethod
-    def is_deadline_soon(item: dict[str, Any], *, now: datetime | None = None) -> bool:
+    def _is_deadline_soon(item: dict[str, Any], *, now: datetime | None = None) -> bool:
         now = now or datetime.now(SHANGHAI)
         deadline = parse_timestamp(item.get("deadline_at"), deadline=True)
         return bool(deadline and now <= deadline <= now + timedelta(days=7) and
                     item.get("gate_status") in {"candidate", "review"})
 
     @staticmethod
-    def reading_submission_date(item: dict[str, Any]) -> Any:
+    def _reading_submission_date(item: dict[str, Any]) -> Any:
         value = submission_deadline(item.get("procurement_reading") if isinstance(item, dict) else None)
         return value.astimezone(SHANGHAI).date() if value else None
 
@@ -240,7 +241,7 @@ class ProjectQueries:
         projects = []
         now = datetime.now(SHANGHAI)
         published_days = max(0, min(365, int(published_days)))
-        for item in self.all_project_summaries():
+        for item in self._all_project_summaries():
             if published_days:
                 published = parse_timestamp(item.get("published_at"))
                 today = now.date()
@@ -268,7 +269,7 @@ class ProjectQueries:
             # stand in for an AI recommendation.
             if ai_decision and item.get("ai_decision") != ai_decision:
                 continue
-            if deadline_soon and not self.is_deadline_soon(item, now=now):
+            if deadline_soon and not self._is_deadline_soon(item, now=now):
                 continue
             if kind and item["kind"] != kind:
                 continue
@@ -291,7 +292,7 @@ class ProjectQueries:
             if followup_stage and item.get("followup_stage") != followup_stage:
                 continue
             if key_time:
-                submission_date = self.reading_submission_date(item)
+                submission_date = self._reading_submission_date(item)
                 today = now.astimezone(SHANGHAI).date()
                 if key_time == "unknown":
                     if submission_date is not None:
@@ -317,7 +318,7 @@ class ProjectQueries:
     def dashboard(self) -> dict[str, Any]:
         # Dashboard aggregates are full-dataset counts.  The visible deadline
         # list is intentionally capped separately for the home page.
-        projects = self.all_project_summaries()
+        projects = self._all_project_summaries()
         gate_counts: dict[str, int] = {}
         ai_counts: dict[str, int] = {}
         ai_decision_counts: dict[str, int] = {}
@@ -335,7 +336,7 @@ class ProjectQueries:
             ai_decision = item.get("ai_decision")
             if ai_decision:
                 ai_decision_counts[str(ai_decision)] = ai_decision_counts.get(str(ai_decision), 0) + 1
-            if self.is_deadline_soon(item, now=now):
+            if self._is_deadline_soon(item, now=now):
                 deadline_soon.append(item)
         rows = self.state.db.execute("SELECT count(*) AS c FROM records").fetchone()
         updated = self.source_status.source_data_updated_at()

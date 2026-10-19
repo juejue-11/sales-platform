@@ -7,12 +7,18 @@
 | 位置 | 职责 |
 | --- | --- |
 | `backend/analysis/analysis_policy.py` | 平台目标、客户偏好、企业资料的分离及语义版本 |
-| `backend/research/project_research.py` | 受控来源检索、读取、关系核实、资料版本与调查预算 |
+| `backend/research/session.py` | 单次调查授权、预算与检索/读取/关系核实模块的组合 |
+| `backend/research/search.py`、`reading.py`、`relations.py` | 受控来源检索、读取和关系核实 |
+| `backend/research/network.py`、`storage.py`、`evidence.py` | 网络限制、不可变来源版本和实际读取证据 |
 | `backend/documents/document_access.py` | 当前项目附件的目录、按页及关键词片段读取，统一返回大小限制 |
 | `backend/analysis/agent_report.py` | Agent 自选报告的结构约束、逐项语义和引用规范化 |
-| `backend/analysis/ai.py` | 模型适配、运行时协议、原文引用校验与一次输出纠错 |
-| `backend/application/service.py` | 队列、输入快照、资料缓存、结果存储、过期与人工历史 |
-| `agent-runtime/src/runner.ts` | Pi SDK 多轮执行、工具权限、次数及时间预算 |
+| `backend/analysis/providers.py`、`runtime_bridge.py` | 模型适配和 Python/Node 子进程协议 |
+| `backend/analysis/prompts.py`、`validation.py`、`errors.py` | 输入与纠错提示、报告/引用校验、错误脱敏 |
+| `backend/application/service.py` | 应用组合、生命周期、导入和队列协调 |
+| `backend/application/analysis_context.py`、`analysis_jobs.py`、`agent_runs.py` | 输入快照、分析及一次输出纠错、结果存储和运行历史 |
+| `backend/application/reading_store.py`、`reading_jobs.py`、`documents.py` | 阅读版本、阅读任务和附件获取 |
+| `agent-runtime/src/runner.ts`、`request.ts`、`rpc.ts` | 进程入口、请求校验和双工协议 |
+| `agent-runtime/src/execution.ts`、`tools.ts`、`tool-arguments.ts` | Pi SDK 多轮执行、工具权限、次数及时间预算 |
 | `frontend/src/components/report/` | 通用章节、段落、列表、表格、引用与缺口呈现 |
 | `backend/documents/public_documents.py` | 公开文件解析与经目录、哈希校验的采集归档复用 |
 

@@ -14,7 +14,10 @@ import copy
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from ..analysis.ai import AIError, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult, extract_content
+from ..analysis.errors import AIError
+from ..analysis.providers import OpenAICompatibleProvider
+from ..analysis.runtime_bridge import PiSDKProvider, PiSDKResult
+from ..analysis.validation import extract_content
 from ..procurement.reading import DEMAND_TYPES, build_reading_messages, normalize_reading
 
 

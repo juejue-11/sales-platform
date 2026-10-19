@@ -50,7 +50,7 @@ class SourceStatus:
     def import_pending(self) -> bool:
         return self.file_signature(self.state.source_path) != self.state.last_import_signature
 
-    def collector_data_root(self) -> Path:
+    def _collector_data_root(self) -> Path:
         """Resolve the read-only collector data root for trial-status.md.
 
         The default export lives in ``<collector>/data/export``.  A configured
@@ -96,7 +96,7 @@ class SourceStatus:
             notes.append("当前暂无已导入记录，来源与字段覆盖未知。")
         notes.append("覆盖范围：仅当前导出文件，不能据此推断已覆盖全网公告或全部来源。")
 
-        trial_status = self.collector_data_root() / "trial-status.md"
+        trial_status = self._collector_data_root() / "trial-status.md"
         try:
             content = trial_status.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
