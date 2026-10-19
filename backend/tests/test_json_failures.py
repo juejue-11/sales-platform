@@ -518,17 +518,45 @@ def test_service_uses_one_yaml_finalizer_without_restarting_agent(
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
         assert (job["status"], job["attempts"]) == ("succeeded", 2)
         assert len(finalizer_calls) == 1
-        assert finalizer_calls[0]["previous_output"] == ""
-        prior_input = json.loads(finalizer_calls[0]["messages"][-2]["content"])
-        assert prior_input["untrusted_previous_output"] == ("" if empty_draft else '{"report":')
-        assert f"JSON parse position={0 if empty_draft else 10}" in finalizer_calls[0]["messages"][-1]["content"]
+        assert finalizer_calls[0]["previous_output"] == ("" if empty_draft else '{"report":')
+        original_input = json.loads(finalizer_calls[0]["messages"][1]["content"])
+        assert original_input["project"]["records"][0]["record_id"] == 1
+        assert "untrusted_previous_output" not in original_input
+        assert finalizer_calls[0]["available_evidence"] == {"documents": [], "research_sources": []}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 1
     finally:
         service.close()
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required for the subprocess protocol test")
-def test_service_formats_after_semantic_correction_then_malformed_json(
+def test_service_formats_valid_json_with_an_invalid_report_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    service, job_id, source = _new_service_case(tmp_path, monkeypatch)
+    bad_payload = _valid_final_payload(source)
+    bad_payload["report"]["sections"][0]["blocks"] = {}
+    script = _runtime_bad_result_runner()
+    original = 'content: "{\\"report\\":"'
+    assert original in script
+    script = script.replace(original, "content: " + json.dumps(json.dumps(bad_payload)))
+    (tmp_path / "bad-result.mjs").write_text(script, encoding="utf-8")
+    calls = []
+
+    async def fake_finalizer(**kwargs):
+        calls.append(kwargs)
+        return StrictFinalizerResult(content=json.dumps(_valid_final_payload(source)), usage={"model_calls": 1})
+
+    monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
+    try:
+        asyncio.run(service.run_job(job_id))
+        job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
+        assert (job["status"], job["attempts"]) == ("succeeded", 2)
+        assert len(calls) == 1
+        assert "sections[0].blocks: expected an array" in json.loads(calls[0]["messages"][-1]["content"])["validation_error"]
+    finally:
+        service.close()
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required for the subprocess protocol test")
+def test_service_corrects_semantics_without_restarting_json_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     service, job_id, source = _new_service_case(tmp_path, monkeypatch)
@@ -553,18 +581,24 @@ def test_service_formats_after_semantic_correction_then_malformed_json(
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
         usage_row = service.db.execute("SELECT usage_json FROM agent_runs WHERE job_id=?", (job_id,)).fetchone()
         usage = json.loads(usage_row["usage_json"])
-        assert (job["status"], job["attempts"]) == ("succeeded", 3)
-        assert state.read_text(encoding="utf-8") == "2"
+        assert (job["status"], job["attempts"]) == ("succeeded", 2)
+        assert state.read_text(encoding="utf-8") == "1"
         assert len(finalizer_calls) == 1
-        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 27, "output_tokens": 41}
+        original = json.loads(finalizer_calls[0]["messages"][1]["content"])
+        assert original["project"]["records"][0]["record_id"] == 1
+        assert "untrusted_previous_output" not in original
+        assert "validation_error" in json.loads(finalizer_calls[0]["messages"][-1]["content"])
+        assert "prepared_messages" not in finalizer_calls[0]
+        assert finalizer_calls[0]["available_evidence"] == {"documents": [], "research_sources": []}
+        assert usage == {"model_calls": 2, "tool_calls": 0, "input_tokens": 16, "output_tokens": 24}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 1
     finally:
         service.close()
 
 
-@pytest.mark.parametrize("finalizer_result", ["malformed", "invalid_evidence"])
+@pytest.mark.parametrize("finalizer_result", ["malformed", "invalid_evidence", "invalid_version"])
 @pytest.mark.skipif(NODE is None, reason="Node.js is required for the subprocess protocol test")
-def test_service_does_not_store_when_format_repair_fails_or_evidence_is_invalid(
+def test_service_does_not_store_when_semantic_finalizer_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, finalizer_result: str
 ):
     service, job_id, source = _new_service_case(tmp_path, monkeypatch)
@@ -582,8 +616,11 @@ def test_service_does_not_store_when_format_repair_fails_or_evidence_is_invalid(
         if finalizer_result == "malformed":
             kwargs["on_usage"](finalizer_usage)
             raise AIError("formatter returned malformed JSON", code="MODEL_FORMAT_ERROR")
+        payload = _valid_final_payload(source, quote="not in source" if finalizer_result == "invalid_evidence" else source)
+        if finalizer_result == "invalid_version":
+            payload["report"]["version"] = "1"
         return StrictFinalizerResult(
-            content=json.dumps(_valid_final_payload(source, quote="not in source"), ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False),
             usage=finalizer_usage,
         )
 
@@ -593,10 +630,16 @@ def test_service_does_not_store_when_format_repair_fails_or_evidence_is_invalid(
         job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
         usage_row = service.db.execute("SELECT usage_json FROM agent_runs WHERE job_id=?", (job_id,)).fetchone()
         usage = json.loads(usage_row["usage_json"])
-        assert (job["status"], job["attempts"]) == ("failed", 3)
-        assert state.read_text(encoding="utf-8") == "2"
+        assert (job["status"], job["attempts"]) == ("failed", 2)
+        assert state.read_text(encoding="utf-8") == "1"
         assert len(finalizer_calls) == 1
-        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 27, "output_tokens": 41}
+        original = json.loads(finalizer_calls[0]["messages"][1]["content"])
+        assert original["project"]["records"][0]["record_id"] == 1
+        assert "untrusted_previous_output" not in original
+        assert "validation_error" in json.loads(finalizer_calls[0]["messages"][-1]["content"])
+        assert "prepared_messages" not in finalizer_calls[0]
+        assert finalizer_calls[0]["available_evidence"] == {"documents": [], "research_sources": []}
+        assert usage == {"model_calls": 2, "tool_calls": 0, "input_tokens": 16, "output_tokens": 24}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 0
     finally:
         service.close()
@@ -618,7 +661,7 @@ def test_service_allows_semantic_correction_after_format_repair(
     async def fake_finalizer(**kwargs):
         finalizer_calls.append(kwargs)
         return StrictFinalizerResult(
-            content=json.dumps(_valid_final_payload(source, quote="not in source"), ensure_ascii=False),
+            content=json.dumps(_valid_final_payload(source, quote="not in source" if len(finalizer_calls) == 1 else source), ensure_ascii=False),
             usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 5, "output_tokens": 7},
         )
 
@@ -629,9 +672,14 @@ def test_service_allows_semantic_correction_after_format_repair(
         usage_row = service.db.execute("SELECT usage_json FROM agent_runs WHERE job_id=?", (job_id,)).fetchone()
         usage = json.loads(usage_row["usage_json"])
         assert (job["status"], job["attempts"]) == ("succeeded", 3)
-        assert state.read_text(encoding="utf-8") == "2"
-        assert len(finalizer_calls) == 1
-        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 27, "output_tokens": 41}
+        assert state.read_text(encoding="utf-8") == "1"
+        assert len(finalizer_calls) == 2
+        assert finalizer_calls[0]["messages"][:2] == finalizer_calls[1]["messages"][:2]
+        assert finalizer_calls[1]["previous_output"] == json.dumps(
+            _valid_final_payload(source, quote="not in source"), ensure_ascii=False
+        )
+        assert "quote" in json.loads(finalizer_calls[1]["messages"][-1]["content"])["validation_error"]
+        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 21, "output_tokens": 31}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 1
     finally:
         service.close()
@@ -654,6 +702,9 @@ def test_service_does_not_repeat_format_repair_after_semantic_correction(
 
     async def fake_finalizer(**kwargs):
         finalizer_calls.append(kwargs)
+        if len(finalizer_calls) == 2:
+            kwargs["on_usage"](finalizer_usage)
+            raise AIError("formatter returned malformed output", code="MODEL_FORMAT_ERROR")
         return StrictFinalizerResult(
             content=json.dumps(_valid_final_payload(source, quote="not in source"), ensure_ascii=False),
             usage=finalizer_usage,
@@ -666,9 +717,9 @@ def test_service_does_not_repeat_format_repair_after_semantic_correction(
         usage_row = service.db.execute("SELECT usage_json FROM agent_runs WHERE job_id=?", (job_id,)).fetchone()
         usage = json.loads(usage_row["usage_json"])
         assert (job["status"], job["attempts"]) == ("failed", 3)
-        assert state.read_text(encoding="utf-8") == "2"
-        assert len(finalizer_calls) == 1
-        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 27, "output_tokens": 41}
+        assert state.read_text(encoding="utf-8") == "1"
+        assert len(finalizer_calls) == 2
+        assert usage == {"model_calls": 3, "tool_calls": 0, "input_tokens": 21, "output_tokens": 31}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 0
     finally:
         service.close()
@@ -678,7 +729,7 @@ def test_service_does_not_repeat_format_repair_after_semantic_correction(
 def test_service_keeps_non_format_correction_failure_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    service, job_id, _ = _new_service_case(tmp_path, monkeypatch)
+    service, job_id, source = _new_service_case(tmp_path, monkeypatch)
     runner = tmp_path / "semantic-twice.mjs"
     runner.write_text(_runtime_semantic_then_malformed_runner(), encoding="utf-8")
     state = tmp_path / "runner-count.txt"
@@ -690,7 +741,10 @@ def test_service_keeps_non_format_correction_failure_terminal(
 
     async def fake_finalizer(**kwargs):
         finalizer_calls.append(kwargs)
-        raise AssertionError("semantic correction must not invoke the formatter")
+        return StrictFinalizerResult(
+            content=json.dumps(_valid_final_payload(source, quote="not in source")),
+            usage={"model_calls": 1, "tool_calls": 0, "input_tokens": 5, "output_tokens": 7},
+        )
 
     monkeypatch.setattr(service_module, "strict_format_report", fake_finalizer)
     try:
@@ -699,9 +753,9 @@ def test_service_keeps_non_format_correction_failure_terminal(
         usage_row = service.db.execute("SELECT usage_json FROM agent_runs WHERE job_id=?", (job_id,)).fetchone()
         usage = json.loads(usage_row["usage_json"])
         assert (job["status"], job["attempts"]) == ("failed", 2)
-        assert state.read_text(encoding="utf-8") == "2"
-        assert finalizer_calls == []
-        assert usage == {"model_calls": 2, "tool_calls": 0, "input_tokens": 22, "output_tokens": 34}
+        assert state.read_text(encoding="utf-8") == "1"
+        assert len(finalizer_calls) == 1
+        assert usage == {"model_calls": 2, "tool_calls": 0, "input_tokens": 16, "output_tokens": 24}
         assert service.db.execute("SELECT count(*) FROM judgments").fetchone()[0] == 0
     finally:
         service.close()

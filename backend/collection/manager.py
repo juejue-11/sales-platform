@@ -200,7 +200,7 @@ class CollectionManager:
         # no sibling must set SCREENING_COLLECTOR_ROOT explicitly, which keeps
         # isolated tests from accidentally selecting a production checkout.
         screening_root = Path(__file__).resolve().parents[2]
-        return screening_root.parent / "销售平台信息采集系统"
+        return screening_root.parent / "procurement-collector"
 
     def _python(self) -> str:
         if self._python_executable:

@@ -48,6 +48,15 @@ def test_report_roundtrip_derives_legacy_fields() -> None:
     assert "核实技术文件" in value["next_actions"]
 
 
+@pytest.mark.parametrize("version", ["1", 1.0, True, None, 2])
+def test_report_version_requires_the_exact_integer_protocol(version) -> None:
+    value = report()
+    value["version"] = version
+    with pytest.raises(AIError, match="report.version must be integer 1") as caught:
+        validate_judgment({"decision": "verify", "summary": "待核实", "report": value}, project(), "mock", "fp")
+    assert caught.value.code == "MODEL_FORMAT_ERROR"
+
+
 def test_initial_model_input_keeps_long_bill_of_materials_behind_document_tool() -> None:
     value = project()
     value["procurement"] = {
@@ -98,9 +107,11 @@ def test_potential_opportunity_requires_evidence_and_verification_action() -> No
     opportunity = {"id": "potential", "kind": "potential_opportunity", "title": "潜在线索",
                    "description": "可能存在后续设备需求", "basis": "项目建设阶段",
                    "uncertainties": [], "next_actions": [], "evidence": []}
-    with pytest.raises(AIError, match="potential opportunity"):
+    with pytest.raises(AIError, match="potential opportunity") as caught:
         validate_judgment({"decision": "verify", "summary": "待核实", "demand_summary": "待核实",
                            "report": report(opportunity=opportunity)}, project(), "mock", "fp")
+    assert "opportunities[0].evidence" in str(caught.value)
+    assert "potential" in str(caught.value)
 
 
 def test_quote_correction_reports_all_bad_quotes_without_accepting_them() -> None:
@@ -216,12 +227,22 @@ def test_attachment_evidence_uses_only_current_run_fragments() -> None:
     assert evidence["page"] == 2
 
 
-def test_no_company_material_guard_covers_report_text() -> None:
+def test_company_disclaimer_preserves_report_text() -> None:
     value = report()
-    value["sections"][0]["blocks"][0]["text"] = "我方具备该设备供货能力。"
-    with pytest.raises(AIError, match="company capability"):
+    text = "这不代表我方已具备供货能力或投标资格。"
+    value["sections"][0]["blocks"][0]["text"] = text
+    result = validate_judgment({"decision": "consider", "summary": "关注", "report": value},
+                               project(), "mock", "fp", require_report=True)
+    assert result["report"]["sections"][0]["blocks"][0]["text"] == text
+    assert result["analysis_meta"]["company_match"] == "not_evaluated"
+
+
+@pytest.mark.parametrize("state", ["partial", "assessed"])
+def test_company_matching_still_requires_material_for_reports(state: str) -> None:
+    with pytest.raises(AIError, match="company matching requires substantive company material"):
         validate_judgment({"decision": "consider", "summary": "关注", "demand_summary": "采购",
-                           "report": value}, project(), "mock", "fp")
+                           "analysis_meta": {"company_match": state}, "report": report()},
+                          project(), "mock", "fp", require_report=True)
 
 
 def test_old_database_migration_keeps_report_nullable(tmp_path: Path) -> None:

@@ -9,8 +9,7 @@ from pathlib import Path
 import pytest
 
 from backend.analysis.ai import AIError, build_messages, input_fingerprint, validate_judgment
-from backend.analysis.analysis_policy import (ANALYSIS_POLICY_VERSION, analysis_context,
-                                     unsupported_company_assertion)
+from backend.analysis.analysis_policy import ANALYSIS_POLICY_VERSION, analysis_context
 from backend.application.service import ConflictError, ScreeningService
 from backend.tests.test_backend import Provider, make_service, row
 
@@ -90,24 +89,39 @@ def test_company_matching_metadata_requires_real_material(value):
                           company_material={"company_name": "名称", "region_preferences": "地区"})
 
 
-@pytest.mark.parametrize("text,unsupported", [
-    ("我方具备投标资格，可以直接供货。", True),
-    ("本公司已经满足资质要求。", True),
-    ("若我方具备相关资质，可考虑参与。", False),
-    ("我方是否具备资质尚待核实。", False),
-    ("我们不具备已确认的供货能力。", False),
-    ("核实我方具备的产品及授权情况。", False),
-    ("设备经销商满足公告条件后可参与。", False),
-])
-def test_company_claim_guard_distinguishes_assertions_and_conditions(text, unsupported):
-    assert unsupported_company_assertion(text) is unsupported
-
-
-def test_unqualified_company_claim_is_rejected_even_if_meta_is_omitted():
+def test_company_disclaimer_does_not_fail_analysis_or_trigger_correction(tmp_path: Path):
     value = payload()
-    value["summary"] = "我方具备投标资格，可直接供货。"
-    with pytest.raises(AIError, match="company capability claim"):
-        validate_judgment(value, {"records": [row()]}, "mock", "fp")
+    value["summary"] = (
+        "本次未提供企业能力资料，因此企业匹配度保持未评估，上述门槛仅作对照清单使用；"
+        "这不代表我方已具备供货能力或投标资格。"
+    )
+    provider = Provider(value)
+    service = make_service(tmp_path, [row()], provider)
+    try:
+        service.update_settings({"ai": AI_SETTINGS})
+        job_id = service.queue_project(1)["job_id"]
+        asyncio.run(service.run_job(job_id))
+        job = service.db.execute("SELECT status,attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
+        assert job["status"] == "succeeded"
+        assert job["attempts"] == 1
+        judgment = service.project_detail(1)["judgment"]
+        assert judgment["summary"] == value["summary"]
+        assert judgment["analysis_meta"]["company_match"] == "not_evaluated"
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("text", [
+    "不能证明我方具备相关产品供货能力。",
+    "在确认我方具备相关产品供货能力后参与。",
+    "若我方具备相关资质，可考虑参与。",
+])
+def test_company_narrative_wording_does_not_determine_matching_state(text):
+    value = payload()
+    value["options"][0]["suitable_for"] = text
+    result = validate_judgment(value, {"records": [row()]}, "mock", "fp")
+    assert result["options"][0]["suitable_for"] == text
+    assert result["analysis_meta"]["company_match"] == "not_evaluated"
 
 
 def test_key_fact_gap_remains_verify_without_company_gap(tmp_path: Path):

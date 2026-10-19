@@ -4,6 +4,7 @@ from pathlib import Path
 from backend.application.service import ScreeningService
 from backend.analysis.ai import _runtime_root
 from backend.core import config
+from backend.collection.manager import CollectionManager
 from backend.research.project_research import _DEFAULT_SOURCES_PATH
 
 
@@ -15,6 +16,17 @@ def test_default_database_stays_in_project_data_directory(monkeypatch):
     assert config.ROOT == PROJECT_ROOT
     assert config.DATA_DIR == PROJECT_ROOT / "data"
     assert config.database_path() == PROJECT_ROOT / "data" / "screening.sqlite3"
+
+
+def test_default_collection_paths_follow_sibling_checkout(monkeypatch):
+    monkeypatch.delenv("SCREENING_COLLECTOR_ROOT", raising=False)
+    monkeypatch.delenv("SCREENING_IMPORT_PATH", raising=False)
+    monkeypatch.delenv("SCREENING_ARCHIVE_ROOT", raising=False)
+    collector = PROJECT_ROOT.parent / "procurement-collector"
+    assert CollectionManager._default_root() == collector
+    assert config.env_source_path() == collector / "data" / "export" / "records.jsonl"
+    assert config.DEFAULT_ARCHIVE_ROOT == collector / "data"
+    assert config.env_archive_root(config.env_source_path()) == collector / "data"
 
 
 def test_agent_runtime_discovery_preserves_default_and_override(monkeypatch, tmp_path):

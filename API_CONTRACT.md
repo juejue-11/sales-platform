@@ -35,7 +35,7 @@
 - 后端 `backend/main.py` 导出 `app`，FastAPI，默认127.0.0.1:8766；启动自动导入和定期检查文件。
 - 前端 `frontend/` 为 React、TypeScript、Vite、Ant Design，开发代理 `/api` 到8766，生产 dist由后端同源提供。
 - 后端单独 SQLite 存储 `data/screening.sqlite3`，不修改采集系统数据。
-- 默认文件路径：`C:/Users/cgr/Desktop/new/销售平台信息采集系统/data/export/records.jsonl`。
+- 默认读取相邻模块 `../procurement-collector/data/export/records.jsonl`，以平台目录定位，不依赖本机用户名或工作区位置。
 - 设置、API密钥只落后端忽略的data目录；服务返回has_api_key，不返回密钥。模型未配置时显示not_configured，不伪造AI方案。
 - 自动导入仅为本次新增、实质变化或关联上下文变化的项目排队；相同文件重复导入不启动历史待分析队列。`/api/analyze-pending` 仍是明确触发全量待分析的入口。
 
@@ -90,7 +90,7 @@ report:AgentReport|null
 ```
 `decision`表示矿山设备市场关注价值，建议关注不等于特定企业具备供货或投标资格。`options`为可选行动/条件性参与方向，可为空；`next_actions`仍为展示建议，人工可直接填写下一步。企业资料为空或仅有名称/偏好时仍可保存有证据的正向市场判断，企业匹配为`not_evaluated`；资料可用性不表示资格已确认。新闻可有基于来源的市场关注判断，不能把潜在线索当明确采购或生成采购性交付方案。
 
-`analysis_meta`持久化，版本和结论范围由后端生成；模型只描述企业评估覆盖状态，无实质资料不得返回`partial/assessed`。旧历史没有元数据时返回null并视为旧语义/待复核，不重解释旧文本。升级迁移保留人工决定与旧报告，不自动调用模型；重分析仍使用现有队列。项目摘要的`analysis_meta`只来自当前有效判断，旧判断不显示为当前市场推荐。新结果仍须通过引用、字段、方案数量及企业断言检查；自然语言守卫只捕获明确的无资料自称能力，不替代业务评测。
+`analysis_meta`持久化，版本和结论范围由后端生成；模型只描述企业评估覆盖状态，无实质资料不得返回`partial/assessed`。旧历史没有元数据时返回null并视为旧语义/待复核，不重解释旧文本。升级迁移保留人工决定与旧报告，不自动调用模型；重分析仍使用现有队列。项目摘要的`analysis_meta`只来自当前有效判断，旧判断不显示为当前市场推荐。新结果仍须通过引用、字段、方案数量及企业匹配状态检查；自然语言不按关键词推断是否宣称企业能力。
 
 ## Agent 自选报告
 
@@ -112,7 +112,7 @@ ReportGap = {id:string,description:string,status:'not_stated'|'not_read'|'read_f
 
 章节标题、顺序、栏目和数量由 Agent 根据实际资料选择，没有按招标类别预设的报告模板。表格每行单独引用，空单元格允许表示未说明。机会可以为空；明确需求必须有当前采购证据，`related_project/buyer_background` 调查资料不能当明确采购。潜在机会必须有证据、推断依据、未确定内容及核实行动。`not_applicable` 不派生为未解决事项。
 
-报告 ID 唯一；至多 32 章，每章 64 个区块，列表与表格各 128 行，表格最多 32 列，机会和缺口各 64 项，每处最多 32 条引用；规范化后的报告至多 256000 UTF-8 字节。所有引用均走同一后端校验，报告里的调查引用也参与来源版本过期检查。无实质企业资料时，企业断言校验覆盖章节、表格、机会和缺口文本。
+报告 ID 唯一；至多 32 章，每章 64 个区块，列表与表格各 128 行，表格最多 32 列，机会和缺口各 64 项，每处最多 32 条引用；规范化后的报告至多 256000 UTF-8 字节。所有引用均走同一后端校验，报告里的调查引用也参与来源版本过期检查。无实质企业资料时，企业匹配状态只能为 `not_evaluated`。
 
 `GET /api/projects/{project_id}/documents/{document_id}/snapshot?sha256={hash}` 返回该项目保存的附件版本：元信息、`text`、`page_texts:[{page,text}]` 和 `items`，允许读取历史版本。文档不属于项目或哈希不符返回 404。附件 Evidence 的 `snapshot_url`、`source_url`、`document_sha256` 均由服务器派生，模型不能控制快照地址或源文件哈希。失败尝试独立保存，不覆盖上次成功解析的正文、哈希和明细；无附件结果与实际下载失败分开处理。
 
@@ -146,7 +146,7 @@ Investigation = {policy_version,status:'not_started'|'running'|'completed'|'limi
                  sources:ResearchSource[],unresolved:string[]}
 ```
 
-模型仅提交调查证据的 `source_ref/source_version/quote/page`；其余引用字段由后端生成。新来源引用与 `record_id/document_id` 互斥，版本和引用必须存在于本任务实际读取的片段 registry，禁止跨项目或直接引用搜索摘要。引用存在不证明推断成立；来源关系已核实不表示企业资格或所有采购事实通过核验。
+模型输入和读取工具提供 `evidence_fragments:[{fragment_id,text,page?}]`。模型优先提交来源标识与 `fragment_id`，服务器从该来源本任务实际读取的窗口还原 `quote`，保存和 API 返回的 Evidence 仍使用上述结构；未知片段、其他版本或未读取的内容拒绝，不以模型同时提交的文字覆盖原文。旧的 `quote` 输入继续按原文严格校验。调查证据的来源标识为 `source_ref/source_version`，与 `record_id/document_id` 互斥，禁止跨项目或直接引用搜索摘要。引用存在不证明推断成立；来源关系已核实不表示企业资格或所有采购事实通过核验。
 
 | 工具 | 参数 |
 | --- | --- |
@@ -191,7 +191,7 @@ Investigation = {policy_version,status:'not_started'|'running'|'completed'|'limi
 - `GET /api/settings` => `{business:{company_name,scope_description,target_keywords:string[],exclude_keywords:string[],supported_products,capabilities,solution_examples,region_preferences,customer_role,equipment_categories,mineral_types,demand_focus},ai:{base_url,model,enabled:boolean,has_api_key:boolean,engine:'pi_sdk'|'single_call',sdk_ready:boolean},import:{path,auto_import:boolean,poll_seconds:number},version:number}`。默认 `engine` 为 `pi_sdk`；只有明确设置 `SCREENING_AI_ENGINE=single_call` 时才运行旧的单次 HTTP provider。`sdk_ready` 只检查 Node.js 与 `agent-runtime/dist/runner.js` 是否存在，不调用模型；缺少运行时会返回可操作错误，不会静默降级。字符串默认为空；关键词为空时不得凭空认定公司能力。
 - `PUT /api/settings` body与GET相同（version无需传），ai可多传`api_key`；空字符串表示保留现有密钥，`clear_api_key:true`可移除。`ai.engine`与`ai.sdk_ready`为只读派生字段，写入时忽略；旧`single_call`引擎仅由环境变量`SCREENING_AI_ENGINE=single_call`显式启用。返回脱敏settings。改变业务配置后重算规则、标记旧AI结果待复核；合格且AI已配置的项目自动排队。
 - Settings另有只读`analysis:{goal:string,semantic_version:'market_agent_v2',company_profile_present:boolean}`，描述平台默认目标与实质企业资料可用性。仅`scope_description/supported_products/capabilities/solution_examples`参与材料可用性判断，公司名称、角色、设备类别、矿种、需求方向、关注关键词和地区偏好均不作为能力。兼容原业务字段，客户端写入`analysis`时忽略。
-- `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,import_pending:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。data_updated_at为源导出文件更新时间，last_import_at为平台导入时间；file_stale表示源文件缺失或超过48小时未更新，import_pending表示新文件尚未导入。
+- `GET /api/status` => `{data_updated_at,last_import_at,import_error,file_stale:boolean,import_pending:boolean,source_notes:string,imports:object[],jobs:{id,project_id,status,attempts,error,created_at,updated_at}[],job_counts:object,ai_configured:boolean}`。data_updated_at为源导出文件更新时间，last_import_at为平台导入时间；file_stale表示源文件缺失或超过48小时未更新，import_pending表示新文件尚未导入。`job_counts` 按每个项目最新任务统计，`jobs` 保留最近100条历史。`reading_job_counts` 按最新阅读任务和更新后的阅读结果统计，`reading_jobs` 保留历史；新排队或运行中的任务不被旧阅读结果覆盖。批量重试仅重排各项目最新且仍失败的任务，历史失败不再重复执行。服务启动关闭遗留的运行记录并注明中断原因，未完成任务继续按原队列恢复。
 - `POST /api/import` => `{inserted:number,updated:number,unchanged:number,total:number,message:string}`。完整校验文件后事务导入，无变化不重判，导入失败不得删除已有项目。
 - `POST /api/analyze-pending` => `{queued:number,message:string}`
 - `POST /api/jobs/retry-failed` => `{queued:number,message:string}`

@@ -222,12 +222,13 @@ def build_material(records: Iterable[Mapping[str, Any]], documents: Iterable[Map
             "segments": segments, "coverage": coverage}
 
 
-def _compact_source_for_prompt(source: Mapping[str, Any]) -> dict[str, Any]:
+def _compact_source_for_prompt(source: Mapping[str, Any], *, include_text: bool = True) -> dict[str, Any]:
     value = {key: source.get(key) for key in ("source_id", "source_kind", "record_id", "document_id",
                                                 "name", "kind", "status", "sha256") if source.get(key) is not None}
-    value["text"] = str(source.get("text") or "")
-    if isinstance(source.get("page_texts"), list):
-        value["page_texts"] = source["page_texts"]
+    if include_text:
+        value["text"] = str(source.get("text") or "")
+        if isinstance(source.get("page_texts"), list):
+            value["page_texts"] = source["page_texts"]
     return value
 
 
@@ -240,10 +241,19 @@ def build_reading_messages(material: Mapping[str, Any]) -> list[dict[str, str]]:
     system += """milestones 每项固定为 {"id":"submission-1","kind":"submission","label":"投标递交截止","at":"2026-10-23T13:30:00+08:00","sources":[{"source_kind":"announcement","record_id":1,"quote":"递交截止时间：2026年10月23日13:30（北京时间）"}]}，示例必须替换为实际资料。at 必须使用 ISO 8601；北京时间明确为 +08:00；原文仅有日期则用 YYYY-MM-DD，不补造小时分钟。每个节点只写一个时间，开始和截止分别生成节点，label 写节点名称，不重复日期；每个 sources.quote 必须保留完整日期及对应时间。未给出具体日期、仅写详见采购文件或截止前的，不生成确定日期。"""
     system += """summary 只做整体采购概览，可指出本次适用包等关键范围，但不要把完整的包级要求、资格限制或时间表重复到 summary 或多个 section。sections 按谁在采购、买什么、交付、资格、办理节点、材料费用、怎样参加、特殊要求等实际内容组织，id 分别使用 buyer、scope、delivery、qualification、schedule、materials、participation、special；只输出有实际要求的 sections，不能因此遗漏真实独立要求；长资料要覆盖所有 segments。coverage 中保留每个来源的覆盖状态。若有 corrections，必须显式处理；无法采纳的纠正写入 unresolved。不要输出 Markdown、思维过程、URL、本地路径或凭据。"""
     system += " Stage must be exactly one of: discovery, confirmed, registration, document_access, question, bidding, submission, opening, result, finished; use an empty string when unknown."
+    system += " 当本批次提供 segments 时，它们是唯一提供的连续正文原文；sources 只提供来源元数据，所有 quote 必须从对应 segments 的连续片段逐字引用。"
+    segments = [segment for segment in material.get("segments", []) if isinstance(segment, Mapping)]
+    segment_source_ids = {str(segment.get("source_id") or "") for segment in segments
+                          if str(segment.get("source_id") or "")}
+    # Every normal source is represented by these exact segments. Avoid sending
+    # the same full text twice while retaining source text for legacy packages
+    # that have no source-addressable segments.
     payload = {"version": READING_VERSION, "material_version": material.get("material_version"),
-               "sources": [_compact_source_for_prompt(source) for source in material.get("sources", [])
-                           if isinstance(source, Mapping)],
-               "segments": [segment for segment in material.get("segments", []) if isinstance(segment, Mapping)],
+               "sources": [_compact_source_for_prompt(
+                   source, include_text=(not str(source.get("source_id") or "") or
+                                         str(source.get("source_id") or "") not in segment_source_ids)
+               ) for source in material.get("sources", []) if isinstance(source, Mapping)],
+               "segments": segments,
                "coverage": material.get("coverage", []), "corrections": material.get("corrections", [])}
     return [{"role": "system", "content": system}, {"role": "user", "content": json_text(payload)}]
 

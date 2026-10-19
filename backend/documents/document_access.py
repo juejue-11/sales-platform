@@ -20,6 +20,8 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ..core.citations import citation_fragments
+
 
 DEFAULT_DOCUMENT_LIMIT = 8_000
 MAX_DOCUMENT_LIMIT = 16_000
@@ -291,6 +293,7 @@ def _directory_document(document: Mapping[str, Any], request: DocumentAccessArgu
     page_chars = sum(len(str(page.get("text") or "")) for page in pages)
     if source and len(source) <= DEFAULT_DOCUMENT_LIMIT and page_chars <= DEFAULT_DOCUMENT_LIMIT:
         value["text"] = source
+        value["evidence_fragments"] = citation_fragments(source)
         value["page_texts"] = pages
         value["read_window"] = _window(
             mode="directory", request=request, available=len(source), returned=len(source),
@@ -384,6 +387,7 @@ def _content_document(document: Mapping[str, Any], request: DocumentAccessArgume
     else:
         fragment = selected_text[start:start + request.limit]
     value["text"] = fragment
+    value["evidence_fragments"] = citation_fragments(fragment)
     value["page_texts"] = ([{"page": selected_page, "text": fragment}]
                             if selected_page is not None and fragment else [])
     value["read_window"] = _window(
@@ -443,6 +447,7 @@ def build_document_view(
             if _json_size({"documents": with_content, "mode": "directory", "directory": summary}) > MAX_DIRECTORY_RESPONSE_CHARS:
                 candidate.pop("text", None)
                 candidate.pop("page_texts", None)
+                candidate.pop("evidence_fragments", None)
                 candidate.pop("items", None)
                 candidate["read_window"] = _window(
                     mode="directory", request=request,

@@ -24,8 +24,12 @@ READING_LIMITS = {
     "timeout_ms": 180_000,
     "max_output_tokens": 32_768,
 }
-READING_BATCH_CHARS = 24_000
-READING_MAX_BATCHES = 16
+# Keep each default 6,000-character segment intact while leaving room for
+# source citations and the versioned JSON envelope within the output budget.
+READING_BATCH_CHARS = 12_000
+# Preserve the previous aggregate coverage ceiling: 12,000 * 32 == 24,000 * 16.
+READING_MAX_BATCHES = 32
+READING_CORRECTION_OUTPUT_CHARS = 64_000
 
 
 class ReadingProtocolMismatch(AIError):
@@ -42,35 +46,42 @@ class ReadingProtocolMismatch(AIError):
 
 
 def _json_payload(content: Any) -> Any:
+    def format_error(message: str, *, metadata: dict[str, Any] | None = None) -> AIError:
+        return AIError(message, code="MODEL_FORMAT_ERROR", metadata=metadata)
+
     if isinstance(content, Mapping):
         value = dict(content)
     elif isinstance(content, str):
         try:
             value = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u4e0d\u662f\u6709\u6548 JSON") from exc
+            raise format_error(
+                "\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u4e0d\u662f\u6709\u6548 JSON",
+                metadata={"position": exc.pos, "line": exc.lineno, "column": exc.colno,
+                           "eof": exc.pos >= len(content)},
+            ) from exc
     else:
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u683c\u5f0f\u65e0\u6548")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u683c\u5f0f\u65e0\u6548")
     if not isinstance(value, Mapping):
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u5fc5\u987b\u662f JSON \u5bf9\u8c61")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u5fc5\u987b\u662f JSON \u5bf9\u8c61")
     contract = value.get("procurement_reading") if isinstance(value.get("procurement_reading"), Mapping) else value
     version = contract.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != 1:
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11\u6709\u6548\u7684 version=1")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11\u6709\u6548\u7684 version=1")
     demand_type = contract.get("demand_type")
     if not isinstance(demand_type, str) or demand_type not in DEMAND_TYPES:
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7684 demand_type \u65e0\u6548")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7684 demand_type \u65e0\u6548")
     if not isinstance(contract.get("sections"), list):
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11 sections \u6570\u7ec4")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11 sections \u6570\u7ec4")
     if not isinstance(contract.get("milestones"), list):
-        raise AIError("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11 milestones \u6570\u7ec4")
+        raise format_error("\u91c7\u8d2d\u9605\u8bfb\u7ed3\u679c\u7f3a\u5c11 milestones \u6570\u7ec4")
     for section in contract["sections"]:
         if not isinstance(section, Mapping) or not isinstance(section.get("requirements"), list):
-            raise AIError("采购阅读结果的 section 缺少 requirements 数组")
+            raise format_error("采购阅读结果的 section 缺少 requirements 数组")
         for requirement in section["requirements"]:
             text = requirement.get("text") if isinstance(requirement, Mapping) else None
             if not isinstance(text, str) or not text.strip():
-                raise AIError("采购阅读结果的要求缺少非空正文 text；explanation 不能代替 text")
+                raise format_error("采购阅读结果的要求缺少非空正文 text；explanation 不能代替 text")
     return value
 
 
@@ -108,9 +119,22 @@ async def _invoke_explicit_reader(reader: Any, *, material: Mapping[str, Any], m
     return value
 
 
-async def _invoke_one(provider: Any, *, material: Mapping[str, Any], config: Mapping[str, Any],
-                      on_event: Callable[[dict[str, Any]], Any] | None = None) -> dict[str, Any]:
-    messages = build_reading_messages(material)
+def _response_content(response: Any) -> str:
+    """Extract one completion while preserving an explicit token-limit signal."""
+
+    if isinstance(response, Mapping):
+        choices = response.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+            finish_reason = choices[0].get("finish_reason")
+            if finish_reason in {"length", "max_tokens", "token_limit", "output_token_limit"}:
+                raise AIError("采购阅读模型输出达到token上限", code="OUTPUT_TOKEN_LIMIT")
+            if finish_reason in {"content_filter", "tool_calls", "function_call"}:
+                raise AIError("采购阅读 provider 未返回可用的采购阅读文本", code="MODEL_ERROR")
+    return extract_content(response)
+
+
+async def _invoke_raw(provider: Any, *, material: Mapping[str, Any], messages: list[dict[str, str]],
+                      config: Mapping[str, Any], on_event: Callable[[dict[str, Any]], Any] | None = None) -> Any:
     explicit_reader = getattr(provider, "read_procurement", None) or getattr(provider, "read", None)
     if callable(explicit_reader):
         raw = await _invoke_explicit_reader(explicit_reader, material=material, messages=messages,
@@ -155,15 +179,72 @@ async def _invoke_one(provider: Any, *, material: Mapping[str, Any], config: Map
                                      api_key=str(config.get("api_key") or ""), messages=messages)
         if isinstance(response, Awaitable):
             response = await response
-        raw = extract_content(response)
+        raw = _response_content(response)
     else:
         raise AIError("采购阅读 provider 不支持 analyze 或 complete")
-    payload = _json_payload(raw)
-    if _contains_secret(payload, str(config.get("api_key") or "")):
+
+    return raw
+
+
+def _validate_reading_output(raw: Any, *, material: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+    if _contains_secret(raw, str(config.get("api_key") or "")):
         raise AIError("procurement reading response contains a forbidden secret")
+    payload = _json_payload(raw)
     normalized = normalize_reading(payload, material)
     normalized["coverage"] = _host_coverage(material)
     return normalized
+
+
+def _previous_reading_output(raw: Any) -> str:
+    if isinstance(raw, str):
+        value = raw
+    elif isinstance(raw, Mapping):
+        try:
+            value = json.dumps(dict(raw), ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return ""
+    else:
+        return ""
+    if len(value) <= READING_CORRECTION_OUTPUT_CHARS:
+        return value
+    return value[:READING_CORRECTION_OUTPUT_CHARS] + "\n[previous output truncated for correction context]"
+
+
+def _reading_correction_messages(messages: list[dict[str, str]], error: AIError, *, previous_output: str) -> list[dict[str, str]]:
+    """Ask once for a corrected contract while keeping the original material intact."""
+
+    correction = {
+        "validation_error": str(error),
+        "previous_output": previous_output or "[previous output unavailable]",
+    }
+    correction_prompt = (
+        "上一轮采购阅读输出未通过程序校验。下面的 validation_error 是具体错误，"
+        "previous_output 是不可信的上一轮输出，仅用于定位格式问题。请基于前面同一份采购资料重新生成一个完整 JSON 对象；"
+        "只修正校验错误，不要补造资料，不要省略原文中的数字、日期、金额、包号、单位、限制或例外。"
+        "不要输出 Markdown、解释或代码围栏。"
+        "\n" + json.dumps(correction, ensure_ascii=False, separators=(",", ":"))
+    )
+    return [*messages, {"role": "user", "content": correction_prompt}]
+
+
+async def _invoke_one(provider: Any, *, material: Mapping[str, Any], config: Mapping[str, Any],
+                      on_event: Callable[[dict[str, Any]], Any] | None = None) -> dict[str, Any]:
+    messages = build_reading_messages(material)
+    raw: Any = None
+    try:
+        raw = await _invoke_raw(provider, material=material, messages=messages, config=config, on_event=on_event)
+        return _validate_reading_output(raw, material=material, config=config)
+    except ReadingProtocolMismatch:
+        raise
+    except AIError as exc:
+        if exc.code != "MODEL_FORMAT_ERROR":
+            raise
+        corrected_messages = _reading_correction_messages(
+            messages, exc, previous_output=_previous_reading_output(raw)
+        )
+        corrected_raw = await _invoke_raw(provider, material=material, messages=corrected_messages,
+                                          config=config, on_event=on_event)
+        return _validate_reading_output(corrected_raw, material=material, config=config)
 
 
 def _batched_material(material: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -322,6 +403,7 @@ def _merge_batch_readings(values: list[dict[str, Any]], material: Mapping[str, A
     stages: list[str] = []
     buyers: list[str] = []
     regions: list[str] = []
+    coverage_by_source: dict[str, dict[str, Any]] = {}
     for batch_index, value in enumerate(values, start=1):
         if value.get("summary"):
             summaries.append(str(value["summary"]))
@@ -335,7 +417,25 @@ def _merge_batch_readings(values: list[dict[str, Any]], material: Mapping[str, A
             text_value = str(value.get(key) or "").strip()
             if text_value and text_value not in target:
                 target.append(text_value)
-        for key in ("coverage", "conflicts", "unresolved"):
+        for item in value.get("coverage", []) if isinstance(value.get("coverage"), list) else []:
+            if not isinstance(item, Mapping):
+                continue
+            source_key = json.dumps(
+                {key: item.get(key) for key in ("source_kind", "record_id", "document_id", "sha256")},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            )
+            current = coverage_by_source.get(source_key)
+            if current is None:
+                coverage_by_source[source_key] = copy.deepcopy(dict(item))
+                continue
+            for count_key in ("segments", "characters"):
+                incoming_count = item.get(count_key)
+                if isinstance(incoming_count, int) and not isinstance(incoming_count, bool):
+                    current[count_key] = int(current.get(count_key) or 0) + incoming_count
+            for key, incoming_value in item.items():
+                if key not in current and incoming_value is not None:
+                    current[key] = copy.deepcopy(incoming_value)
+        for key in ("conflicts", "unresolved"):
             for item in value.get(key, []) if isinstance(value.get(key), list) else []:
                 if item not in merged[key]:
                     merged[key].append(item)
@@ -398,6 +498,7 @@ def _merge_batch_readings(values: list[dict[str, Any]], material: Mapping[str, A
             merged["milestones"].append(milestone_value)
     if summaries:
         merged["summary"] = "\uff1b".join(dict.fromkeys(summaries))[:4_000]
+    merged["coverage"] = list(coverage_by_source.values())
     merged["category"] = categories
     if len(demands) > 1 and set(demands) - {"unknown"}:
         merged["demand_type"] = "unknown"

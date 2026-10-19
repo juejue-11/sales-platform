@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import httpx
 
 from ..documents.public_documents import DocumentError, discover_attachments, parse_document
+from ..core.citations import citation_fragments
 
 
 RESEARCH_POLICY_VERSION = "project_research_v1"
@@ -1344,6 +1345,9 @@ class ResearchSession:
         relation = self._relation(source["source_ref"], str(version.get("version") or ""))
         result = _source_shape(source, version, relation)
         result.update({"text": text, "page_texts": fragments,
+                       "evidence_fragments": [
+                           {**citation, "page": fragment.get("page")}
+                           for fragment in fragments for citation in citation_fragments(fragment["text"])],
                        "scope": relation.get("scope") or version.get("scope") or "page"})
         if not text and result.get("status") == "read":
             result["status"] = "no_content"
@@ -1773,6 +1777,9 @@ class ResearchSession:
                     query=args["query"])
         result = _source_shape(source, version, relation)
         result.update({"status": status, "matches": matches, "text": "\n".join(item["text"] for item in matches),
+                       "evidence_fragments": [
+                           {**citation, "page": match.get("page")}
+                           for match in matches for citation in citation_fragments(str(match.get("text") or ""))],
                        "page_texts": [{"page": item.get("page"), "text": item.get("text") or ""} for item in matches],
                        "scope": relation.get("scope") or version.get("scope") or "fragment"})
         return result

@@ -23,7 +23,10 @@ function jobLabel(status: string): string {
 }
 
 function jobError(value: string): string {
+  if (value.includes('evidence fragment was not read in this job') || value.includes('invalid evidence fragment_id')) return 'AI 选择的引用片段不属于本次已读取资料，结果未保存；请重试。'
+  if (value.includes('MODEL_FORMAT_ERROR') || value.toLowerCase().includes('yaml') || value.toLowerCase().includes('dsml')) return '模型返回格式不正确，结果未保存；请重试。'
   if (value.includes('evidence quote does not match source record')) return 'AI 引用与项目原文不匹配，判断未保存；可重试。'
+  if (value.includes('potential opportunity requires evidence') || value.includes('explicit demand requires evidence')) return 'AI 列出的机会缺少原文依据，结果未保存；可重试。'
   if (value.includes('not valid JSON') || value.includes('not JSON') || value.includes('Expecting ') || value.includes('Unterminated string')) return '模型返回的数据格式有误，判断未保存；可重试。'
   if (value.includes('positive AI judgment requires source evidence')) return 'AI 推荐缺少原文依据，判断未保存；请核对资料后重试。'
   return value
@@ -124,14 +127,14 @@ export function OperationsPage() {
         <OperationStat title="采集文件更新" value={status.data_updated_at ? formatDate(status.data_updated_at, true) : '暂无'} icon={<DatabaseOutlined />} />
         <OperationStat title="平台最近导入" value={status.last_import_at ? formatDate(status.last_import_at, true) : '暂无'} icon={<CloudDownloadOutlined />} />
         <OperationStat title="等待 / 处理中" value={String((status.job_counts.queued ?? 0) + (status.job_counts.running ?? 0))} icon={<SyncOutlined />} />
-        <OperationStat title="失败任务" value={String(status.job_counts.failed ?? 0)} icon={<ExperimentOutlined />} />
+        <OperationStat title="当前失败项目" value={String(status.job_counts.failed ?? 0)} icon={<ExperimentOutlined />} />
       </div>
       <div className="operation-toolbar"><Space wrap><Button type="primary" icon={<CloudDownloadOutlined />} loading={action === 'import'} onClick={() => void run('import', api.importNow)}>立即导入 records.jsonl</Button><Button icon={<ExperimentOutlined />} loading={action === 'pending'} onClick={() => void run('pending', api.analyzePending)} disabled={!status.ai_configured}>分析待处理项目</Button><Button danger icon={<ReloadOutlined />} loading={action === 'retry'} onClick={() => void run('retry', api.retryFailed)} disabled={!status.ai_configured}>批量重试失败任务</Button></Space><Paragraph>导入异常会保留已有项目</Paragraph></div>
       {!status.ai_configured && <Alert type="info" showIcon message="模型尚未配置，可先查看和处理项目" action={<Button size="small" type="link" onClick={() => navigate('/settings')}>配置模型</Button>} />}
-      <Card className="task-ledger" title={<span>分析任务 <Text type="secondary">（最近 {jobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">每 10 秒自动更新</span>}>
+      <Card className="task-ledger" title={<span>分析任务历史 <Text type="secondary">（最近 {jobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">每 10 秒自动更新</span>}>
         {jobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有分析任务，配置模型后会开始处理候选项目" /> : <Table<StatusJob> rowKey="id" columns={jobColumns} dataSource={jobs} size="middle" scroll={{ x: 820 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
       </Card>
-      <Card className="task-ledger reading-job-ledger" title={<span>采购阅读任务 <Text type="secondary">（最近 {readingJobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">阅读失败可按项目重试</span>}>
+      <Card className="task-ledger reading-job-ledger" title={<span>采购阅读任务历史 <Text type="secondary">（最近 {readingJobs.length} 条）</Text></span>} extra={<span className="operation-table-caption">阅读失败可按项目重试</span>}>
         {readingJobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采购阅读任务" /> : <Table<ReadingJob> rowKey="id" columns={readingJobColumns} dataSource={readingJobs} size="middle" scroll={{ x: 920 }} pagination={{ pageSize: 20, showTotal: value => `共 ${value} 条` }} />}
       </Card>
       <Collapse className="source-details" items={[

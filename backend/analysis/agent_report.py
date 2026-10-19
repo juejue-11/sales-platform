@@ -38,6 +38,10 @@ _FORBIDDEN_EXPLICIT_RELATIONS = {"buyer_background", "related_project"}
 class ReportError(ValueError):
     """Raised when a model report cannot be accepted by the protocol."""
 
+    def __init__(self, message: str, *, format_error: bool = True) -> None:
+        super().__init__(message)
+        self.format_error = format_error
+
 
 EvidenceNormalizer = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -92,7 +96,7 @@ def _evidence(value: Any, name: str, normalize: EvidenceNormalizer) -> list[dict
         except Exception as exc:
             # Keep the public validation error stable while preserving the
             # useful evidence rejection reason from the backend normalizer.
-            raise ReportError(str(exc)) from exc
+            raise ReportError(str(exc), format_error=False) from exc
         if not isinstance(normalized, dict):
             raise ReportError(f"invalid report {name}[{index}]")
         result.append(normalized)
@@ -162,8 +166,10 @@ def _section(value: Any, index: int, ids: set[str], normalize: EvidenceNormalize
     section_id = _id(item.get("id"), f"sections[{index}].id", ids)
     title = _text(item.get("title"), f"sections[{index}].title")
     blocks = item.get("blocks")
-    if not isinstance(blocks, list) or len(blocks) > REPORT_MAX_BLOCKS:
-        raise ReportError(f"invalid report sections[{index}].blocks")
+    if not isinstance(blocks, list):
+        raise ReportError(f"invalid report sections[{index}].blocks: expected an array, got {type(blocks).__name__}")
+    if len(blocks) > REPORT_MAX_BLOCKS:
+        raise ReportError(f"report sections[{index}].blocks exceeds {REPORT_MAX_BLOCKS} items")
     return {"id": section_id, "title": title,
             "blocks": [_block(block, f"sections[{index}].blocks[{block_index}]", normalize)
                        for block_index, block in enumerate(blocks)]}
@@ -178,22 +184,25 @@ def _opportunity(value: Any, index: int, ids: set[str], normalize: EvidenceNorma
     evidence = _evidence(item.get("evidence", []), f"opportunities[{index}].evidence", normalize)
     if kind == "potential_opportunity":
         if not evidence:
-            raise ReportError("potential opportunity requires evidence")
+            raise ReportError(f"potential opportunity requires evidence: opportunities[{index}].evidence (id={opportunity_id})",
+                              format_error=False)
         if not _text(item.get("basis"), f"opportunities[{index}].basis"):
-            raise ReportError("potential opportunity requires basis")
+            raise ReportError("potential opportunity requires basis", format_error=False)
         uncertainties = _strings(item.get("uncertainties"), f"opportunities[{index}].uncertainties")
         next_actions = _strings(item.get("next_actions"), f"opportunities[{index}].next_actions")
         if not uncertainties or not next_actions:
-            raise ReportError("potential opportunity requires uncertainties and next_actions")
+            raise ReportError(f"potential opportunity requires uncertainties and next_actions: opportunities[{index}] (id={opportunity_id})",
+                              format_error=False)
     else:
         uncertainties = _strings(item.get("uncertainties", []), f"opportunities[{index}].uncertainties")
         next_actions = _strings(item.get("next_actions", []), f"opportunities[{index}].next_actions")
     if kind == "explicit_demand" and not evidence:
-        raise ReportError("explicit demand requires evidence")
+        raise ReportError(f"explicit demand requires evidence: opportunities[{index}].evidence (id={opportunity_id})",
+                          format_error=False)
     if kind == "explicit_demand":
         for evidence_item in evidence:
             if evidence_item.get("relation") in _FORBIDDEN_EXPLICIT_RELATIONS:
-                raise ReportError("explicit demand cannot use background or related-project evidence")
+                raise ReportError("explicit demand cannot use background or related-project evidence", format_error=False)
     return {
         "id": opportunity_id,
         "kind": kind,
@@ -233,8 +242,9 @@ def normalize_report(value: Any, *, normalize_evidence: EvidenceNormalizer,
     protocol itself.
     """
     report = _object(value, "report")
-    if isinstance(report.get("version"), bool) or report.get("version") != REPORT_VERSION:
-        raise ReportError("unsupported report version")
+    if type(report.get("version")) is not int or report.get("version") != REPORT_VERSION:
+        raise ReportError(f"unsupported report version: report.version must be integer {REPORT_VERSION}; "
+                          f"got {type(report.get('version')).__name__}")
     sections = report.get("sections")
     opportunities = report.get("opportunities", [])
     gaps = report.get("gaps", [])
@@ -292,49 +302,6 @@ def _iter_evidence(value: Any) -> Iterator[dict[str, Any]]:
         for item in value:
             if isinstance(item, dict):
                 yield item
-
-
-def report_narratives(report: Any) -> list[str]:
-    """Return model-authored report text for the no-company-material guard.
-
-    Evidence quotes and server-derived metadata are excluded because they are
-    source material, rather than claims made by the model.
-    """
-    values: list[str] = []
-    if not isinstance(report, dict):
-        return values
-    for section in report.get("sections", []):
-        if not isinstance(section, dict):
-            continue
-        for key in ("title",):
-            if isinstance(section.get(key), str):
-                values.append(section[key])
-        for block in section.get("blocks", []):
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "paragraph" and isinstance(block.get("text"), str):
-                values.append(block["text"])
-            elif block.get("type") == "list":
-                values.extend(item["text"] for item in block.get("items", [])
-                              if isinstance(item, dict) and isinstance(item.get("text"), str))
-            elif block.get("type") == "table":
-                values.extend(str(column) for column in block.get("columns", []) if isinstance(column, str))
-                for row in block.get("rows", []):
-                    if isinstance(row, dict):
-                        values.extend(str(cell) for cell in row.get("cells", []) if isinstance(cell, str))
-    for opportunity in report.get("opportunities", []):
-        if isinstance(opportunity, dict):
-            for key in ("title", "description", "basis"):
-                if isinstance(opportunity.get(key), str):
-                    values.append(opportunity[key])
-            for key in ("uncertainties", "next_actions"):
-                values.extend(item for item in opportunity.get(key, []) if isinstance(item, str))
-    for gap in report.get("gaps", []):
-        if isinstance(gap, dict):
-            for key in ("description", "impact", "next_action"):
-                if isinstance(gap.get(key), str) and gap[key]:
-                    values.append(gap[key])
-    return values
 
 
 def derive_legacy_fields(report: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[str]]:
@@ -406,5 +373,4 @@ __all__ = [
     "derive_legacy_fields",
     "iter_report_evidence",
     "normalize_report",
-    "report_narratives",
 ]

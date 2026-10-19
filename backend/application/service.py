@@ -16,12 +16,14 @@ from typing import Any
 import httpx
 
 from ..analysis.ai import (AIError, AIProvider, OpenAICompatibleProvider, PiSDKProvider, PiSDKResult,
+                           MAX_CONTEXT_BODY_CHARS,
                            bounded_context_body, build_messages, correction_messages, extract_content, input_fingerprint,
                            sanitize_ai_error, validate_judgment)
 from ..analysis.briefing import build_briefing
 from ..analysis.analysis_policy import (ANALYSIS_POLICY_VERSION, DEFAULT_MARKET_GOAL,
                                         analysis_context, current_analysis_meta)
 from ..core.config import DEFAULT_SETTINGS, env_archive_root, env_source_path
+from ..core.citations import citation_fragments
 from ..storage.db import connect
 from .ingest import ImportErrorDetail, ImportResult, import_records
 from ..analysis.rules import business_sort_key, gate_for_project
@@ -214,8 +216,28 @@ class ScreeningService:
         with self._db_lock, self.db:
             # A process crash can leave a task marked running. It is safe to
             # return it to the durable queue on the next startup.
-            self.db.execute("UPDATE jobs SET status='queued',updated_at=? WHERE status='running'", (now_iso(),))
             restart_time = now_iso()
+            self.db.execute("UPDATE jobs SET status='queued',updated_at=? WHERE status='running'", (restart_time,))
+            stale_agent_runs = self.db.execute(
+                "SELECT id,investigation_json FROM agent_runs WHERE status='running'"
+            ).fetchall()
+            # The durable job is resumable, but an agent run is an immutable
+            # attempt.  Leaving an old run as ``running`` makes the history
+            # claim that work is still in progress after the process that
+            # owned it has gone away.  Preserve its record and close it with
+            # an explicit restart reason; a resumed job creates a new run.
+            interrupted_error = "agent run interrupted by service restart"
+            for agent_run in stale_agent_runs:
+                investigation = json_value(agent_run["investigation_json"], {})
+                if not isinstance(investigation, dict):
+                    investigation = {}
+                investigation["status"] = "failed"
+                investigation["stop_reason"] = interrupted_error
+                self.db.execute(
+                    "UPDATE agent_runs SET status='failed',finished_at=?,error=?,investigation_json=? "
+                    "WHERE id=? AND status='running'",
+                    (restart_time, interrupted_error, json_text(investigation), int(agent_run["id"])),
+                )
             # If a follow-up is already durable, the old in-flight attempt
             # must not be resurrected beside it after restart. Keep its
             # failure row for operators and let the queued job read the
@@ -1018,6 +1040,7 @@ class ScreeningService:
             "facts": record.get("facts", []),
             "inferences": record.get("inferences", []),
             "body_text": bounded_context_body(full_body),
+            "evidence_fragments": citation_fragments(full_body[:MAX_CONTEXT_BODY_CHARS]),
             # Keep the complete source identity even when the protocol body is
             # truncated, so changes in an unseen tail invalidate the input.
             "body_text_sha256": sha256_text(full_body),
@@ -2027,7 +2050,7 @@ class ScreeningService:
                 if not job or job["status"] not in {"queued", "running"}:
                     return
                 attempts = int(job["attempts"] or 0) + 1
-                self.db.execute("UPDATE jobs SET status='running',attempts=?,started_at=?,updated_at=?,error=NULL WHERE id=?",
+                self.db.execute("UPDATE jobs SET status='running',attempts=?,started_at=?,updated_at=?,finished_at=NULL,error=NULL WHERE id=?",
                                 (attempts, now_iso(), now_iso(), job_id))
             project_id = int(job["project_id"])
             project = self.project_detail(project_id)
@@ -2059,7 +2082,7 @@ class ScreeningService:
                 else:
                     reading_status = str(reading_result.get("status") or "failed")
                     if reading_status in {"failed", "pending", "not_configured"}:
-                        raise AIError("procurement reading is not ready for judgment")
+                        raise AIError("采购预读未完成：" + str(reading_result.get("error") or reading_status))
                 project = self.project_detail(project_id)
             gate, _ = self._gate(self._records_for_project(project_id), project_id)
             if gate in {"excluded", "expired", "duplicate", "closed"}:
@@ -2148,16 +2171,36 @@ class ScreeningService:
                     )
                     return value
 
-            usage_totals = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0}
             if legacy_judgment_content is not None:
                 if agent_run_id is not None:
                     self._update_agent_usage(agent_run_id, legacy_judgment_usage)
-                for key in usage_totals:
-                    value = legacy_judgment_usage.get(key)
-                    if isinstance(value, int) and value >= 0:
-                        usage_totals[key] += value
             runtime_limits = self._agent_limits()
-            format_repair_attempted = False
+            uses_formatter = (uses_agent and isinstance(provider, PiSDKProvider) and not self._injected_provider
+                              and deepseek_formatter_endpoint(str(config.get("base_url") or "")) is not None)
+
+            async def finalize_draft(draft: str, error: AIError, evidence: dict[str, Any]) -> str:
+                usage_recorded = False
+
+                def record_usage(value: dict[str, int]) -> None:
+                    nonlocal usage_recorded
+                    usage_recorded = True
+                    if agent_run_id is not None:
+                        self._update_agent_usage(agent_run_id, value)
+
+                result = await strict_format_report(
+                    base_url=str(config.get("base_url") or ""),
+                    model=str(config.get("model") or ""),
+                    api_key=str(config.get("api_key") or ""),
+                    messages=[*messages, {"role": "user", "content": json_text({"validation_error": str(error)})}],
+                    previous_output=draft,
+                    available_evidence=evidence,
+                    max_output_tokens=int(runtime_limits.get("max_output_tokens", 16_384)),
+                    on_usage=record_usage,
+                )
+                if agent_run_id is not None and not usage_recorded:
+                    self._update_agent_usage(agent_run_id, result.usage)
+                return result.content
+
             for correction in range(2):
                 if correction:
                     with self._db_lock, self.db:
@@ -2165,13 +2208,18 @@ class ScreeningService:
                                         (now_iso(), job_id))
                 # Request failures (including credentials, timeouts and rate limits)
                 # are not output errors and must not trigger a correction request.
-                if legacy_judgment_content is not None and correction == 0:
+                if correction and uses_formatter:
+                    # Keep semantic correction on the same tool-free YAML path;
+                    # restarting the JSON agent can reintroduce malformed output.
+                    content = await finalize_draft(content, correction_error, available_evidence)
+                elif legacy_judgment_content is not None and correction == 0:
                     content = legacy_judgment_content
-                    usage = {}
                 elif uses_agent:
                     runtime_limits = self._agent_limits()
                     if correction:
-                        runtime_limits = {**runtime_limits, "max_turns": min(runtime_limits["max_turns"], 3)}
+                        # Correct only the draft against this job's read evidence.
+                        # A new investigation cannot repair a serialization typo.
+                        runtime_limits = {**runtime_limits, "max_turns": 1, "max_tool_calls": 0}
                     analyze_kwargs = {
                         "base_url": config["base_url"], "model": config["model"], "api_key": config["api_key"],
                         "messages": messages, "context": context, "limits": runtime_limits, "on_event": on_event,
@@ -2194,9 +2242,6 @@ class ScreeningService:
                         raise AIError("Pi SDK结果协议无效")
                     if agent_run_id is not None:
                         self._update_agent_usage(agent_run_id, usage)
-                    for key in usage_totals:
-                        if isinstance(usage.get(key), int) and usage[key] >= 0:
-                            usage_totals[key] += int(usage[key])
                 else:
                     response = await provider.complete(base_url=config["base_url"], model=config["model"],
                                                             api_key=config["api_key"], messages=messages)
@@ -2211,53 +2256,28 @@ class ScreeningService:
                                                  require_report=isinstance(provider, (PiSDKProvider, OpenAICompatibleProvider)))
                     break
                 except AIError as exc:
+                    # The single semantic correction is terminal, even if its
+                    # output fails formatting. Do not add another repair pass.
+                    if correction:
+                        raise
+                    available_evidence = {
+                        "documents": [{key: document.get(key) for key in
+                                       ("id", "record_id", "name", "read_fragments")}
+                                      for document in document_sources],
+                        "research_sources": research_session.evidence_sources() if research_session else [],
+                    }
                     # A malformed final report from the official DeepSeek
                     # provider gets one isolated YAML serialization pass. This
                     # avoids replaying the agent investigation and cannot
                     # execute any business tool; the decoded JSON is still
                     # checked by validate_judgment below.
-                    if (uses_agent and isinstance(provider, PiSDKProvider) and not self._injected_provider
-                            and exc.code == "MODEL_FORMAT_ERROR"
-                            and not format_repair_attempted
-                            and deepseek_formatter_endpoint(str(config.get("base_url") or "")) is not None):
-                        format_repair_attempted = True
+                    if uses_formatter and exc.code == "MODEL_FORMAT_ERROR":
                         with self._db_lock, self.db:
                             self.db.execute("UPDATE jobs SET attempts=attempts+1,updated_at=? WHERE id=?",
                                             (now_iso(), job_id))
                         if agent_run_id is not None:
                             self._record_agent_event(agent_run_id, {"stage": "model"})
-                        available_evidence = {
-                            "documents": [{key: document.get(key) for key in
-                                           ("id", "record_id", "name", "read_fragments")}
-                                          for document in document_sources],
-                            "research_sources": research_session.evidence_sources() if research_session else [],
-                        }
-                        repair_messages = correction_messages(
-                            messages, exc, previous_output=content,
-                            available_evidence=available_evidence,
-                        )
-                        finalizer_usage_recorded = False
-
-                        def record_finalizer_usage(value: dict[str, int]) -> None:
-                            nonlocal finalizer_usage_recorded
-                            finalizer_usage_recorded = True
-                            if agent_run_id is not None:
-                                self._update_agent_usage(agent_run_id, value)
-
-                        finalizer = await strict_format_report(
-                            base_url=str(config.get("base_url") or ""),
-                            model=str(config.get("model") or ""),
-                            api_key=str(config.get("api_key") or ""),
-                            messages=repair_messages,
-                            previous_output="",
-                            available_evidence={},
-                            prepared_messages=True,
-                            max_output_tokens=int(runtime_limits.get("max_output_tokens", 16_384)),
-                            on_usage=record_finalizer_usage,
-                        )
-                        if agent_run_id is not None and not finalizer_usage_recorded:
-                            self._update_agent_usage(agent_run_id, finalizer.usage)
-                        content = finalizer.content
+                        content = await finalize_draft(content, exc, available_evidence)
                         try:
                             judgment = validate_judgment(
                                 content, project, config["model"], fingerprint,
@@ -2274,29 +2294,21 @@ class ScreeningService:
                             # first pass, feed that validation error into the
                             # existing single semantic correction.  Formatter
                             # failures and second-pass failures remain terminal.
-                            if correction or finalizer_error.code == "MODEL_FORMAT_ERROR":
+                            if finalizer_error.code == "MODEL_FORMAT_ERROR":
                                 raise
                             exc = finalizer_error
                         else:
                             break
-                    # A semantic correction still gets only its one agent
-                    # retry.  The format-only finalizer above is the sole
-                    # exception, so a malformed second response can be
-                    # repaired without starting another investigation.
-                    if correction:
-                        raise
                     if agent_run_id is not None:
                         # Retain bounded correction progress in the public
                         # activity feed.  The raw validation error can contain
                         # model text, so only use the trusted stage label.
                         self._record_agent_event(agent_run_id, {"stage": "model"})
-                    messages = correction_messages(messages, exc, previous_output=content,
-                        available_evidence={
-                            "documents": [{key: document.get(key) for key in
-                                           ("id", "record_id", "name", "read_fragments")}
-                                          for document in document_sources],
-                            "research_sources": research_session.evidence_sources() if research_session else [],
-                        })
+                    if uses_formatter:
+                        correction_error = exc
+                    else:
+                        messages = correction_messages(messages, exc, previous_output=content,
+                                                       available_evidence=available_evidence)
             judgment["created_at"] = now_iso()
             dependencies = self._cited_research_dependencies(judgment, research_session)
             if uses_agent:
@@ -2385,9 +2397,22 @@ class ScreeningService:
         if not self._ai_config()["configured"]:
             return 0
         with self._db_lock, self.db:
-            rows = self.db.execute("SELECT id FROM jobs WHERE status='failed' ORDER BY id").fetchall()
+            # A project can have many immutable attempts.  Retrying every
+            # historical failure would replay paid model calls after a later
+            # successful attempt already made that failure irrelevant.
+            rows = self.db.execute(
+                """SELECT job.id
+                     FROM jobs AS job
+                    WHERE job.status='failed'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM jobs AS newer
+                           WHERE newer.project_id=job.project_id
+                             AND newer.id>job.id
+                      )
+                    ORDER BY job.id"""
+            ).fetchall()
             for row in rows:
-                self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated_at=? WHERE id=?", (now_iso(), int(row["id"])))
+                self.db.execute("UPDATE jobs SET status='queued',error=NULL,started_at=NULL,finished_at=NULL,updated_at=? WHERE id=?", (now_iso(), int(row["id"])))
         for row in rows:
             self.schedule_job(int(row["id"]))
         return len(rows)
@@ -2471,14 +2496,52 @@ class ScreeningService:
         jobs = []
         for row in self.db.execute("SELECT id,project_id,status,attempts,error,created_at,updated_at FROM jobs ORDER BY id DESC LIMIT 100").fetchall():
             jobs.append(dict(row))
-        counts = {str(row["status"]): int(row["count"]) for row in self.db.execute("SELECT status,count(*) AS count FROM jobs GROUP BY status").fetchall()}
+        # The operation cards describe current project state.  Keep the full
+        # attempt ledger above, but count only the newest task for each project
+        # so an old failed attempt does not remain a current failure forever.
+        counts = {str(row["status"]): int(row["count"]) for row in self.db.execute(
+            """SELECT status,count(*) AS count
+                 FROM jobs
+                WHERE id IN (SELECT MAX(id) FROM jobs GROUP BY project_id)
+                GROUP BY status"""
+        ).fetchall()}
         reading_jobs = [dict(row) for row in self.db.execute(
             "SELECT id,project_id,status,attempts,error,created_at,updated_at "
             "FROM procurement_reading_jobs ORDER BY id DESC LIMIT 100"
         ).fetchall()]
-        reading_job_counts = {str(row["status"]): int(row["count"]) for row in self.db.execute(
-            "SELECT status,count(*) AS count FROM procurement_reading_jobs GROUP BY status"
-        ).fetchall()}
+        # Reading jobs are also attempts, while the latest persisted reading
+        # is the source of truth for what the project currently exposes.  A
+        # fresh partial/complete result can therefore settle an older failed
+        # queue row; a fresh failed reading must continue to report failure.
+        latest_reading_jobs = self.db.execute(
+            """SELECT job.status,job.started_at,job.updated_at,job.created_at,
+                      reading.status AS reading_status,reading.stale AS reading_stale,
+                      reading.updated_at AS reading_updated_at
+                 FROM procurement_reading_jobs AS job
+                 LEFT JOIN procurement_readings AS reading
+                   ON reading.id=(SELECT MAX(latest_reading.id)
+                                    FROM procurement_readings AS latest_reading
+                                   WHERE latest_reading.project_id=job.project_id)
+                WHERE job.id=(SELECT MAX(latest_job.id)
+                                FROM procurement_reading_jobs AS latest_job
+                               WHERE latest_job.project_id=job.project_id)"""
+        ).fetchall()
+        reading_counts: dict[str, int] = {}
+        for row in latest_reading_jobs:
+            status = str(row["status"])
+            reading_status = str(row["reading_status"] or "")
+            job_started = row["started_at"] or row["updated_at"]
+            reading_updated = row["reading_updated_at"]
+            reading_is_current = bool(reading_status) and not bool(row["reading_stale"]) and str(reading_updated) >= str(job_started)
+            if reading_is_current and status not in {"queued", "running"}:
+                if reading_status == "failed":
+                    status = "failed"
+                elif reading_status in {"complete", "partial", "not_configured"}:
+                    status = "succeeded"
+                elif status == "succeeded" and reading_status == "pending":
+                    status = "queued"
+            reading_counts[status] = reading_counts.get(status, 0) + 1
+        reading_job_counts = reading_counts
         return {"data_updated_at": self._source_data_updated_at(), "last_import_at": self._get_meta("last_import_at"),
                 "import_error": self._get_meta("import_error"), "file_stale": self._source_age_stale(),
                 "import_pending": self._import_pending(), "source_notes": self._source_notes(include_path=True),

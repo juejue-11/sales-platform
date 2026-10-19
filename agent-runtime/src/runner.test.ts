@@ -1180,6 +1180,82 @@ test("DeepSeek uses bounded thinking and JSON output through tool calls", async 
   }
 });
 
+test("record tools expose fragment metadata without repeating body text", async () => {
+  const fake = await startFakeServer((body, response) => {
+    if (fake.requests.length === 1) {
+      streamResponse(response, [
+        assistantToolCallChunk(),
+        { id: "chatcmpl-fragments", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ]);
+      return;
+    }
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const toolPayloads = messages
+      .filter((message) => message.role === "tool")
+      .map((message) => JSON.parse(String(message.content)) as Record<string, unknown>);
+    const recordsPayload = toolPayloads.find((payload) => Array.isArray(payload.records));
+    assert.ok(recordsPayload);
+    const records = recordsPayload.records as Array<Record<string, unknown>>;
+    assert.equal(records[0]?.body_text, undefined);
+    assert.deepEqual(records[0]?.evidence_fragments, [{ fragment_id: "frag-1", source_ref: "record-source" }]);
+    const relatedPayload = toolPayloads.find((payload) => Array.isArray(payload.related_projects));
+    assert.ok(relatedPayload);
+    const relatedProjects = relatedPayload.related_projects as Array<Record<string, unknown>>;
+    const relatedRecords = relatedProjects[0]?.records as Array<Record<string, unknown>>;
+    assert.equal(relatedRecords[0]?.body_text, undefined);
+    assert.deepEqual(relatedRecords[0]?.evidence_fragments, [{ fragment_id: "frag-2", source_ref: "related-source" }]);
+    streamResponse(response, [
+      { id: "chatcmpl-fragments-final", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { role: "assistant", content: '{"decision":"verify"}' }, finish_reason: "stop" }] },
+    ]);
+  });
+  try {
+    const result = await runRunner(requestFor(fake.url, {
+      context: {
+        project: {
+          id: 7,
+          title: "储能项目",
+          records: [{ id: "record-1", body_text: "完整正文不应重复发送", evidence_fragments: [{ fragment_id: "frag-1", source_ref: "record-source" }] }],
+        },
+        company_capability_card: { capabilities: ["储能系统集成"] },
+        related_projects: [{
+          id: "related-1",
+          title: "候选关联",
+          records: [{ id: "r-2", body_text: "关联完整正文不应重复发送", evidence_fragments: [{ fragment_id: "frag-2", source_ref: "related-source" }] }],
+        }],
+      },
+    }));
+    assert.equal(result.lines.at(-1)?.type, "result");
+    assert.equal(fake.requests.length, 2);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
+test("DeepSeek format-only requests disable thinking and business tools", async () => {
+  const fake = await startFakeServer((body, response) => {
+    assert.deepEqual(body.thinking, { type: "disabled" });
+    assert.deepEqual(body.response_format, { type: "json_object" });
+    assert.ok(body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0));
+    streamResponse(response, [
+      { id: "chatcmpl-format-only", object: "chat.completion.chunk", created: 1, model: "deepseek-flash", choices: [{ index: 0, delta: { content: '{"decision":"verify"}' }, finish_reason: "stop" }] },
+    ]);
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => originalFetch(String(input).replace("https://api.deepseek.com", fake.url), init);
+  try {
+    const input = requestFor("https://api.deepseek.com", {
+      limits: { max_turns: 1, max_tool_calls: 0, timeout_ms: 10_000, max_output_tokens: 16_384 },
+    });
+    (input.config as Record<string, unknown>).model = "deepseek-flash";
+    const result = await runRequest(input as unknown as RuntimeRequest, () => {});
+    assert.equal(result.type, "result");
+    assert.equal(fake.requests.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
+});
+
 test("a single oversized SSE text chunk is aborted before completion", async () => {
   const oversized = "界".repeat(90_000);
   const fake = await startFakeServer((_body, response) => {
@@ -1270,8 +1346,32 @@ async function assertToolCap(cap: number, expectedReads: number, expectedErrors:
   }
 }
 
-test("max_tool_calls=0 blocks every business read before execution", async () => {
-  await assertToolCap(0, 0, 3);
+test("max_tool_calls=0 sends no business tools and leaves context unread", async () => {
+  const fake = await startFakeServer((body, response) => {
+    assert.ok(body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0));
+    streamResponse(response, [
+      { id: "chatcmpl-cap-zero", object: "chat.completion.chunk", created: 1, model: "screening-test-model", choices: [{ index: 0, delta: { content: '{"decision":"verify"}' }, finish_reason: "stop" }] },
+    ]);
+  });
+  try {
+    const input = requestFor(fake.url, {
+      limits: { max_turns: 1, max_tool_calls: 0, timeout_ms: 10_000, max_output_tokens: 512 },
+    }) as unknown as RuntimeRequest;
+    let reads = 0;
+    const context = input.context as unknown as Record<string, unknown>;
+    const project = context.project as Record<string, unknown>;
+    Object.defineProperty(project, "records", { configurable: true, enumerable: true, get: () => { reads += 1; return []; } });
+    Object.defineProperty(context, "company_capability_card", { configurable: true, enumerable: true, get: () => { reads += 1; return {}; } });
+    Object.defineProperty(context, "related_projects", { configurable: true, enumerable: true, get: () => { reads += 1; return []; } });
+    const events: Record<string, unknown>[] = [];
+    const result = await runRequest(input, (event) => events.push(event as unknown as Record<string, unknown>));
+    assert.equal(result.type, "result");
+    assert.equal(reads, 0);
+    assert.equal(fake.requests.length, 1);
+    assert.equal(events.filter((event) => event.type === "progress" && event.stage === "tool_end").length, 0);
+  } finally {
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+  }
 });
 
 test("max_tool_calls=1 allows only one business read", async () => {
@@ -1316,6 +1416,7 @@ test("protocol 2 fetches trusted public documents through the duplex tool bridge
       ]);
       const system = String((body.messages as Array<Record<string, unknown>>)[0]?.content);
       assert.match(system, /fetch_project_documents/u);
+      assert.match(system, /fragment_id.*quote/u);
       assert.match(system, /投标截止时间不是交付时间/u);
       streamResponse(response, [
         assistantFetchToolCallChunk(7),
@@ -1721,7 +1822,7 @@ test("protocol 2 completes a search, read, relation, and content research loop",
   const fake = await startFakeServer((body, response) => {
     const requestNumber = fake.requests.length;
     const system = String((body.messages as Array<Record<string, unknown>>)[0]?.content);
-    assert.match(system, /不可信资料/u);
+    assert.match(system, /不可信resources/u);
     if (requestNumber === 1) {
       streamResponse(response, [
         assistantResearchToolCallChunk("search_project_sources", "call-search", {

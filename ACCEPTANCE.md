@@ -30,7 +30,7 @@
 
 在“业务配置”先填公司能力，再填接口地址、模型名和API Key并启用。符合条件的项目会自动排队分析。
 
-以后双击 `启动平台.cmd` 打开；双击 `停止平台.cmd` 关闭。使用细节见 [README.md](README.md)。
+以后双击 `start-platform.cmd` 打开；双击 `stop-platform.cmd` 关闭。使用细节见 [README.md](README.md)。
 
 本期供内部销售判断使用；对外客户方案页和全天在线服务器部署属于后续建设范围。
 

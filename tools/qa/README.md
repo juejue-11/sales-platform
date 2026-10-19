@@ -75,7 +75,7 @@ node tools/qa/workbench_api.cjs http://127.0.0.1:8877
 
 ```powershell
 $env:SCREENING_QA_ROOT = Join-Path (Get-Location).Path ('tmp/qa/collection-' + [guid]::NewGuid().ToString('N'))
-$env:SCREENING_QA_COLLECTOR_SOURCE = Join-Path (Split-Path -Parent (Get-Location).Path) '销售平台信息采集系统'
+$env:SCREENING_QA_COLLECTOR_SOURCE = Join-Path (Split-Path -Parent (Get-Location).Path) 'procurement-collector'
 $env:SCREENING_QA_COLLECTOR_PYTHON = (Get-Content (Join-Path $env:SCREENING_QA_COLLECTOR_SOURCE 'data/python_path.txt') -Raw).Trim()
 $env:SCREENING_QA_PORT = '8879'
 .\.venv\Scripts\python.exe -m tools.qa.serve_collection_fixture

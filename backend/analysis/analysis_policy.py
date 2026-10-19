@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
@@ -53,29 +52,3 @@ def result_analysis_meta(value: Any, business: dict[str, Any]) -> dict[str, str]
     if state != "not_evaluated" and not analysis_context(business)["company_profile_present"]:
         raise ValueError("company matching requires substantive company material")
     return {"semantic_version": ANALYSIS_POLICY_VERSION, "decision_scope": "market", "company_match": state}
-
-
-_COMPANY_ASSERTION = re.compile(
-    r"(?:我方|本公司|本企业|贵公司|我们)(?P<bridge>[^。！？；，,\n]{0,14}?)"
-    r"(?:具备|拥有|满足|符合|能够(?:供货|交付|承接)|可以(?:供货|交付|承接)|可(?:供货|交付|承接))"
-)
-
-
-def unsupported_company_assertion(text: str) -> bool:
-    """Catch explicit unqualified first-person claims, not general conditions.
-
-    This narrow guard is not a semantic proof checker. Source attribution and
-    business evaluation still assess the meaning of the model's narrative.
-    """
-    for clause in re.split(r"[。！？；，,\n]", text):
-        for match in _COMPANY_ASSERTION.finditer(clause):
-            bridge = match.group("bridge")
-            prefix = clause[:match.start()]
-            if re.search(r"不|未|尚|待|核实|是否|能否", bridge):
-                continue
-            if re.search(r"若|如果|假如|仅当|前提|需要确认|需核实|尚不能确认|无法确认", prefix):
-                continue
-            if re.match(r"^(?:核实|确认|检查|评估)", prefix.strip()):
-                continue
-            return True
-    return False
