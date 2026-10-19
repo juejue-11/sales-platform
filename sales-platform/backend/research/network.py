@@ -89,13 +89,10 @@ class NetworkTransport:
             await self.client.aclose()
             self.client = None
 
-    async def _client(self) -> httpx.AsyncClient:
+    async def get_client(self) -> httpx.AsyncClient:
         if self.client is None:
             self.client = httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
         return self.client
-
-    async def client_for_validation(self) -> httpx.AsyncClient:
-        return await self._client()
 
     def budget_check(self, *, calls: int = 1, bytes_count: int = 0) -> None:
         if self.calls + calls > int(self.budgets.get("max_calls", DEFAULT_BUDGETS["max_calls"])):
@@ -129,7 +126,7 @@ class NetworkTransport:
     async def request(self, method: str, url: str, cfg: dict[str, Any], *,
                       json_body: Any = None,
                       params: dict[str, Any] | None = None) -> tuple[bytes, str, str, int]:
-        client = await self._client()
+        client = await self.get_client()
         endpoint = safe_url(url)
         allowed = self.allowed_hosts(cfg, endpoint)
         current = endpoint

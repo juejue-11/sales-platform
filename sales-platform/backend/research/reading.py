@@ -40,9 +40,6 @@ class SourceReader:
         return next((item for item in self.config.get("sources", [])
                      if str(item.get("id") or item.get("source_id") or "") == source_id), None)
 
-    def source_version_row(self, source_ref_value: str, version: str | None = None) -> dict[str, Any] | None:
-        return self.storage.source_version_row(source_ref_value, version)
-
     def serve_version(self, source: dict[str, Any], version: dict[str, Any], args: dict[str, Any], *,
                       register: bool = True) -> dict[str, Any]:
         pages = json_value(version.get("page_texts_json"), [])
@@ -206,7 +203,7 @@ class SourceReader:
                        query=args["query"], message="source_not_in_project")
             return {"status": "blocked", "error": "source_not_in_project", "source_ref": args["source_ref"]}
         source, _latest, relation = found
-        version = self.source_version_row(args["source_ref"], args["source_version"])
+        version = self.storage.source_version_row(args["source_ref"], args["source_version"])
         if version is None:
             self.event("search_research_content", args["purpose"], "failed", [args["source_ref"]],
                        query=args["query"], message="source_version_not_found")

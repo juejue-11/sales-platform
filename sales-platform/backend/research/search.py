@@ -152,7 +152,7 @@ class SourceSearcher:
                     continue
                 try:
                     await validate_network_url(candidate["url"], allowed_hosts,
-                                               await self.transport.client_for_validation())
+                                               await self.transport.get_client())
                 except ResearchError:
                     blocked_candidate = True
                     continue
@@ -188,7 +188,7 @@ class SourceSearcher:
                 continue
             try:
                 await validate_network_url(candidate["url"], allowed_hosts,
-                                           await self.transport.client_for_validation())
+                                           await self.transport.get_client())
             except ResearchError:
                 blocked_candidate = True
                 continue
