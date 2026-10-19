@@ -150,7 +150,7 @@ def make_research_service(tmp_path, records, *, provider=None):
 
 
 def test_real_host_investigation_preserves_versions_and_only_cited_dependencies(tmp_path, monkeypatch):
-    from backend.research.project_research import ResearchSession
+    from backend.research.session import ResearchSession
 
     monkeypatch.setenv("SCREENING_AI_ENGINE", "pi_sdk")
     source_record = row()

@@ -10,14 +10,13 @@ import httpx
 import pytest
 
 from backend.storage.db import connect
-from backend.research.project_research import (
-    RESEARCH_POLICY_VERSION,
-    ResearchSession,
+from backend.research.config import RESEARCH_POLICY_VERSION, validate_research_arguments
+from backend.research.session import ResearchSession
+from backend.research.storage import (
     current_dependencies,
     list_sources,
     merge_project_research,
     read_saved_source,
-    validate_research_arguments,
 )
 
 

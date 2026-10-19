@@ -5,7 +5,7 @@ from backend.application.service import ScreeningService
 from backend.analysis.runtime_bridge import _runtime_root
 from backend.core import config
 from backend.collection.manager import CollectionManager
-from backend.research.project_research import _DEFAULT_SOURCES_PATH
+from backend.research.config import DEFAULT_SOURCES_PATH
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -38,8 +38,8 @@ def test_agent_runtime_discovery_preserves_default_and_override(monkeypatch, tmp
 
 
 def test_research_configuration_remains_available_at_existing_runtime_path():
-    assert _DEFAULT_SOURCES_PATH == PROJECT_ROOT / "backend" / "research_sources.json"
-    assert _DEFAULT_SOURCES_PATH.is_file()
+    assert DEFAULT_SOURCES_PATH == PROJECT_ROOT / "backend" / "research_sources.json"
+    assert DEFAULT_SOURCES_PATH.is_file()
 
 
 def test_saved_import_path_survives_restart_and_allows_explicit_overrides(monkeypatch, tmp_path):
