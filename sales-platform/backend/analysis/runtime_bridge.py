@@ -47,19 +47,6 @@ _TRUSTED_TOOL_LABELS = {
     "assess_source_relation": "核实资料关系",
     "search_research_content": "检索资料内容",
 }
-_ERROR_CODES = {
-    "INVALID_INPUT", "MODEL_CONFIG", "MODEL_ERROR", "OUTPUT_TOKEN_LIMIT", "NO_FINAL",
-    "TURN_LIMIT", "TOOL_LIMIT", "TIMEOUT", "INTERNAL",
-    # Keep compatibility with older runner builds while still rejecting
-    # arbitrary provider/model text from the error event.
-    "INVALID_REQUEST", "CONFIG_ERROR", "RUNTIME_ERROR",
-    "TOOL_INVALID", "TOOL_FORBIDDEN", "TOOL_UNAVAILABLE", "TOOL_ERROR", "RPC_ERROR",
-    # Current runtime classifications.  Keep these as a closed allow-list so
-    # provider/parser text never becomes a durable error code.
-    "TOOL_ARGUMENT_JSON", "TOOL_SCHEMA", "TOOL_PARSER_ERROR",
-    "STREAM_INTERRUPTED", "MODEL_FORMAT_ERROR",
-    "RESEARCH_LIMIT", "SOURCE_NOT_FOUND", "SOURCE_UNREADABLE", "RELATION_UNCONFIRMED",
-}
 _PROGRESS_LABELS = {
     "started": "智能体已启动",
     "model": "模型调用",

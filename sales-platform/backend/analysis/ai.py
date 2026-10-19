@@ -13,10 +13,6 @@ making each implementation dependency point explicit.
 """
 from .errors import (
     AIError,
-    _runtime_error_message,
-    _safe_error_code,
-    _safe_error_metadata,
-    _safe_tool_error,
     sanitize_ai_error,
 )
 from .providers import AIProvider, OpenAICompatibleProvider
@@ -36,10 +32,6 @@ from .runtime_bridge import (
     MAX_OUTPUT_LINE_BYTES,
     PiSDKProvider,
     PiSDKResult,
-    _node_candidates,
-    _runner_path,
-    _runtime_root,
-    _safe_progress_event,
     resolve_sdk_runtime,
     sdk_ready,
 )
