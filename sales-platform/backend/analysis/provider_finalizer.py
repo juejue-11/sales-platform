@@ -23,7 +23,8 @@ from yaml.nodes import MappingNode
 from yaml.tokens import (AliasToken, AnchorToken, DocumentEndToken,
                          DocumentStartToken, TagToken)
 
-from .ai import AIError, correction_evidence
+from .errors import AIError
+from .prompts import correction_evidence
 
 
 _MAX_PREVIOUS_OUTPUT = 64_000

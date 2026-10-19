@@ -9,7 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend.analysis.ai import AIError, PiSDKProvider, validate_judgment
+from backend.analysis.errors import AIError
+from backend.analysis.runtime_bridge import PiSDKProvider
+from backend.analysis.validation import validate_judgment
 from backend.main import create_app
 from backend.application.service import ScreeningService
 from backend.tests.test_backend import Provider, configure_ai, make_service, row

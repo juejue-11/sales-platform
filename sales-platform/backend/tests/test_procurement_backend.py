@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 import backend.application.documents as document_module
-from backend.analysis.ai import AIError, PiSDKProvider, validate_judgment
+from backend.analysis.errors import AIError
+from backend.analysis.runtime_bridge import PiSDKProvider
+from backend.analysis.validation import validate_judgment
 from backend.analysis.briefing import build_briefing
 from backend.procurement.facts import extract_announcement_facts
 from backend.application.service import ScreeningService

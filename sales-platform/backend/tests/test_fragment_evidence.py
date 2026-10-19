@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.analysis.ai import (AIError, MAX_CONTEXT_BODY_CHARS, PiSDKProvider, correction_evidence,
-                                 build_messages, validate_judgment)
+from backend.analysis.errors import AIError
+from backend.analysis.prompts import MAX_CONTEXT_BODY_CHARS, build_messages, correction_evidence
+from backend.analysis.runtime_bridge import PiSDKProvider
+from backend.analysis.validation import validate_judgment
 from backend.analysis.provider_finalizer import _formatter_user_data
 from backend.core.citations import citation_fragments
 from backend.documents.document_access import build_document_view

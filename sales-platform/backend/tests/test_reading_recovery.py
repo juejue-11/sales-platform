@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from backend.analysis.ai import AIError
+from backend.analysis.errors import AIError
 from backend.application.reading import READING_BATCH_CHARS, _batched_material, invoke_reading
 from backend.procurement.reading import build_material, build_reading_messages, material_version
 

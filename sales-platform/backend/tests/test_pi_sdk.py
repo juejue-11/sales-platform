@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-import backend.analysis.ai as ai_module
-from backend.analysis.ai import AIError, PiSDKProvider, _safe_error_code, _safe_progress_event
+import backend.analysis.runtime_bridge as runtime_module
+from backend.analysis.errors import AIError, _safe_error_code
+from backend.analysis.runtime_bridge import PiSDKProvider, _safe_progress_event
 from backend.application.service import ScreeningService
 from backend.core.utils import json_text, sha256_text
 
@@ -35,7 +36,7 @@ def test_configured_node_path_short_circuits_pnpm_scan(tmp_path: Path, monkeypat
         return original_iterdir(path)
 
     monkeypatch.setattr(Path, "iterdir", fail_if_pnpm)
-    node, resolved_runner = ai_module.resolve_sdk_runtime()
+    node, resolved_runner = runtime_module.resolve_sdk_runtime()
     assert node == Path(NODE or "").resolve()
     assert resolved_runner == runner.resolve()
 

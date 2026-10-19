@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from backend.analysis.ai import AIError
+from backend.analysis.errors import AIError
 from backend.core.citations import citation_fragments
 from backend.analysis.provider_finalizer import (
     _DEEPSEEK_DSML_INVOKE_CLOSE,

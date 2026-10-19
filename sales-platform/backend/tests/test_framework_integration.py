@@ -6,7 +6,7 @@ import copy
 import pytest
 
 from backend.analysis.analysis_policy import ANALYSIS_POLICY_VERSION
-from backend.analysis.ai import AIError
+from backend.analysis.errors import AIError
 from backend.application.service import ScreeningService
 from backend.tests.test_backend import Provider, make_service, row
 

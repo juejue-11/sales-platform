@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.analysis.ai import AIError
+from backend.analysis.errors import AIError
 from backend.main import create_app
 from backend.application.service import ScreeningService
 from backend.application.errors import ConflictError, ServiceError
 from backend.core.utils import SHANGHAI
-from backend.analysis.ai import validate_judgment
+from backend.analysis.validation import validate_judgment
 
 
 def row(record_id: int = 1, *, body: str = "采购破碎机，截止时间：2099-12-31 09:00。", deadline: str | None = "2099-12-31 09:00"):

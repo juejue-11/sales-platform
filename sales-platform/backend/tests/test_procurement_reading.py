@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.analysis.ai import AIError
+from backend.analysis.errors import AIError
 import backend.application.documents as document_module
 from backend.core.utils import now_iso
 from backend.application.reading import READING_BATCH_CHARS, _merge_batch_readings, invoke_reading

@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from backend.application.service import ScreeningService
-from backend.analysis.ai import _runtime_root
+from backend.analysis.runtime_bridge import _runtime_root
 from backend.core import config
 from backend.collection.manager import CollectionManager
 from backend.research.project_research import _DEFAULT_SOURCES_PATH
