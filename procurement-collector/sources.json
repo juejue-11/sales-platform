@@ -1,0 +1,435 @@
+{
+  "max_age_days": 30,
+  "timeout_seconds": 30,
+  "delay_seconds": 1.5,
+  "sources": [
+    {
+      "id": "mnr_mining_rights",
+      "name": "自然资源部采矿权出让公告",
+      "category": "news",
+      "entry_url": "https://ky.mnr.gov.cn/kyqcrgg/ckq/",
+      "adapter": "html_list",
+      "item_selector": ".gu-kqgg-list li",
+      "link_selector": "a[href]",
+      "date_selector": "span",
+      "content_selector": "#content1",
+      "title_selector": ".zw_title",
+      "allowed_hosts": [
+        "ky.mnr.gov.cn"
+      ],
+      "max_items": 30,
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机列表和详情 HTTP 200；2026-10-16 起仅采集设备采购需求，停用矿业权来源，历史记录保留。"
+    },
+    {
+      "id": "mnr_exploration_rights",
+      "name": "自然资源部探矿权出让公告",
+      "category": "news",
+      "entry_url": "https://ky.mnr.gov.cn/kyqcrgg/tkq/",
+      "adapter": "html_list",
+      "item_selector": ".gu-kqgg-list li",
+      "link_selector": "a[href]",
+      "date_selector": "span",
+      "content_selector": "#content1",
+      "title_selector": ".zw_title",
+      "allowed_hosts": [
+        "ky.mnr.gov.cn"
+      ],
+      "max_items": 30,
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机列表 HTTP 200；2026-10-16 起仅采集设备采购需求，停用矿业权来源，历史记录保留。"
+    },
+    {
+      "id": "ccteg_materials",
+      "name": "中国煤科电子采购平台物资采购",
+      "category": "procurement",
+      "entry_url": "https://cg.ccteg.cn/cms/channel/ywgg1hw/index.htm",
+      "page_urls": [
+        "https://cg.ccteg.cn/cms/channel/ywgg1hw/index.htm?pageNo=2",
+        "https://cg.ccteg.cn/cms/channel/ywgg1hw/index.htm?pageNo=3"
+      ],
+      "adapter": "html_list",
+      "item_selector": "div.infolist-main.bidlist.bidlist2 ul#list1 > li",
+      "link_selector": ":scope > a[href]",
+      "title_attribute": "title",
+      "date_selector": ":scope > a > em",
+      "title_selector": ".article-content .article-title",
+      "content_selector": ".main-text",
+      "include_keywords": [
+        "矿山",
+        "煤矿",
+        "洗选",
+        "破碎",
+        "输送",
+        "钻探",
+        "充填",
+        "采煤",
+        "装车站",
+        "选煤",
+        "矿用",
+        "煤炭",
+        "矿井"
+      ],
+      "allowed_hosts": [
+        "cg.ccteg.cn"
+      ],
+      "max_items": 90,
+      "frequency_hours": 24,
+      "enabled": true,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机列表及详情 HTTP 200；公开页面按矿业关键词控制采集范围。"
+    },
+    {
+      "id": "ccteg_engineering",
+      "name": "中国煤科电子采购平台工程采购",
+      "category": "procurement",
+      "entry_url": "https://cg.ccteg.cn/cms/channel/ywgg1gc/index.htm",
+      "page_urls": [
+        "https://cg.ccteg.cn/cms/channel/ywgg1gc/index.htm?pageNo=2",
+        "https://cg.ccteg.cn/cms/channel/ywgg1gc/index.htm?pageNo=3"
+      ],
+      "adapter": "html_list",
+      "item_selector": "div.infolist-main.bidlist.bidlist2 ul#list1 > li",
+      "link_selector": ":scope > a[href]",
+      "title_attribute": "title",
+      "date_selector": ":scope > a > em",
+      "title_selector": ".article-content .article-title",
+      "content_selector": ".main-text",
+      "include_keywords": [
+        "矿山",
+        "煤矿",
+        "洗选",
+        "破碎",
+        "输送",
+        "钻探",
+        "充填",
+        "采煤",
+        "装车站",
+        "选煤",
+        "矿用",
+        "煤炭",
+        "矿井"
+      ],
+      "allowed_hosts": [
+        "cg.ccteg.cn"
+      ],
+      "max_items": 90,
+      "frequency_hours": 24,
+      "enabled": true,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机列表及详情 HTTP 200；公开页面按矿业关键词控制采集范围。"
+    },
+    {
+      "id": "ccgp_local_tender",
+      "name": "中国政府采购网地方公开招标",
+      "category": "procurement",
+      "entry_url": "https://www.ccgp.gov.cn/cggg/dfgg/gkzb/index.htm",
+      "adapter": "html_list",
+      "item_selector": "li",
+      "link_selector": "a[href]",
+      "allowed_hosts": [
+        "www.ccgp.gov.cn"
+      ],
+      "max_items": 30,
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "blocked",
+      "access_note": "2026-10-03 本机 requests 返回 403；不得计入覆盖。需正式接入或站点允许的稳定方式。"
+    },
+    {
+      "id": "ggzy_mining",
+      "name": "全国公共资源交易平台矿业权公告",
+      "category": "procurement",
+      "entry_url": "https://www.ggzy.gov.cn/deal/dealList.html?DEAL_CLASSIFY=04&DEAL_STAGE=0401",
+      "adapter": "manual",
+      "max_items": 30,
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "blocked",
+      "access_note": "公开页面另有 POST 列表接口，但本机代理连接失败；高频查询会触发验证码。需先核对稳定访问方式。"
+    },
+    {
+      "id": "huang_ansteel",
+      "name": "鞍钢智慧招投标",
+      "category": "procurement",
+      "entry_url": "https://bid.ansteel.cn/zbjjxx/bidding_purchase.html",
+      "adapter": "post_json_list",
+      "frequency_hours": 24,
+      "enabled": true,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机公开 POST 搜索 API 和详情 HTTP 200；采集货物公告中标题命中破碎机/偏心套的结果。附件可公开读取；投标业务需登录。",
+      "api_url": "https://bid.ansteel.cn/inteligentsearch/rest/esinteligentsearch/getFullTextDataNew",
+      "queries": [
+        {
+          "pn": 0,
+          "rn": 60,
+          "fields": "title",
+          "sort": "{\"webdate\":\"0\"}",
+          "condition": [
+            {
+              "fieldName": "title2",
+              "equal": "破碎机",
+              "isLike": true,
+              "likeType": 0
+            },
+            {
+              "fieldName": "categorynum",
+              "equal": "001001",
+              "isLike": true,
+              "likeType": 2
+            },
+            {
+              "fieldName": "cglb",
+              "equal": "M",
+              "isLike": true,
+              "likeType": 0
+            }
+          ],
+          "time": [
+            {
+              "fieldName": "webdate",
+              "startTime": "",
+              "endTime": ""
+            }
+          ],
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 60,
+          "fields": "title",
+          "sort": "{\"webdate\":\"0\"}",
+          "condition": [
+            {
+              "fieldName": "title2",
+              "equal": "偏心套",
+              "isLike": true,
+              "likeType": 0
+            },
+            {
+              "fieldName": "categorynum",
+              "equal": "001001",
+              "isLike": true,
+              "likeType": 2
+            },
+            {
+              "fieldName": "cglb",
+              "equal": "M",
+              "isLike": true,
+              "likeType": 0
+            }
+          ],
+          "time": [
+            {
+              "fieldName": "webdate",
+              "startTime": "",
+              "endTime": ""
+            }
+          ],
+          "isBusiness": "1"
+        }
+      ],
+      "title_selector": "h3",
+      "content_selector": ".paragraph-box",
+      "allowed_hosts": [
+        "bid.ansteel.cn"
+      ],
+      "max_items": 120
+    },
+    {
+      "id": "huang_shouzheng",
+      "name": "华润守正",
+      "category": "procurement",
+      "entry_url": "https://szecp.com.cn/",
+      "adapter": "manual",
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "blocked",
+      "access_note": "2026-10-09 复核：旧地址 shouzheng.crc.com.hk HTTPS 握手失败；现站 szecp.com.cn 返回安全验证/验证码页面，尚未取得稳定自动访问方式，未计入覆盖。"
+    },
+    {
+      "id": "huang_minmetals",
+      "name": "五矿鑫益采",
+      "category": "procurement",
+      "entry_url": "https://xinyicm.minmetals.com.cn/",
+      "adapter": "manual",
+      "frequency_hours": 168,
+      "enabled": false,
+      "access_status": "blocked",
+      "access_note": "2026-10-09 复核：清单地址 xinyicm.minmetals.com.cn 在本机 HTTPS 握手失败，无法读取公告列表；当前有效官方入口及接口待确认，未计入覆盖。"
+    },
+    {
+      "id": "huang_hebei",
+      "name": "河钢云供应链",
+      "category": "procurement",
+      "entry_url": "https://hebiig.com/",
+      "adapter": "manual",
+      "frequency_hours": 168,
+      "enabled": false,
+      "access_status": "blocked",
+      "access_note": "2026-10-09 复核：清单地址 hebiig.com 在本机 HTTPS 握手失败，无法读取公告列表；当前有效官方入口及接口待确认，未计入覆盖。"
+    },
+    {
+      "id": "huang_jiugang",
+      "name": "酒钢公共交易平台",
+      "category": "procurement",
+      "entry_url": "https://eps.jiugangbid.com/jyxx/001002/001002002/jyxx_list.html",
+      "adapter": "post_json_list",
+      "frequency_hours": 24,
+      "enabled": true,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机公开 POST 搜索 API 和详情 HTTP 200；仅采集破碎机/偏心套等关键词命中。附件下载可能需验证码。 黄总原巡检规则为每周，自动采集按统一日报每日执行。",
+      "api_url": "https://eps.jiugangbid.com/inteligentsearch_wz/rest/esinteligentsearch/getFullTextDataNew",
+      "queries": [
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "破碎机",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001001",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "偏心套",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001001",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "旋回破碎机",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001001",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "破碎机",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001002",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "偏心套",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001002",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        },
+        {
+          "pn": 0,
+          "rn": 30,
+          "cnum": "002",
+          "inc_wd": "旋回破碎机",
+          "condition": [
+            {
+              "fieldName": "categorynum",
+              "equal": "001002",
+              "isLike": true,
+              "likeType": 2
+            }
+          ],
+          "fields": "title;searchtitle",
+          "isBusiness": "1"
+        }
+      ],
+      "append_guid": true,
+      "title_selector": ".article-name",
+      "content_selector": ".article-info",
+      "allowed_hosts": [
+        "eps.jiugangbid.com"
+      ],
+      "max_items": 60
+    },
+    {
+      "id": "jiugang_company_news",
+      "name": "酒钢集团新闻",
+      "category": "news",
+      "entry_url": "https://www.jiugang.com/news/article_list",
+      "adapter": "html_list",
+      "item_selector": ".meitnew .bds ul li",
+      "link_selector": "a[href]",
+      "list_title_selector": "h3",
+      "date_selector": "h4",
+      "title_selector": ".mtnewdel h1",
+      "content_selector": ".mtnewdel .text",
+      "include_detail_keywords": [
+        "矿山",
+        "矿业",
+        "矿井",
+        "金属矿",
+        "镜铁山矿",
+        "矿产资源"
+      ],
+      "company_name": "酒钢集团",
+      "allowed_hosts": [
+        "www.jiugang.com"
+      ],
+      "max_items": 20,
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "public",
+      "access_note": "2026-10-03 本机列表、详情 HTTP 200；2026-10-16 起仅采集设备采购需求，停用集团新闻来源，历史记录保留。"
+    },
+    {
+      "id": "target_company_news",
+      "name": "目标矿业企业新闻（待提供企业名单）",
+      "category": "news",
+      "entry_url": null,
+      "adapter": "manual",
+      "frequency_hours": 24,
+      "enabled": false,
+      "access_status": "missing_input",
+      "access_note": "当前目录未包含目标企业法定名称与官网/订阅入口。"
+    }
+  ]
+}
